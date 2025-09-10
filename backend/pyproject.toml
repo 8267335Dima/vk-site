@@ -1,0 +1,61 @@
+# backend/pyproject.toml
+[tool.poetry]
+name = "smm-combine-backend"
+version = "0.1.0"
+description = "SMM Combine platform services backend"
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+SQLAlchemy = "2.0.43"
+psycopg2-binary = "2.9.10"
+python-dotenv = "1.1.1"
+pydantic-settings = "2.10.1"
+minio = "7.2.16"
+requests = "2.32.5"
+cryptography = "45.0.7"
+aio-pika = "9.5.7"
+aiohttp = "3.12.15"
+structlog = "25.4.0"
+passlib = "1.7.4"
+pydantic = "2.11.7"
+email-validator = "2.3.0"
+alembic = "1.16.5"
+fastapi = "0.116.1"
+asyncpg = "0.30.0"
+orjson = "3.11.3"
+python-jose = "3.5.0"
+python-multipart = "0.0.20"
+qdrant-client = "1.15.1"
+google-genai = "1.33.0"
+pillow = "11.3.0"
+websockets = "15.0.1"
+python-telegram-bot = "21.1.1"
+fastapi-limiter = "0.1.6"
+yookassa = "^3.7.0"
+sqladmin = {version = "^0.16.1", extras = ["files"]}
+croniter = "^2.0.1"
+flower = "^2.0.1"
+fastapi-cache2 = "^0.2.2"
+uvicorn = "0.35.0"
+gunicorn = "^22.0.0"
+redis = "^4.6.0"
+celery = "5.5.3"
+itsdangerous = "^2.2.0"
+opentelemetry-api = "^1.25.0"
+opentelemetry-sdk = "^1.25.0"
+opentelemetry-instrumentation-fastapi = "^0.46b0"
+sqlalchemy-celery-beat = "^0.8.4"
+PyYAML = "^6.0.1" # <-- ДОБАВЛЕНО для чтения конфигов
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.2.0"
+httpx = "^0.28.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+

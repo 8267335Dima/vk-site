@@ -1,0 +1,30 @@
+# Docker volumes data
+/postgres_data
+/redis_data
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Docker volumes data
+/postgres_data
+/redis_data
+/grafana_data_prod
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE settings
+.idea/
+.vscode/

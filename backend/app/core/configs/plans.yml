@@ -1,0 +1,73 @@
+# backend/app/core/configs/plans.yml
+# Единый источник правды о тарифных планах.
+
+Expired:
+  display_name: "Истёкший"
+  description: "Срок действия вашего тарифа истек. Функционал ограничен."
+  limits:
+    daily_likes_limit: 0
+    daily_add_friends_limit: 0
+  available_automations: []
+  features: []
+  available_features: [] 
+
+Базовый:
+  display_name: "Базовый (Пробный)"
+  description: "Ознакомительный период на 14 дней для ручного запуска задач."
+  limits:
+    daily_likes_limit: 400
+    daily_add_friends_limit: 20
+  available_automations: []
+  features:
+    - "Ручной запуск всех задач"
+    - "Лимит 20 заявок в друзья / день"
+    - "Лимит 400 лайков / день"
+    - "Базовые фильтры аудитории"
+    - "Подробная история действий"
+    - "Аналитика аудитории"
+  available_features: [] 
+
+Plus:
+  display_name: "Plus"
+  price: 349.00
+  currency: "RUB"
+  description: "Для активного и безопасного продвижения вашего аккаунта."
+  isPopular: true
+  limits:
+    daily_likes_limit: 800
+    daily_add_friends_limit: 60
+  available_automations:
+    - "view_stories"
+    - "accept_friends"
+    - "like_feed"
+    - "like_friends_feed"
+    - "remove_friends"
+    - "birthday_congratulation"
+  features:
+    - "Все возможности Базового тарифа"
+    - "Центр Автоматизации (задачи по расписанию)"
+    - "Авто-лайки, авто-прием заявок"
+    - "Авто-чистка и авто-поздравления"
+    - "Лимит 60 заявок в друзья / день"
+    - "Лимит 800 лайков / день"
+  available_features: []
+
+PRO:
+  display_name: "PRO"
+  price: 799.00
+  currency: "RUB"
+  description: "Максимум для SMM-специалистов и требовательных пользователей."
+  limits:
+    daily_likes_limit: 1500
+    daily_add_friends_limit: 100
+  available_automations: "*" # Все автоматизации доступны
+  features:
+    - "Все возможности тарифа Plus"
+    - "Конструктор сложных сценариев"
+    - "Продвинутая аналитика (воронки, динамика)"
+    - "Управление прокси-серверами"
+    - "Лимит 100 заявок в друзья / день"
+    - "Лимит 1500 лайков / день"
+  available_features:
+    - "proxy_management"
+    - "scenarios"
