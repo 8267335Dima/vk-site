@@ -1,0 +1,8 @@
+{
+  "short_name": "Zenith",
+  "name": "Zenith Social Pilot",
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#121212",
+  "background_color": "#1E1E1E"
+}
