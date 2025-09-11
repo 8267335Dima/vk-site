@@ -1,17 +1,12 @@
 // frontend/src/hooks/useActionModalState.js
 import { useState, useEffect, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { fetchTaskInfo } from 'api';
+import { fetchTaskInfo } from 'api.js';
 import { useUserStore } from 'store/userStore';
-import { toast } from 'react-hot-toast';
-import { dashboardContent } from 'content/dashboardContent';
-
-const { modal: content } = dashboardContent;
 
 export const useActionModalState = (open, actionKey, title) => {
     const [params, setParams] = useState({});
     const userInfo = useUserStore(state => state.userInfo);
-    const friendsCount = userInfo?.counters?.friends || 0;
 
     const { data: taskInfo, isLoading: isLoadingInfo } = useQuery({
         queryKey: ['taskInfo', actionKey],
@@ -19,67 +14,58 @@ export const useActionModalState = (open, actionKey, title) => {
         enabled: open && ['accept_friends', 'remove_friends'].includes(actionKey),
     });
 
+    // Устанавливаем дефолтные значения при открытии модального окна
     useEffect(() => {
         if (open) {
-            const defaults = { ...content.defaults }; // Копируем, чтобы не мутировать оригинал
+            const defaults = {
+                count: 50,
+                filters: { sex: 0, is_online: false, allow_closed_profiles: false, remove_banned: true, min_friends: 0, min_followers: 0 },
+                like_config: { enabled: false, targets: ['avatar'] },
+                send_message_on_add: false,
+                message_text: "Привет! Увидел(а) тебя в рекомендациях, решил(а) добавиться. Будем знакомы!",
+                only_new_dialogs: false,
+            };
             if (actionKey === 'add_recommended') defaults.count = 20;
             if (actionKey === 'remove_friends') defaults.count = 500;
             setParams(defaults);
         }
     }, [open, actionKey]);
     
-    // --- ИЗМЕНЕНИЕ: Основная функция для обработки всех изменений ---
-    const handleParamChange = (name, value, type, checked) => {
-        const val = type === 'checkbox' ? checked : value;
-
-        if (name === 'count') {
-            handleCountChange(val);
-        } else if (Object.keys(content.defaults.filters).includes(name)) {
-            setParams(p => ({ ...p, filters: { ...p.filters, [name]: val } }));
-        } else if (Object.keys(content.defaults.like_config).includes(name)) {
-            setParams(p => ({ ...p, like_config: { ...p.like_config, [name]: val } }));
-        }
-        else {
-            setParams(p => ({ ...p, [name]: val }));
-        }
+    const handleParamChange = (name, value) => {
+        setParams(p => {
+            const keys = name.split('.');
+            if (keys.length > 1) {
+                // Обработка вложенных полей, например, 'filters.sex'
+                const newParams = { ...p };
+                let current = newParams;
+                for (let i = 0; i < keys.length - 1; i++) {
+                    current = current[keys[i]];
+                }
+                current[keys[keys.length - 1]] = value;
+                return newParams;
+            }
+            return { ...p, [name]: value };
+        });
     };
     
-    // --- ИЗМЕНЕНИЕ: Логика ограничения ввода ---
-    const handleCountChange = (value) => {
-        let numericValue = parseInt(value, 10);
-        if (isNaN(numericValue)) numericValue = 0;
-
-        let limit = Infinity;
-        let limitType = '';
-
-        if (actionKey?.includes('add')) {
-            limit = userInfo?.daily_add_friends_limit;
-            limitType = 'заявок';
-        } else if (actionKey?.includes('like')) {
-            limit = userInfo?.daily_likes_limit;
-            limitType = 'лайков';
-        } else if (actionKey === 'remove_friends') {
-            limit = friendsCount;
-            limitType = 'друзей';
-        }
-
-        if (limit !== Infinity && numericValue > limit) {
-            numericValue = limit;
-            toast.info(`Максимальное значение для вас: ${limit} ${limitType}`);
-        }
-        setParams(p => ({ ...p, count: numericValue }));
-    };
-
     const getModalTitle = useCallback(() => {
-        let fullTitle = `${content.titlePrefix}: ${title}`;
+        let fullTitle = title;
         if (isLoadingInfo) {
             fullTitle += ' (Загрузка...)';
         } else if (taskInfo?.count !== undefined) {
             if (actionKey === 'accept_friends') fullTitle += ` (${taskInfo.count} заявок)`;
-            if (actionKey === 'remove_friends') fullTitle += ` (${taskInfo.count} друзей)`;
+            if (actionKey === 'remove_friends') fullTitle += ` (${taskInfo.count} друзей для чистки)`;
         }
         return fullTitle;
     }, [title, actionKey, taskInfo, isLoadingInfo]);
 
-    return { params, getModalTitle, handleParamChange };
+    const getActionLimit = useCallback(() => {
+        if (actionKey?.includes('add')) return userInfo?.daily_add_friends_limit || 100;
+        if (actionKey?.includes('like')) return userInfo?.daily_likes_limit || 1000;
+        if (actionKey === 'remove_friends') return taskInfo?.count || 1000;
+        if (actionKey === 'mass_messaging') return 500; // Условный лимит
+        return 1000;
+    }, [actionKey, userInfo, taskInfo]);
+
+    return { params, getModalTitle, handleParamChange, getActionLimit };
 };

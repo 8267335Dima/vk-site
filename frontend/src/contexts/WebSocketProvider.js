@@ -30,9 +30,9 @@ export const WebSocketProvider = ({ children }) => {
         if (!jwtToken) return null;
         const location = window.location;
         const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsHost = process.env.NODE_ENV === 'production' 
-    ? location.host 
-    : 'localhost'; // В режиме разработки всегда используем localhost:80
+        
+        const wsHost = location.host; 
+        
         return `${wsProtocol}//${wsHost}/api/v1/ws`;
     }, [jwtToken]);
     

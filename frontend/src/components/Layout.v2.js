@@ -1,15 +1,16 @@
-// frontend/src/components/Layout.js
+// frontend/src/components/Layout.v2.js
 import React from 'react';
 import {
-    Toolbar, Typography, Button, Container, Box, Stack,
+    AppBar, Toolbar, Typography, Button, Container, Box, Stack,
     useTheme, useMediaQuery, IconButton, Drawer, List, ListItem, ListItemButton
 } from '@mui/material';
 import { Link as RouterLink, useLocation, Outlet } from 'react-router-dom';
 import { useUserStore } from 'store/userStore';
 import TrackChangesIcon from '@mui/icons-material/TrackChanges';
 import MenuIcon from '@mui/icons-material/Menu';
-import { layoutContent } from 'content/layoutContent';
+import { content } from 'content/content';
 import NotificationsBell from './NotificationsBell';
+import Footer from './Footer'; // Новый компонент
 
 const NavButton = ({ to, children }) => {
     const location = useLocation();
@@ -20,10 +21,25 @@ const NavButton = ({ to, children }) => {
             to={to}
             sx={{
                 fontWeight: 600,
-                color: isActive ? 'primary.main' : 'text.primary',
-                bgcolor: 'transparent',
-                transition: 'all 0.2s ease-in-out',
-                '&:hover': { bgcolor: 'rgba(255, 255, 255, 0.05)', color: 'primary.light' }
+                color: isActive ? 'text.primary' : 'text.secondary',
+                position: 'relative',
+                '&:after': {
+                    content: '""',
+                    position: 'absolute',
+                    width: isActive ? '60%' : '0',
+                    height: '2px',
+                    bottom: '4px',
+                    left: '20%',
+                    backgroundColor: 'primary.main',
+                    transition: 'width 0.3s ease-in-out',
+                },
+                '&:hover:after': {
+                    width: '60%',
+                },
+                 '&:hover': {
+                    color: 'text.primary',
+                    backgroundColor: 'transparent'
+                }
             }}
         >
             {children}
@@ -32,18 +48,18 @@ const NavButton = ({ to, children }) => {
 };
 
 const MobileDrawer = ({ navItems, open, onClose, onLogout }) => (
-    <Drawer anchor="right" open={open} onClose={onClose}>
-        <Box sx={{ width: 250, p: 2, height: '100%', bgcolor: 'background.default' }} role="presentation">
+    <Drawer anchor="right" open={open} onClose={onClose} PaperProps={{ sx: { backgroundColor: 'background.default' }}}>
+        <Box sx={{ width: 250, p: 2, height: '100%' }} role="presentation">
             <List>
                 {navItems.map((item) => (
                     <ListItem key={item.label} disablePadding>
-                        <ListItemButton component={RouterLink} to={item.to} onClick={onClose}>
-                             <Typography>{item.label}</Typography>
+                        <ListItemButton component={RouterLink} to={item.to} onClick={onClose} sx={{ borderRadius: 2, mb: 1 }}>
+                             <Typography variant="body1" fontWeight={600}>{item.label}</Typography>
                         </ListItemButton>
                     </ListItem>
                 ))}
-                 <ListItem disablePadding sx={{ mt: 2 }}>
-                    <Button onClick={onLogout} fullWidth variant="outlined" color="error">{layoutContent.nav.logout}</Button>
+                 <ListItem disablePadding sx={{ mt: 3 }}>
+                    <Button onClick={onLogout} fullWidth variant="outlined" color="error">{content.nav.logout}</Button>
                 </ListItem>
             </List>
         </Box>
@@ -52,31 +68,28 @@ const MobileDrawer = ({ navItems, open, onClose, onLogout }) => (
 
 
 export default function Layout({ children }) {
-    const jwtToken = useUserStore((state) => state.jwtToken);
-    const logout = useUserStore((state) => state.logout);
+    const { jwtToken, logout } = useUserStore(state => ({ jwtToken: state.jwtToken, logout: state.logout }));
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
     const [drawerOpen, setDrawerOpen] = React.useState(false);
 
     const navItems = [
-        { label: layoutContent.nav.dashboard, to: "/dashboard" },
-        { label: layoutContent.nav.scenarios, to: "/scenarios" },
-        { label: layoutContent.nav.history, to: "/history" },
-        { label: layoutContent.nav.billing, to: "/billing" },
+        { label: content.nav.dashboard, to: "/dashboard" },
+        { label: content.nav.scenarios, to: "/scenarios" },
+        { label: content.nav.billing, to: "/billing" },
     ];
     
-    // --- ИЗМЕНЕНИЕ: Теперь Outlet рендерит дочерние роуты ---
     const pageContent = children || <Outlet />;
 
     return (
-        <>
-            <Box component="header" sx={{ position: 'sticky', top: 0, width: '100%', zIndex: 1100, }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+            <AppBar position="sticky" color="transparent" elevation={0} sx={{ backdropFilter: 'blur(10px)', backgroundColor: 'rgba(13, 14, 18, 0.7)', borderBottom: 1, borderColor: 'divider' }}>
                 <Container maxWidth="xl">
                     <Toolbar sx={{ py: 1 }}>
                         <Stack direction="row" alignItems="center" spacing={1.5} component={RouterLink} to="/" sx={{textDecoration: 'none'}}>
-                           <TrackChangesIcon color="primary" sx={{ fontSize: '2.2rem' }} />
+                           <TrackChangesIcon color="primary" sx={{ fontSize: '2.5rem' }} />
                            <Typography variant="h5" sx={{ color: 'text.primary', fontWeight: 700, display: { xs: 'none', sm: 'block' } }}>
-                                {layoutContent.appName}
+                                {content.appName}
                            </Typography>
                         </Stack>
 
@@ -84,13 +97,14 @@ export default function Layout({ children }) {
 
                         {isMobile ? (
                              <>
-                                {jwtToken && (
+                                {jwtToken ? (
                                     <>
                                         <NotificationsBell />
                                         <IconButton onClick={() => setDrawerOpen(true)}><MenuIcon /></IconButton>
                                     </>
+                                ) : (
+                                    <Button component={RouterLink} to="/login" variant="contained">{content.nav.login}</Button>
                                 )}
-                                {!jwtToken && <Button component={RouterLink} to="/login" variant="contained">{layoutContent.nav.login}</Button>}
                              </>
                         ) : (
                             <Stack direction="row" spacing={1} alignItems="center">
@@ -98,26 +112,26 @@ export default function Layout({ children }) {
                                 {jwtToken ? (
                                     <>
                                         <NotificationsBell />
-                                        <Button onClick={logout} color="primary" variant="text">{layoutContent.nav.logout}</Button>
+                                        <Button onClick={logout} variant="outlined" color="primary" sx={{ ml: 2 }}>{content.nav.logout}</Button>
                                     </>
                                 ) : (
                                     <Button component={RouterLink} to="/login" variant="contained" disableElevation>
-                                        {layoutContent.nav.login}
+                                        {content.nav.login}
                                     </Button>
                                 )}
                             </Stack>
                         )}
                     </Toolbar>
                 </Container>
-                {isMobile && jwtToken && <MobileDrawer navItems={navItems} open={drawerOpen} onClose={() => setDrawerOpen(false)} onLogout={logout} />}
+            </AppBar>
+            
+            {isMobile && jwtToken && <MobileDrawer navItems={navItems} open={drawerOpen} onClose={() => setDrawerOpen(false)} onLogout={() => { setDrawerOpen(false); logout(); }} />}
+
+            <Box component="main" sx={{ flexGrow: 1 }}>
+                 {pageContent}
             </Box>
 
-            <Box component="main">
-                 {/* --- ИЗМЕНЕНИЕ: Контент рендерится в контейнере --- */}
-                 <Container maxWidth="xl" sx={{ mt: 4 }}>
-                     {pageContent}
-                 </Container>
-            </Box>
-        </>
+            <Footer />
+        </Box>
     );
 }

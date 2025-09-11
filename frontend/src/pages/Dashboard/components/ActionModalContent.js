@@ -2,86 +2,113 @@
 import React from 'react';
 import { TextField, Box, FormControlLabel, Switch, Divider, Tooltip, Stack } from '@mui/material';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
-import { dashboardContent } from 'content/dashboardContent';
-import { CommonFiltersSettings, RemoveFriendsFilters } from './ActionModalFilters';
+import { content } from 'content/content';
+import ActionModalFilters from './ActionModalFilters';
+import CountSlider from 'components/CountSlider';
 
-const { modal: content, actionPanel } = dashboardContent;
+const { modal: modalContent } = content;
 
 const LikeAfterAdd = ({ enabled, onChange }) => (
     <FormControlLabel
-        control={<Switch name="enabled" checked={enabled} onChange={onChange} />}
+        control={<Switch checked={enabled} onChange={(e) => onChange('like_config.enabled', e.target.checked)} />}
         label={
             <Box display="flex" alignItems="center" component="span">
-                {content.likeAfterRequest.label}
-                <Tooltip title={content.likeAfterRequest.tooltip} placement="top" arrow>
+                {modalContent.likeAfterRequest.label}
+                <Tooltip title={modalContent.likeAfterRequest.tooltip} placement="top" arrow>
                     <InfoOutlinedIcon fontSize="small" color="secondary" sx={{ ml: 0.5, cursor: 'help' }} />
                 </Tooltip>
             </Box>
         }
-        data-parent="like_config" // Указываем родительский объект
     />
 );
 
 const MessageOnAdd = ({ enabled, text, onChange }) => (
     <Stack spacing={1} sx={{mt: 2}}>
          <FormControlLabel
-            control={<Switch name="send_message_on_add" checked={enabled} onChange={onChange} />}
-            label="Отправить сообщение при добавлении"
+            control={<Switch checked={enabled} onChange={(e) => onChange('send_message_on_add', e.target.checked)} />}
+            label={
+                <Box display="flex" alignItems="center" component="span">
+                    {modalContent.messageOnAdd.label}
+                    <Tooltip title={modalContent.messageOnAdd.tooltip} placement="top" arrow>
+                         <InfoOutlinedIcon fontSize="small" color="secondary" sx={{ ml: 0.5, cursor: 'help' }} />
+                    </Tooltip>
+                </Box>
+            }
         />
         {enabled && (
              <TextField
                 fullWidth multiline rows={3}
-                label="Текст сообщения" name="message_text"
-                value={text} onChange={onChange}
-                helperText="Используйте {name} для подстановки имени."
+                label="Текст сообщения"
+                value={text} onChange={(e) => onChange('message_text', e.target.value)}
+                helperText={modalContent.messageOnAdd.helperText}
             />
         )}
     </Stack>
 );
 
-export const ActionModalContent = ({ actionKey, params, onParamChange }) => {
-    const actionConfig = actionPanel.actions.find(a => a.key === actionKey);
-    const needsCount = !!actionConfig?.countLabel;
-    const needsFilters = !['view_stories'].includes(actionKey);
-    
-    const handleChange = (e) => {
-        onParamChange(e.target.name, e.target.value, e.target.type, e.target.checked);
-    };
+const MassMessageSettings = ({ params, onChange }) => (
+    <Stack spacing={2} sx={{mt: 2}}>
+        <TextField
+            fullWidth multiline rows={4}
+            label="Текст сообщения"
+            value={params.message_text || ''} onChange={(e) => onChange('message_text', e.target.value)}
+            helperText={modalContent.messageOnAdd.helperText}
+        />
+        <FormControlLabel
+            control={<Switch checked={params.only_new_dialogs || false} onChange={(e) => onChange('only_new_dialogs', e.target.checked)} />}
+            label={
+                <Box display="flex" alignItems="center" component="span">
+                    {modalContent.massMessage.onlyNewDialogsLabel}
+                    <Tooltip title={modalContent.massMessage.tooltip} placement="top" arrow>
+                         <InfoOutlinedIcon fontSize="small" color="secondary" sx={{ ml: 0.5, cursor: 'help' }} />
+                    </Tooltip>
+                </Box>
+            }
+        />
+    </Stack>
+);
 
+const ActionModalContent = ({ actionKey, params, onParamChange, limit }) => {
+    const actionConfig = content.actions[actionKey];
+    if (!actionConfig) return null;
+
+    const needsCount = !!actionConfig.modalCountLabel;
+    const hasFilters = !['view_stories'].includes(actionKey);
+    
     return (
-        <Stack spacing={2.5}>
+        <Stack spacing={3} py={1}>
             {needsCount && (
-                <TextField
-                    fullWidth autoFocus
-                    type="number"
-                    label={actionConfig.countLabel}
-                    name="count"
-                    value={params.count || ''}
-                    onChange={handleChange}
+                <CountSlider
+                    label={actionConfig.modalCountLabel}
+                    value={params.count || 0}
+                    onChange={(val) => onParamChange('count', val)}
+                    max={limit}
                 />
             )}
             
             {actionKey === 'add_recommended' && (
                 <Box>
-                    <LikeAfterAdd enabled={params.like_config?.enabled || false} onChange={handleChange} />
+                    <LikeAfterAdd enabled={params.like_config?.enabled || false} onChange={onParamChange} />
                     <MessageOnAdd 
                         enabled={params.send_message_on_add || false}
                         text={params.message_text || ''}
-                        onChange={handleChange}
+                        onChange={onParamChange}
                     />
                 </Box>
             )}
+
+            {actionKey === 'mass_messaging' && (
+                <MassMessageSettings params={params} onChange={onParamChange} />
+            )}
             
-            {needsFilters && (
+            {hasFilters && (
                 <>
                     <Divider />
-                    {actionKey === 'remove_friends' ? (
-                        <RemoveFriendsFilters filters={params.filters || {}} onChange={handleChange} />
-                    ) : (
-                        <CommonFiltersSettings filters={params.filters || {}} onChange={handleChange} actionKey={actionKey} />
-                    )}
+                    <ActionModalFilters filters={params.filters || {}} onChange={onParamChange} actionKey={actionKey} />
                 </>
             )}
         </Stack>
     );
 };
+
+export default ActionModalContent;

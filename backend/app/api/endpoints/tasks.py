@@ -1,79 +1,61 @@
 # backend/app/api/endpoints/tasks.py
 from fastapi import APIRouter, Depends, Query, HTTPException, status
-from fastapi_limiter.depends import RateLimiter
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 from pydantic import BaseModel
 
-from app.db.models import User, TaskHistory, DelayProfile
+from app.db.models import User, TaskHistory
 from app.api.dependencies import get_current_user
 from app.db.session import get_db
 from app.api.schemas.actions import (
-    AcceptFriendsRequest, LikeFeedRequest, AddFriendsRequest, ActionResponse,
-    ViewStoriesRequest, LikeFriendsFeedRequest, RemoveFriendsRequest
+    AcceptFriendsRequest, LikeFeedRequest, AddFriendsRequest, EmptyRequest,
+    RemoveFriendsRequest, MassMessagingRequest
 )
-from app.api.schemas.tasks import PaginatedTasksResponse
+from app.api.schemas.tasks import ActionResponse, PaginatedTasksResponse
 from app.tasks.runner import (
     accept_friend_requests, like_feed, add_recommended_friends,
-    view_stories, like_friends_feed, remove_friends_by_criteria
+    view_stories, remove_friends_by_criteria, mass_messaging
 )
-from app.core.plans import is_automation_available_for_plan
+from app.core.plans import is_feature_available_for_plan
 from app.core.config_loader import AUTOMATIONS_CONFIG
 
 router = APIRouter()
 
-# Карта для ручного запуска задач.
 TASK_ENDPOINT_MAP = {
-    'accept_friends': accept_friend_requests,
-    'like_feed': like_feed,
-    'add_recommended': add_recommended_friends,
-    'view_stories': view_stories,
-    'like_friends_feed': like_friends_feed,
-    'remove_friends': remove_friends_by_criteria,
+    'accept_friends': (accept_friend_requests, AcceptFriendsRequest),
+    'like_feed': (like_feed, LikeFeedRequest),
+    'add_recommended': (add_recommended_friends, AddFriendsRequest),
+    'view_stories': (view_stories, EmptyRequest),
+    'remove_friends': (remove_friends_by_criteria, RemoveFriendsRequest),
+    'mass_messaging': (mass_messaging, MassMessagingRequest),
 }
 
-class BehaviorStyle(BaseModel):
-    delay_profile: DelayProfile
-
 async def _enqueue_task(
-    user: User,
-    db: AsyncSession,
-    task_key: str,
-    request_data: BaseModel,
-    behavior: BehaviorStyle
+    user: User, db: AsyncSession, task_key: str, request_data: BaseModel
 ):
-    """Универсальная функция для создания записи в TaskHistory и постановки задачи в очередь."""
-    if not is_automation_available_for_plan(user.plan, task_key):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Действие недоступно на вашем тарифе '{user.plan}'."
-        )
+    """Универсальная функция для постановки задачи в очередь."""
+    if not is_feature_available_for_plan(user.plan, task_key):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Действие недоступно на вашем тарифе '{user.plan}'.")
 
-    task_func = TASK_ENDPOINT_MAP.get(task_key)
+    task_func, _ = TASK_ENDPOINT_MAP.get(task_key, (None, None))
     if not task_func:
-        raise HTTPException(status_code=404, detail="Задача с таким ключом не найдена или недоступна для ручного запуска.")
+        raise HTTPException(status_code=404, detail="Задача не найдена.")
     
-    task_config = next((item for item in AUTOMATIONS_CONFIG if item['id'] == task_key), None)
-    task_name = task_config['name'] if task_config else "Неизвестная задача"
+    task_config = next((item for item in AUTOMATIONS_CONFIG if item['id'] == task_key), {})
+    task_name = task_config.get('name', "Неизвестная задача")
 
-    task_kwargs = request_data.model_dump()
-    task_kwargs['delay_profile'] = behavior.delay_profile.value
-    
     task_history = TaskHistory(
-        user_id=user.id,
-        task_name=task_name,
-        status="PENDING",
-        parameters=task_kwargs
+        user_id=user.id, task_name=task_name, status="PENDING",
+        parameters=request_data.model_dump()
     )
     db.add(task_history)
     await db.flush()
 
     task_result = task_func.apply_async(
-        kwargs={'task_history_id': task_history.id, **task_kwargs},
+        kwargs={'task_history_id': task_history.id, **request_data.model_dump()},
         queue='high_priority'
     )
-
     task_history.celery_task_id = task_result.id
     await db.commit()
     
@@ -82,63 +64,24 @@ async def _enqueue_task(
         task_id=task_result.id
     )
 
-# --- Эндпоинты для ЗАПУСКА задач ---
-
-@router.post("/run/accept-friends", response_model=ActionResponse, dependencies=[Depends(RateLimiter(times=20, minutes=1))])
-async def run_accept_friends(
-    request_data: AcceptFriendsRequest, 
-    behavior: BehaviorStyle = Depends(), 
+@router.post("/run/{task_key}", response_model=ActionResponse)
+async def run_any_task(
+    task_key: str,
+    request: dict, # Принимаем сырой dict, чтобы валидировать его нужной Pydantic моделью
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    return await _enqueue_task(current_user, db, 'accept_friends', request_data, behavior)
+    """Единый эндпоинт для запуска любой задачи."""
+    _, RequestModel = TASK_ENDPOINT_MAP.get(task_key, (None, None))
+    if not RequestModel:
+        raise HTTPException(status_code=404, detail="Задача не найдена.")
+    
+    try:
+        validated_data = RequestModel(**request)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
 
-@router.post("/run/like-feed", response_model=ActionResponse, dependencies=[Depends(RateLimiter(times=20, minutes=1))])
-async def run_like_feed(
-    request_data: LikeFeedRequest, 
-    behavior: BehaviorStyle = Depends(), 
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    return await _enqueue_task(current_user, db, 'like_feed', request_data, behavior)
-
-@router.post("/run/add-recommended-friends", response_model=ActionResponse, dependencies=[Depends(RateLimiter(times=20, minutes=1))])
-async def run_add_recommended_friends(
-    request_data: AddFriendsRequest, 
-    behavior: BehaviorStyle = Depends(), 
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    return await _enqueue_task(current_user, db, 'add_recommended', request_data, behavior)
-
-@router.post("/run/view-stories", response_model=ActionResponse, dependencies=[Depends(RateLimiter(times=20, minutes=1))])
-async def run_view_stories(
-    request_data: ViewStoriesRequest, 
-    behavior: BehaviorStyle = Depends(), 
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    return await _enqueue_task(current_user, db, 'view_stories', request_data, behavior)
-
-@router.post("/run/like-friends-feed", response_model=ActionResponse, dependencies=[Depends(RateLimiter(times=20, minutes=1))])
-async def run_like_friends_feed(
-    request_data: LikeFriendsFeedRequest, 
-    behavior: BehaviorStyle = Depends(), 
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    return await _enqueue_task(current_user, db, 'like-friends-feed', request_data, behavior)
-
-@router.post("/run/remove-friends", response_model=ActionResponse, dependencies=[Depends(RateLimiter(times=20, minutes=1))])
-async def run_remove_friends(
-    request_data: RemoveFriendsRequest, 
-    behavior: BehaviorStyle = Depends(), 
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    return await _enqueue_task(current_user, db, 'remove_friends', request_data, behavior)
-
-# --- Эндпоинт для ПОЛУЧЕНИЯ ИСТОРИИ задач ---
+    return await _enqueue_task(current_user, db, task_key, validated_data)
 
 @router.get("/history", response_model=PaginatedTasksResponse)
 async def get_user_task_history(
@@ -146,29 +89,17 @@ async def get_user_task_history(
     db: AsyncSession = Depends(get_db),
     page: int = Query(1, ge=1),
     size: int = Query(25, ge=1, le=100),
-    status: Optional[str] = Query(None, description="Фильтр по статусу (напр., 'SUCCESS', 'FAILURE')")
+    status: Optional[str] = Query(None)
 ):
-    """
-    Возвращает пагинированный список истории задач для текущего пользователя.
-    """
+    """Возвращает пагинированный список истории задач."""
     offset = (page - 1) * size
     
-    tasks_query = (
-        select(TaskHistory)
-        .where(TaskHistory.user_id == current_user.id)
-        .order_by(TaskHistory.created_at.desc())
-        .offset(offset)
-        .limit(size)
-    )
-    
-    count_query = (
-        select(func.count(TaskHistory.id))
-        .where(TaskHistory.user_id == current_user.id)
-    )
-
+    base_query = select(TaskHistory).where(TaskHistory.user_id == current_user.id)
     if status:
-        tasks_query = tasks_query.where(TaskHistory.status == status.upper())
-        count_query = count_query.where(TaskHistory.status == status.upper())
+        base_query = base_query.where(TaskHistory.status == status.upper())
+        
+    tasks_query = base_query.order_by(TaskHistory.created_at.desc()).offset(offset).limit(size)
+    count_query = select(func.count()).select_from(base_query.subquery())
         
     tasks_result = await db.execute(tasks_query)
     total_result = await db.execute(count_query)
@@ -177,9 +108,6 @@ async def get_user_task_history(
     total = total_result.scalar_one()
 
     return PaginatedTasksResponse(
-        items=tasks,
-        total=total,
-        page=page,
-        size=size,
+        items=tasks, total=total, page=page, size=size,
         has_more=(offset + len(tasks)) < total
     )

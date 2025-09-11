@@ -7,16 +7,18 @@ from redis.asyncio import Redis
 
 from app.core.config import settings
 from app.db.session import AsyncSessionFactory
-from app.db.models import DailyStats, WeeklyStats, MonthlyStats, Automation, TaskHistory, User, Notification
+from app.db.models import DailyStats, Automation, TaskHistory, User, Notification, ProfileMetric
 from app.tasks.runner import (
-    birthday_congratulation, like_feed, add_recommended_friends,
-    view_stories, like_friends_feed, accept_friend_requests, remove_friends_by_criteria
+    like_feed, add_recommended_friends, accept_friend_requests, 
+    remove_friends_by_criteria, view_stories, like_friends_feed, eternal_online,
+    birthday_congratulation
 )
-# --- НОВЫЙ ИМПОРТ ---
-from app.services.analytics_service import AnalyticsService # <-- НОВЫЙ ИМПОРТ
-from app.services.vk_api import VKAuthError
-from app.core.plans import get_limits_for_plan, is_automation_available_for_plan
+from app.core.config_loader import PLAN_CONFIG
+from app.core.plans import get_limits_for_plan
 import structlog
+
+from backend.app.services.analytics_service import AnalyticsService
+from backend.app.services.vk_api import VKAuthError
 
 log = structlog.get_logger(__name__)
 redis_client = Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, db=2, decode_responses=True)
@@ -28,7 +30,8 @@ TASK_FUNC_MAP = {
     "accept_friends": accept_friend_requests,
     "remove_friends": remove_friends_by_criteria,
     "view_stories": view_stories,
-    "like_friends_feed": like_friends_feed
+    "like_friends_feed": like_friends_feed,
+    "eternal_online": eternal_online,
 }
 
 async def _create_and_run_task(session, user_id, task_name, settings):
@@ -38,7 +41,7 @@ async def _create_and_run_task(session, user_id, task_name, settings):
         log.warn("cron.task_not_found", task_name=task_name)
         return
 
-    task_kwargs = settings.copy()
+    task_kwargs = settings.copy() if settings else {}
     if 'task_history_id' in task_kwargs:
         del task_kwargs['task_history_id']
 
@@ -46,12 +49,13 @@ async def _create_and_run_task(session, user_id, task_name, settings):
     session.add(task_history)
     await session.flush()
 
+    queue_name = 'low_priority' if task_name in ['eternal_online'] else 'default'
+
     task_result = task_func.apply_async(
         kwargs={'task_history_id': task_history.id, **task_kwargs},
-        queue='default'
+        queue=queue_name
     )
     task_history.celery_task_id = task_result.id
-    await session.commit()
 
 @shared_task(name="app.tasks.cron.aggregate_daily_stats")
 async def aggregate_daily_stats():
@@ -95,50 +99,69 @@ async def aggregate_daily_stats():
         log.info("aggregate_daily_stats.success", users_count=len(daily_sums), date=yesterday.isoformat())
 
 @shared_task(name="app.tasks.cron.run_daily_automations")
-async def run_daily_automations():
-    """Находит и запускает активные и ДОСТУПНЫЕ ПО ТАРИФУ автоматизации."""
-    lock_key = "lock:task:run_daily_automations"
-    if not await redis_client.set(lock_key, "1", ex=900, nx=True):
-        log.warn("run_daily_automations.already_running")
+async def run_daily_automations(automation_group: str):
+    """
+    Находит и запускает активные автоматизации, доступные по тарифу, для указанной группы.
+    Фильтрация происходит на уровне БД для максимальной производительности.
+    """
+    lock_key = f"lock:task:run_automations:{automation_group}"
+    if not await redis_client.set(lock_key, "1", ex=240, nx=True): # Блокировка на 4 минуты
+        log.warn("run_daily_automations.already_running", group=automation_group)
         return
     
     try:
         async with AsyncSessionFactory() as session:
             now = datetime.datetime.utcnow()
+
+            # --- ИЗМЕНЕНИЕ: Оптимизированный запрос ---
+            # 1. Определяем, какие автоматизации входят в запрошенную группу
+            automation_ids_in_group = []
+            if automation_group == 'standard':
+                automation_ids_in_group = [
+                    "like_feed", "add_recommended", "accept_friends", "remove_friends",
+                    "like_friends_feed", "view_stories", "birthday_congratulation"
+                ]
+            elif automation_group == 'online':
+                automation_ids_in_group = ["eternal_online"]
+
+            if not automation_ids_in_group:
+                log.warn("run_daily_automations.unknown_group", group=automation_group)
+                return
+
+            # 2. Находим все планы, у которых есть доступ хотя бы к одной из этих автоматизаций
+            available_plans = [
+                plan_name for plan_name, config in PLAN_CONFIG.items()
+                if config.get("available_features") == "*" or any(
+                    auto_id in config.get("available_features", []) for auto_id in automation_ids_in_group
+                )
+            ]
+
+            # 3. Делаем единый запрос к БД
             stmt = select(Automation).join(User).where(
                 Automation.is_active == True,
+                Automation.automation_type.in_(automation_ids_in_group),
+                User.plan.in_(available_plans), # Фильтруем по плану на уровне БД
                 or_(User.plan_expires_at == None, User.plan_expires_at > now)
-            )
+            ).options(select.joinedload(Automation.user)) # Подгружаем пользователя, чтобы избежать N+1 запросов
+
             result = await session.execute(stmt)
-            active_automations = result.scalars().all()
+            active_automations = result.scalars().unique().all()
 
             if not active_automations:
                 return
 
-            log.info("run_daily_automations.start", count=len(active_automations))
+            log.info("run_daily_automations.start", count=len(active_automations), group=automation_group)
             
-            tasks_to_run = []
             for automation in active_automations:
-                # --- ПРОВЕРКА ПРАВ ДОСТУПА ПЕРЕД ЗАПУСКОМ ---
-                if is_automation_available_for_plan(automation.user.plan, automation.automation_type):
-                    tasks_to_run.append(automation)
-                else:
-                    log.warn("run_daily_automations.skip_unavailable", 
-                             user_id=automation.user_id, 
-                             plan=automation.user.plan,
-                             automation=automation.automation_type)
-
-            for automation in tasks_to_run:
                 automation.last_run_at = now
                 await _create_and_run_task(
                     session,
                     user_id=automation.user_id,
                     task_name=automation.automation_type,
-                    settings=automation.settings or {}
+                    settings=automation.settings
                 )
             
-            if tasks_to_run:
-                await session.commit() # Коммитим только если были запущены задачи
+            await session.commit()
     finally:
         await redis_client.delete(lock_key)
 

@@ -5,27 +5,20 @@ import { ThemeProvider, CssBaseline, Box, CircularProgress } from '@mui/material
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'react-hot-toast';
 import { theme, globalStyles } from './theme.js';
-import { WebSocketProvider } from './contexts/WebSocketProvider';
-import { useUserStore } from './store/userStore';
+import { WebSocketProvider } from './contexts/WebSocketProvider.js';
+import { useUserStore } from './store/userStore.js';
 
-import Layout from './components/Layout';
-import HomePage from './pages/Home/HomePage';
-import LoginPage from './pages/Login/LoginPage';
-import ErrorBoundary from './components/ErrorBoundary';
+import Layout from './components/Layout.v2.js';
+import HomePage from './pages/Home/HomePage.js';
+import LoginPage from './pages/Login/LoginPage.js';
+import ErrorBoundary from './components/ErrorBoundary.js';
 
-// Lazy loading for all major pages
-const DashboardPage = lazy(() => import('./pages/Dashboard/DashboardPage'));
-const HistoryPage = lazy(() => import('./pages/History/HistoryPage'));
-const ScenariosPage = lazy(() => import('./pages/Scenarios/ScenarioPage'));
-const BillingPage = lazy(() => import('./pages/Billing/BillingPage'));
+const DashboardPage = lazy(() => import('./pages/Dashboard/DashboardPage.js'));
+const ScenariosPage = lazy(() => import('./pages/Scenarios/ScenarioPage.js'));
+const BillingPage = lazy(() => import('./pages/Billing/BillingPage.js'));
 
 const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 1000 * 60 * 5, // 5 minutes
-      retry: 1,
-    },
-  },
+  defaultOptions: { queries: { staleTime: 1000 * 60 * 5, retry: 1 } },
 });
 
 const FullscreenLoader = () => (
@@ -35,27 +28,20 @@ const FullscreenLoader = () => (
 );
 
 const PrivateRoute = ({ children }) => {
-    const jwtToken = useUserStore(state => state.jwtToken);
-    const isLoading = useUserStore(state => state.isLoading);
-
-    if (isLoading) {
-        return <FullscreenLoader />;
-    }
-
+    const { jwtToken, isLoading } = useUserStore(state => ({ jwtToken: state.jwtToken, isLoading: state.isLoading }));
+    if (isLoading) return <FullscreenLoader />;
     return jwtToken ? children : <Navigate to="/login" replace />;
 };
 
 function App() {
-  const jwtToken = useUserStore(state => state.jwtToken);
-  const loadUser = useUserStore(state => state.loadUser);
-  const finishInitialLoad = useUserStore(state => state.finishInitialLoad);
+  const { jwtToken, loadUser, finishInitialLoad } = useUserStore(state => ({
+      jwtToken: state.jwtToken,
+      loadUser: state.loadUser,
+      finishInitialLoad: state.finishInitialLoad
+  }));
 
   useEffect(() => {
-    if (jwtToken) {
-      loadUser();
-    } else {
-      finishInitialLoad();
-    }
+    jwtToken ? loadUser() : finishInitialLoad();
   }, [jwtToken, loadUser, finishInitialLoad]);
 
   return (
@@ -65,20 +51,25 @@ function App() {
         <Toaster
           position="bottom-right"
           toastOptions={{
+            className: 'toaster-custom',
             style: {
-              background: 'rgba(40, 40, 50, 0.8)',
+              background: 'rgba(30, 31, 37, 0.9)',
               backdropFilter: 'blur(10px)',
-              color: '#F5F5F5',
+              color: '#FFFFFF',
               borderRadius: '12px',
-              boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.3)',
-              border: '1px solid rgba(255, 255, 255, 0.1)',
+              border: '1px solid rgba(160, 163, 189, 0.15)',
+              boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.2)',
             },
           }}
+          containerStyle={{
+            // --- ОГРАНИЧЕНИЕ КОЛИЧЕСТВА УВЕДОМЛЕНИЙ ---
+            // Этот трюк с CSS ограничивает видимое количество уведомлений
+            maxHeight: 'calc(3 * (60px + 16px))', // 3 * (высота тоста + отступ)
+            overflow: 'hidden',
+          }}
         />
-        {/* --- ИЗМЕНЕНИЕ: Глобальные стили теперь применяются здесь --- */}
         <style>{globalStyles}</style>
         <Router>
-          {/* --- ИЗМЕНЕНИЕ: Layout теперь не оборачивает всё приложение, а используется внутри роутов --- */}
           <ErrorBoundary>
             <Suspense fallback={<FullscreenLoader />}>
               <Routes>
@@ -86,7 +77,6 @@ function App() {
                   <Route path="/login" element={jwtToken ? <Navigate to="/dashboard" replace /> : <Layout><LoginPage /></Layout>} />
                   <Route path="/billing" element={<Layout><BillingPage /></Layout>} />
                   
-                  {/* --- ИЗМЕНЕНИЕ: Приватные роуты с общим Layout --- */}
                   <Route element={
                       <PrivateRoute>
                           <WebSocketProvider>
@@ -96,7 +86,7 @@ function App() {
                   }>
                       <Route path="/dashboard" element={<DashboardPage />} />
                       <Route path="/scenarios" element={<ScenariosPage />} />
-                      <Route path="/history" element={<HistoryPage />} />
+                      {/* История теперь является частью Дашборда, отдельная страница не нужна */}
                   </Route>
                   
                   <Route path="*" element={<Navigate to="/" replace />} />

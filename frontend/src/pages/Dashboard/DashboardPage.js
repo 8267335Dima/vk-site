@@ -1,36 +1,35 @@
 // frontend/src/pages/Dashboard/DashboardPage.js
 import React, { Suspense, useState, lazy } from 'react';
-import { Box, Paper, Link, Chip, Stack, Typography, Avatar, Grid, Button, Tooltip } from '@mui/material';
+import { Box, Paper, Link, Chip, Stack, Typography, Avatar, Grid, Button, Tooltip, Select, MenuItem } from '@mui/material';
 import { motion } from 'framer-motion';
-import { formatDistanceToNow, format } from 'date-fns';
-import { ru } from 'date-fns/locale';
 import GroupIcon from '@mui/icons-material/Group';
 import RssFeedIcon from '@mui/icons-material/RssFeed';
 import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
 import VpnKeyIcon from '@mui/icons-material/VpnKey';
-import EventBusyIcon from '@mui/icons-material/EventBusy';
+import SpeedIcon from '@mui/icons-material/Speed';
+import ShutterSpeedIcon from '@mui/icons-material/ShutterSpeed';
+import SlowMotionVideoIcon from '@mui/icons-material/SlowMotionVideo';
 import { useWebSocketContext } from 'contexts/WebSocketProvider';
 import { useUserStore } from 'store/userStore';
 import { useDashboardManager } from 'hooks/useDashboardManager';
-import { dashboardContent } from 'content/dashboardContent';
 import LazyLoader from 'components/LazyLoader';
 import { is_feature_available as isFeatureAvailable } from 'utils/planUtils';
+import { toast } from 'react-hot-toast';
+import { updateUserDelayProfile } from 'api';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import ActionPanel from './components/ActionPanel';
-import EventFeed from './components/EventFeed';
 import ActionModal from './components/ActionModal';
+import TaskLogWidget from './components/TaskLogWidget';
+import { useFeatureFlag } from 'hooks/useFeatureFlag';
 
 // Ленивая загрузка виджетов
-const AutomationsWidget = lazy(() => import('./components/AutomationsWidget'));
-const LimitsWidget = lazy(() => import('./components/LimitsWidget'));
+const AutomationsWidget = lazy(() => import('./components/AutomationsWidget.v2'));
 const ActivityChartWidget = lazy(() => import('./components/ActivityChartWidget'));
-const AudienceAnalyticsWidget = lazy(() => import('./components/AudienceAnalyticsWidget')); 
-const FriendsDynamicWidget = lazy(() => import('./components/FriendsDynamicWidget'));
+const AudienceAnalyticsWidget = lazy(() => import('./components/AudienceAnalyticsWidget'));
+const ProfileGrowthWidget = lazy(() => import('./components/ProfileGrowthWidget'));
 const ProxyManagerModal = lazy(() => import('./components/ProxyManagerModal'));
 const AutomationSettingsModal = lazy(() => import('./components/AutomationSettingsModal'));
-const ActionSummaryWidget = lazy(() => import('./components/ActionSummaryWidget'));
-const FriendsAnalyticsWidget = lazy(() => import('./components/FriendsAnalyticsWidget'));
-
 
 const motionVariants = {
     initial: { opacity: 0, y: 20 },
@@ -38,23 +37,22 @@ const motionVariants = {
 };
 
 const UserProfileCard = ({ userInfo, connectionStatus, onProxyManagerOpen }) => {
-    const canUseProxyManager = isFeatureAvailable(userInfo.plan, 'proxy_management');
-    
-    const PlanInfo = () => {
-        const expiresDate = userInfo.plan_expires_at ? new Date(userInfo.plan_expires_at) : null;
-        const isExpired = !userInfo.is_plan_active;
+    const queryClient = useQueryClient();
+    const { isFeatureAvailable } = useFeatureFlag();
+    const canUseProxyManager = isFeatureAvailable('proxy_management');
+    const canChangeSpeed = isFeatureAvailable('fast_slow_delay_profile');
 
-        if (isExpired) {
-            return ( <Chip icon={<EventBusyIcon />} label="Тариф неактивен" color="error" variant="filled" size="small" /> );
-        }
-        
-        const distance = formatDistanceToNow(expiresDate, { locale: ru, addSuffix: true });
+    const mutation = useMutation({
+        mutationFn: updateUserDelayProfile,
+        onSuccess: (updatedUser) => {
+            queryClient.setQueryData(['userInfo'], (oldData) => ({ ...oldData, ...updatedUser }));
+            toast.success(`Скорость работы изменена на: ${updatedUser.delay_profile}`);
+        },
+        onError: () => toast.error("Не удалось изменить скорость.")
+    });
 
-        return (
-            <Tooltip title={`Тариф активен до ${format(expiresDate, 'd MMMM yyyy, HH:mm', { locale: ru })}`} arrow>
-                 <Chip icon={<WorkspacePremiumIcon />} label={`${userInfo.plan} (осталось ${distance})`} color="primary" variant="filled" size="small"/>
-            </Tooltip>
-        );
+    const handleSpeedChange = (event) => {
+        mutation.mutate(event.target.value);
     };
 
     return (
@@ -67,24 +65,51 @@ const UserProfileCard = ({ userInfo, connectionStatus, onProxyManagerOpen }) => 
                     </Link>
                     <Chip label={connectionStatus} color={connectionStatus === 'Live' ? 'success' : 'warning'} size="small" sx={{ flexShrink: 0, mt: 0.5 }} />
                 </Stack>
-                
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 2, fontStyle: 'italic', wordBreak: 'break-word', minHeight: '20px' }}>
-                    {userInfo.status || dashboardContent.profile.noStatus}
-                </Typography>
 
-                <Stack direction="row" spacing={1.5} flexWrap="wrap" useGap>
-                    <PlanInfo />
+                <Stack direction="row" spacing={1.5} flexWrap="wrap" useGap sx={{ mb: 2 }}>
+                    <Chip icon={<WorkspacePremiumIcon />} label={`${userInfo.plan}`} color="primary" variant="filled" size="small"/>
                     <Chip icon={<GroupIcon />} label={`${userInfo.counters?.friends || '0'} друзей`} size="small" variant="outlined"/>
                     <Chip icon={<RssFeedIcon />} label={`${userInfo.counters?.followers || '0'} подписчиков`} size="small" variant="outlined"/>
-                    {/* --- ИСПРАВЛЕНИЕ: УДАЛЕНЫ ЧИПЫ С ФОТО И ВИДЕО --- */}
-                    <Tooltip title={canUseProxyManager ? "Управление прокси" : "Доступно на PRO-тарифе"} arrow>
-                        <span>
-                          <Button size="small" startIcon={<VpnKeyIcon />} onClick={onProxyManagerOpen} disabled={!canUseProxyManager} variant="text" sx={{color: 'text.secondary'}}>
-                              Прокси
-                          </Button>
-                        </span>
-                    </Tooltip>
                 </Stack>
+
+                <Grid container spacing={1} alignItems="center">
+                    <Grid item xs={12} sm={6} md={4}>
+                         <Tooltip title={canUseProxyManager ? "Управление прокси" : "Доступно на PRO-тарифе"}>
+                            <span>
+                                <Button fullWidth size="small" startIcon={<VpnKeyIcon />} onClick={onProxyManagerOpen} disabled={!canUseProxyManager} variant="outlined" sx={{color: 'text.secondary'}}>Прокси</Button>
+                            </span>
+                        </Tooltip>
+                    </Grid>
+                    <Grid item xs={12} sm={6} md={8}>
+                        <Select
+                            fullWidth
+                            size="small"
+                            value={userInfo.delay_profile}
+                            onChange={handleSpeedChange}
+                            disabled={mutation.isLoading}
+                            renderValue={(value) => (
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                    {value === 'fast' && <ShutterSpeedIcon fontSize="small" />}
+                                    {value === 'normal' && <SpeedIcon fontSize="small" />}
+                                    {value === 'slow' && <SlowMotionVideoIcon fontSize="small" />}
+                                    {value === 'fast' && 'Быстрый'}
+                                    {value === 'normal' && 'Нормальный'}
+                                    {value === 'slow' && 'Медленный'}
+                                </Box>
+                            )}
+                        >
+                            <MenuItem value="slow" disabled={!canChangeSpeed}>
+                                <SlowMotionVideoIcon sx={{mr: 1}}/> Медленный (Макс. безопасность)
+                            </MenuItem>
+                            <MenuItem value="normal">
+                                <SpeedIcon sx={{mr: 1}}/> Нормальный (Баланс)
+                            </MenuItem>
+                            <MenuItem value="fast" disabled={!canChangeSpeed}>
+                                <ShutterSpeedIcon sx={{mr: 1}}/> Быстрый (Макс. скорость)
+                            </MenuItem>
+                        </Select>
+                    </Grid>
+                </Grid>
             </Box>
         </Paper>
     );
@@ -92,8 +117,7 @@ const UserProfileCard = ({ userInfo, connectionStatus, onProxyManagerOpen }) => 
 
 export default function DashboardPage() {
     const userInfo = useUserStore(state => state.userInfo);
-    const wsContext = useWebSocketContext();
-    const connectionStatus = wsContext ? wsContext.connectionStatus : 'Подключение...';
+    const { connectionStatus } = useWebSocketContext() || { connectionStatus: 'Подключение...' };
     const { modalState, openModal, closeModal, onActionSubmit } = useDashboardManager();
     const [isProxyModalOpen, setProxyModalOpen] = useState(false);
     const [automationToEdit, setAutomationToEdit] = useState(null);
@@ -102,69 +126,55 @@ export default function DashboardPage() {
 
     return (
         <Box sx={{ py: 4, px: { xs: 0, sm: 1, lg: 2 } }}>
-            <Grid container spacing={4}>
+            <Grid container spacing={3}>
                 {/* Левая колонка */}
                 <Grid item xs={12} lg={4}>
-                    <Stack spacing={4}>
+                    <Stack spacing={3}>
                         <motion.div custom={0} variants={motionVariants} initial="initial" animate="animate">
                            <ActionPanel onConfigure={openModal} />
                         </motion.div>
                          <motion.div custom={1} variants={motionVariants} initial="initial" animate="animate">
-                           <Suspense fallback={<LazyLoader variant="skeleton" height="300px" />}>
-                                <AutomationsWidget onSettingsClick={(automation) => setAutomationToEdit(automation)} />
+                           <Suspense fallback={<LazyLoader variant="skeleton" height="400px" />}>
+                                <AutomationsWidget onSettingsClick={setAutomationToEdit} />
                             </Suspense>
-                        </motion.div>
-                         <motion.div custom={8} variants={motionVariants} initial="initial" animate="animate">
-                             <EventFeed />
                         </motion.div>
                     </Stack>
                 </Grid>
                 
                 {/* Правая колонка */}
                 <Grid item xs={12} lg={8}>
-                    <Stack spacing={4}>
+                    <Stack spacing={3}>
                         <motion.div custom={2} variants={motionVariants} initial="initial" animate="animate">
                             <UserProfileCard userInfo={userInfo} connectionStatus={connectionStatus} onProxyManagerOpen={() => setProxyModalOpen(true)} />
                         </motion.div>
-                         <Grid container spacing={4}>
-                           <Grid item xs={12} md={6}>
-                                <motion.div custom={3} variants={motionVariants} initial="initial" animate="animate" style={{height: '100%'}}>
-                                   <Suspense fallback={<LazyLoader variant="skeleton" height="250px" />}>
-                                        <LimitsWidget />
-                                    </Suspense>
-                                </motion.div>
-                            </Grid>
-                            <Grid item xs={12} md={6}>
-                                <motion.div custom={4} variants={motionVariants} initial="initial" animate="animate" style={{height: '100%'}}>
-                                    <Suspense fallback={<LazyLoader variant="skeleton" height="300px" />}>
-                                        {/* --- ИСПРАВЛЕНИЕ: ДОБАВЛЕН FriendsAnalyticsWidget, КОТОРЫЙ ИСПОЛЬЗОВАЛСЯ, НО НЕ БЫЛ ИМПОРТИРОВАН --- */}
-                                        <FriendsAnalyticsWidget />
-                                    </Suspense>
-                                </motion.div>
-                            </Grid>
-                        </Grid>
-                        {/* --- ИСПРАВЛЕНИЕ: ДОБАВЛЕН AudienceAnalyticsWidget, КОТОРЫЙ БЫЛ ИМПОРТИРОВАН, НО НЕ ИСПОЛЬЗОВАЛСЯ --- */}
-                        <motion.div custom={4} variants={motionVariants} initial="initial" animate="animate">
-                           <Suspense fallback={<LazyLoader variant="skeleton" height="300px" />}>
-                                <AudienceAnalyticsWidget />
-                           </Suspense>
-                        </motion.div>
-                        <motion.div custom={5} variants={motionVariants} initial="initial" animate="animate">
+                        
+                        <motion.div custom={3} variants={motionVariants} initial="initial" animate="animate">
                             <Suspense fallback={<LazyLoader variant="skeleton" height="400px" />}>
                                 <ActivityChartWidget />
                             </Suspense>
                         </motion.div>
-                        <motion.div custom={6} variants={motionVariants} initial="initial" animate="animate">
-                           <Suspense fallback={<LazyLoader variant="skeleton" height="250px" />}>
-                                <ActionSummaryWidget />
-                           </Suspense>
-                        </motion.div>
-                        <motion.div custom={7} variants={motionVariants} initial="initial" animate="animate">
-                           <Suspense fallback={<LazyLoader variant="skeleton" height="250px" />}>
-                                <FriendsDynamicWidget />
+                        
+                        {isFeatureAvailable(userInfo.plan, 'profile_growth_analytics') && (
+                            <motion.div custom={4} variants={motionVariants} initial="initial" animate="animate">
+                               <Suspense fallback={<LazyLoader variant="skeleton" height="300px" />}>
+                                    <ProfileGrowthWidget />
+                               </Suspense>
+                            </motion.div>
+                        )}
+                        
+                        <motion.div custom={5} variants={motionVariants} initial="initial" animate="animate">
+                           <Suspense fallback={<LazyLoader variant="skeleton" height="300px" />}>
+                                <AudienceAnalyticsWidget />
                            </Suspense>
                         </motion.div>
                     </Stack>
+                </Grid>
+
+                 {/* Нижний блок - лог */}
+                <Grid item xs={12}>
+                    <motion.div custom={6} variants={motionVariants} initial="initial" animate="animate">
+                         <TaskLogWidget />
+                    </motion.div>
                 </Grid>
             </Grid>
             

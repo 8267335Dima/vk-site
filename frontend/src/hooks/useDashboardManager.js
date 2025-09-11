@@ -1,14 +1,7 @@
 // frontend/src/hooks/useDashboardManager.js
 import { useState } from 'react';
 import { toast } from 'react-hot-toast';
-import {
-  runAcceptFriends,
-  runLikeFeed,
-  runAddRecommended,
-  runViewStories,
-  runRemoveFriends,
-  runLikeFriendsFeed
-} from 'api';
+import { runTask } from 'api.js';
 
 const getErrorMessage = (error) => {
     if (typeof error?.response?.data?.detail === 'string') {
@@ -24,24 +17,10 @@ export const useDashboardManager = () => {
     const closeModal = () => setModalState({ open: false, title: '', actionKey: '' });
 
     const handleActionSubmit = async (actionKey, params) => {
-        const actionMap = {
-            'accept_friends': runAcceptFriends,
-            'like_feed': runLikeFeed,
-            'add_recommended': runAddRecommended,
-            'view_stories': runViewStories,
-            'remove_friends': runRemoveFriends,
-            'like_friends_feed': runLikeFriendsFeed,
-        };
-
-        const taskFunction = actionMap[actionKey];
-        if (!taskFunction) {
-            toast.error(`Неизвестное действие: ${actionKey}`);
-            return;
-        }
-
         try {
             toast.loading(`Задача "${modalState.title}" добавляется в очередь...`, { id: 'task-queue' });
-            await taskFunction(params);
+            // --- ИЗМЕНЕНИЕ: Используем единую функцию runTask ---
+            await runTask(actionKey, params);
             toast.success(`Задача "${modalState.title}" успешно добавлена в очередь!`, { id: 'task-queue' });
         } catch (error) {
             const errorMessage = getErrorMessage(error);

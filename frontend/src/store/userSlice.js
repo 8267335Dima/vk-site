@@ -10,6 +10,8 @@ const initialStats = {
 const initialState = {
     userInfo: null,
     dailyStats: initialStats,
+    // --- НОВОЕ ПОЛЕ ---
+    availableFeatures: [], 
 };
 
 export const createUserSlice = (set, get) => ({
@@ -27,6 +29,8 @@ export const createUserSlice = (set, get) => ({
 
             set({
                 userInfo: userResponse.data,
+                // --- НОВОЕ ПОЛЕ ---
+                availableFeatures: userResponse.data.available_features || [],
                 dailyStats: todayStats ? {
                     likes_count: todayStats.likes,
                     friends_added_count: todayStats.friends_added,

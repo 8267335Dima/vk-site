@@ -3,7 +3,6 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, status, Query
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
-# --- ИСПРАВЛЕНИЕ: опечатка pantic -> pydantic ---
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 

@@ -1,89 +1,67 @@
 // frontend/src/pages/Dashboard/components/AudienceAnalyticsWidget.js
 import React, { useMemo } from 'react';
-import { Paper, Typography, Box, useTheme, Grid, Skeleton, Tooltip, IconButton, Stack } from '@mui/material';
-import Chart from 'react-apexcharts';
+import { Paper, Typography, useTheme, Grid, Skeleton, Tooltip, IconButton, Stack, alpha } from '@mui/material';
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip as RechartsTooltip, PieChart, Pie, Cell, Legend } from 'recharts';
 import { useQuery } from '@tanstack/react-query';
-import { fetchAudienceAnalytics } from 'api';
+import { fetchAudienceAnalytics } from 'api.js';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 
-const ChartWrapper = ({ title, options, series, type, isLoading }) => (
-    <Box>
-        <Typography variant="subtitle1" sx={{ fontWeight: 600, textAlign: 'center', mb: 1 }}>
-            {title}
-        </Typography>
-        {isLoading ? (
-            <Skeleton variant="rectangular" height={220} sx={{ borderRadius: 2 }}/>
-        ) : (
-            <Chart options={options} series={series} type={type} height={220} />
-        )}
-    </Box>
-);
+const CustomTooltip = ({ active, payload, label }) => {
+    if (active && payload && payload.length) {
+        return (
+            <Paper sx={{ p: 2, background: 'rgba(30, 31, 37, 0.9)', backdropFilter: 'blur(5px)', borderRadius: 2 }}>
+                <Typography variant="body2">{`${label}: ${payload[0].value}`}</Typography>
+            </Paper>
+        );
+    }
+    return null;
+};
 
 export default function AudienceAnalyticsWidget() {
     const theme = useTheme();
+    const { data, isLoading, isError } = useQuery({ queryKey: ['audienceAnalytics'], queryFn: fetchAudienceAnalytics, staleTime: 1000 * 60 * 60 });
 
-    const { data, isLoading, isError } = useQuery({
-        queryKey: ['audienceAnalytics'],
-        queryFn: fetchAudienceAnalytics,
-        staleTime: 1000 * 60 * 60,
-    });
-
-    // --- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: Безопасно обрабатываем данные с помощью useMemo ---
     const chartData = useMemo(() => {
-        const cityDistribution = Array.isArray(data?.city_distribution) ? data.city_distribution : [];
-        const ageDistribution = Array.isArray(data?.age_distribution) ? data.age_distribution : [];
-
-        return {
-            city: {
-                series: [{ name: 'Друзей', data: cityDistribution.map(c => c.value) }],
-                categories: cityDistribution.map(c => c.name),
-            },
-            age: {
-                series: ageDistribution.map(a => a.value),
-                labels: ageDistribution.map(a => a.name),
-            }
-        };
+        const cityDistribution = data?.city_distribution || [];
+        const ageDistribution = data?.age_distribution || [];
+        const sexDistribution = data?.sex_distribution || [];
+        return { city: cityDistribution, age: ageDistribution, sex: sexDistribution };
     }, [data]);
-
-    const commonOptions = {
-        chart: { animations: { enabled: true }, toolbar: { show: false } },
-        dataLabels: { enabled: false },
-        tooltip: { theme: theme.palette.mode },
-        legend: { show: false },
-    };
-
-    const cityChartOptions = {
-        ...commonOptions,
-        plotOptions: { bar: { borderRadius: 4, horizontal: true, barHeight: '70%' } },
-        xaxis: {
-            categories: chartData.city.categories, // <--- Используем безопасные данные
-            labels: { style: { colors: theme.palette.text.secondary } }
-        },
-        yaxis: { labels: { style: { colors: theme.palette.text.secondary } } },
-        colors: [theme.palette.secondary.main]
-    };
-
-    const ageChartOptions = {
-        ...commonOptions,
-        labels: chartData.age.labels, // <--- Используем безопасные данные
-        plotOptions: { pie: { donut: { size: '65%' } } },
-        colors: ['#7E57C2', '#5C6BC0', '#42A5F5', '#29B6F6', '#26A69A', '#66BB6A']
-    };
+    
+    const COLORS = [theme.palette.primary.main, theme.palette.secondary.main, theme.palette.warning.main, theme.palette.success.main, theme.palette.info.main];
 
     const renderContent = () => {
-        if (isError) return <Typography color="error.main" sx={{p: 2}}>Ошибка загрузки аналитики.</Typography>;
-        if (!isLoading && !chartData.city.categories.length && !chartData.age.labels.length) {
-            return <Typography color="text.secondary" sx={{p: 2}}>Недостаточно данных для анализа.</Typography>;
-        }
+        if (isLoading) return <Skeleton variant="rounded" height={250} />;
+        if (isError) return <Typography color="error.main">Ошибка загрузки аналитики.</Typography>;
+        if (!data) return <Typography color="text.secondary">Нет данных для анализа.</Typography>;
 
         return (
-            <Grid container spacing={1} alignItems="center">
-                <Grid item xs={12} sm={6}>
-                    <ChartWrapper title="Топ городов" options={cityChartOptions} series={chartData.city.series} type="bar" isLoading={isLoading} />
+            <Grid container spacing={3} alignItems="center">
+                <Grid item xs={12} sm={4}>
+                    <Typography variant="subtitle1" sx={{ fontWeight: 600, textAlign: 'center', mb: 1 }}>Пол</Typography>
+                    <ResponsiveContainer width="100%" height={220}>
+                        <PieChart>
+                            <Pie data={chartData.sex} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label>
+                                {chartData.sex.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
+                            </Pie>
+                             <RechartsTooltip content={<CustomTooltip />} />
+                            <Legend />
+                        </PieChart>
+                    </ResponsiveContainer>
                 </Grid>
-                <Grid item xs={12} sm={6}>
-                    <ChartWrapper title="Возраст" options={ageChartOptions} series={chartData.age.series} type="donut" isLoading={isLoading} />
-                </Grid>
+                 <Grid item xs={12} sm={8}>
+                    <Typography variant="subtitle1" sx={{ fontWeight: 600, textAlign: 'center', mb: 1 }}>Топ городов</Typography>
+                     <ResponsiveContainer width="100%" height={220}>
+                        <BarChart data={chartData.city} layout="vertical" margin={{ top: 5, right: 20, left: 30, bottom: 5 }}>
+                             <XAxis type="number" hide />
+                             <YAxis type="category" dataKey="name" width={80} tick={{ fill: theme.palette.text.secondary, fontSize: '0.8rem' }} />
+                             <RechartsTooltip content={<CustomTooltip />} cursor={{ fill: alpha(theme.palette.primary.main, 0.1) }}/>
+                             <Bar dataKey="value" barSize={20}>
+                                 {chartData.city.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
+                             </Bar>
+                         </BarChart>
+                     </ResponsiveContainer>
+                 </Grid>
             </Grid>
         );
     };
@@ -91,10 +69,8 @@ export default function AudienceAnalyticsWidget() {
     return (
         <Paper sx={{ p: 3, height: '100%' }}>
              <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
-                <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, m: 0 }}>
-                    Анализ аудитории
-                </Typography>
-                <Tooltip title="Анализ проводится по топ-1000 друзей с открытыми профилями. Данные кешируются на 6 часов." arrow>
+                <Typography variant="h6" sx={{ fontWeight: 600, m: 0 }}>Анализ аудитории</Typography>
+                <Tooltip title="Анализ проводится по топ-1000 друзей. Данные кешируются на 6 часов." arrow>
                     <IconButton size="small"><InfoOutlinedIcon fontSize='small' /></IconButton>
                 </Tooltip>
              </Stack>

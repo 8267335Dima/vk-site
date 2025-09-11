@@ -24,20 +24,20 @@ class User(Base):
     plan_expires_at = Column(DateTime, nullable=True)
     is_admin = Column(Boolean, nullable=False, server_default='false')
 
-    # --- ИЗМЕНЕНИЕ: Дефолтные лимиты теперь 0. Они устанавливаются при создании пользователя. ---
     daily_likes_limit = Column(Integer, nullable=False, server_default=text('0'))
     daily_add_friends_limit = Column(Integer, nullable=False, server_default=text('0'))
     
     delay_profile = Column(Enum(DelayProfile), nullable=False, server_default=DelayProfile.normal.name)
 
-    proxies = relationship("Proxy", back_populates="user", cascade="all, delete-orphan")
+    # Relationships
+    proxies = relationship("Proxy", back_populates="user", cascade="all, delete-orphan", lazy="selectin")
     task_history = relationship("TaskHistory", back_populates="user", cascade="all, delete-orphan")
     daily_stats = relationship("DailyStats", back_populates="user", cascade="all, delete-orphan")
-    action_logs = relationship("ActionLog", back_populates="owner", cascade="all, delete-orphan")
-    login_history = relationship("LoginHistory", back_populates="user", cascade="all, delete-orphan")
     automations = relationship("Automation", back_populates="user", cascade="all, delete-orphan")
-    sent_congratulations = relationship("SentCongratulation", back_populates="user", cascade="all, delete-orphan")
     notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
+    scenarios = relationship("Scenario", back_populates="user", cascade="all, delete-orphan")
+    profile_metrics = relationship("ProfileMetric", back_populates="user", cascade="all, delete-orphan")
+
 
 class Proxy(Base):
     __tablename__ = "proxies"
@@ -47,7 +47,6 @@ class Proxy(Base):
     is_working = Column(Boolean, default=True, nullable=False, index=True)
     last_checked_at = Column(DateTime, default=datetime.datetime.utcnow)
     check_status_message = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
     
     user = relationship("User", back_populates="proxies")
     __table_args__ = (
@@ -58,7 +57,7 @@ class TaskHistory(Base):
     __tablename__ = "task_history"
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    celery_task_id = Column(String, unique=True, nullable=True, index=True) # Может быть NULL до отправки в Celery
+    celery_task_id = Column(String, unique=True, nullable=True, index=True)
     task_name = Column(String, nullable=False, index=True)
     status = Column(String, default="PENDING", nullable=False, index=True)
     parameters = Column(JSON, nullable=True)
@@ -67,12 +66,9 @@ class TaskHistory(Base):
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
     user = relationship("User", back_populates="task_history")
-    
-    # --- НОВЫЙ КОМПОЗИТНЫЙ ИНДЕКС для ускорения фильтрации истории задач ---
     __table_args__ = (
         Index('ix_task_history_user_status', 'user_id', 'status'),
     )
-
 
 class Automation(Base):
     __tablename__ = "automations"
@@ -87,19 +83,6 @@ class Automation(Base):
         UniqueConstraint('user_id', 'automation_type', name='_user_automation_uc'),
     )
 
-
-class SentCongratulation(Base):
-    __tablename__ = "sent_congratulations"
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    friend_vk_id = Column(BigInteger, nullable=False, index=True)
-    year = Column(Integer, nullable=False)
-    sent_at = Column(DateTime, default=datetime.datetime.utcnow)
-    user = relationship("User", back_populates="sent_congratulations")
-    __table_args__ = (
-        UniqueConstraint('user_id', 'friend_vk_id', 'year', name='_user_friend_year_uc'),
-    )
-
 class DailyStats(Base):
     __tablename__ = "daily_stats"
     id = Column(Integer, primary_key=True)
@@ -109,51 +92,14 @@ class DailyStats(Base):
     friends_added_count = Column(Integer, default=0, nullable=False)
     friend_requests_accepted_count = Column(Integer, default=0, nullable=False)
     stories_viewed_count = Column(Integer, default=0, nullable=False)
-    like_friends_feed_count = Column(Integer, default=0, nullable=False)
     friends_removed_count = Column(Integer, default=0, nullable=False)
+    messages_sent_count = Column(Integer, default=0, nullable=False)
+    
     user = relationship("User", back_populates="daily_stats")
     __table_args__ = (
         UniqueConstraint('user_id', 'date', name='_user_date_uc'),
         Index('ix_daily_stats_user_date', 'user_id', 'date'),
     )
-
-class LoginHistory(Base):
-    __tablename__ = "login_history"
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    ip_address = Column(String, nullable=False)
-    user_agent = Column(String, nullable=True)
-    login_timestamp = Column(DateTime, default=datetime.datetime.utcnow)
-    user = relationship("User", back_populates="login_history")
-
-class ActionLog(Base):
-    __tablename__ = "action_logs"
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    action_type = Column(String, nullable=False) # e.g., 'friends', 'feed'
-    message = Column(String, nullable=False) # e.g., 'Удален друг: Иван Иванов'
-    target_url = Column(String, nullable=True)
-    status = Column(String, default="success", nullable=False) # 'success', 'warning', 'error'
-    timestamp = Column(DateTime, default=datetime.datetime.utcnow, index=True)
-    owner = relationship("User", back_populates="action_logs")
-
-class AggregatedStats(Base):
-    __abstract__ = True
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    likes_count = Column(Integer, default=0, nullable=False)
-    friends_added_count = Column(Integer, default=0, nullable=False)
-    friend_requests_accepted_count = Column(Integer, default=0, nullable=False)
-    
-class WeeklyStats(AggregatedStats):
-    __tablename__ = 'weekly_stats'
-    week_identifier = Column(String, nullable=False) 
-    __table_args__ = (UniqueConstraint('user_id', 'week_identifier', name='_user_week_uc'),)
-
-class MonthlyStats(AggregatedStats):
-    __tablename__ = 'monthly_stats'
-    month_identifier = Column(String, nullable=False)
-    __table_args__ = (UniqueConstraint('user_id', 'month_identifier', name='_user_month_uc'),)
 
 class Payment(Base):
     __tablename__ = "payments"
@@ -163,6 +109,7 @@ class Payment(Base):
     amount = Column(Float, nullable=False)
     status = Column(String, default="pending", nullable=False)
     plan_name = Column(String, nullable=False)
+    months = Column(Integer, nullable=False, default=1)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
     user = relationship("User")
@@ -174,10 +121,8 @@ class Scenario(Base):
     name = Column(String, nullable=False)
     schedule = Column(String, nullable=False)
     is_active = Column(Boolean, default=False, nullable=False)
-    last_run_at = Column(DateTime, nullable=True)
-    next_run_at = Column(DateTime, nullable=True, index=True) # <-- НОВОЕ ПОЛЕ
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
-    user = relationship("User")
+    
+    user = relationship("User", back_populates="scenarios")
     steps = relationship("ScenarioStep", back_populates="scenario", cascade="all, delete-orphan", lazy="selectin", order_by="ScenarioStep.step_order")
 
 class ScenarioStep(Base):
@@ -199,16 +144,16 @@ class Notification(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow, index=True)
     user = relationship("User", back_populates="notifications")
 
-class FriendsHistory(Base):
-    __tablename__ = "friends_history"
+class ProfileMetric(Base):
+    __tablename__ = "profile_metrics"
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     date = Column(Date, default=datetime.date.today, nullable=False)
+    total_likes_on_content = Column(Integer, nullable=False)
     friends_count = Column(Integer, nullable=False)
 
-    user = relationship("User")
-
+    user = relationship("User", back_populates="profile_metrics")
     __table_args__ = (
-        UniqueConstraint('user_id', 'date', name='_user_date_friends_uc'),
-        Index('ix_friends_history_user_date', 'user_id', 'date'),
+        UniqueConstraint('user_id', 'date', name='_user_date_metric_uc'),
+        Index('ix_profile_metrics_user_date', 'user_id', 'date'),
     )
