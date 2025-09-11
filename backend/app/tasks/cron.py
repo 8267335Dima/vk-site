@@ -17,8 +17,8 @@ from app.core.config_loader import PLAN_CONFIG
 from app.core.plans import get_limits_for_plan
 import structlog
 
-from backend.app.services.analytics_service import AnalyticsService
-from backend.app.services.vk_api import VKAuthError
+from app.services.analytics_service import AnalyticsService
+from app.services.vk_api import VKAuthError
 
 log = structlog.get_logger(__name__)
 redis_client = Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, db=2, decode_responses=True)

@@ -10,10 +10,10 @@ celery_app = Celery(
     broker=redis_url,
     backend=redis_url,
     include=[
-        "app.tasks.runner.v2",
+        "app.tasks.runner", # <-- ПРАВИЛЬНО
         "app.tasks.cron",
         "app.tasks.maintenance",
-        "app.tasks.profile_parser" # НОВЫЙ
+        "app.tasks.profile_parser"
     ] 
 )
 
@@ -33,7 +33,7 @@ celery_app.conf.update(
 from app.tasks.cron import (
     run_daily_automations, check_expired_plans, aggregate_daily_stats
 )
-from app.tasks.maintenance import clear_old_task_history
+from app.tasks.maintenance import clear_old_action_logs
 from app.tasks.profile_parser import snapshot_all_users_metrics
 
 # --- РАСПИСАНИЕ CRON-ЗАДАЧ ---
@@ -55,8 +55,8 @@ celery_app.add_periodic_task(
 # Каждый день в 4 часа ночи: чистим старую историю задач
 celery_app.add_periodic_task(
     crontab(hour=4, minute=0),
-    clear_old_task_history.s(),
-    name='clear-old-task-history'
+    clear_old_action_logs.s(), # <-- ПРАВИЛЬНО
+    name='clear-old-action-logs' # <-- Рекомендую переименовать для ясности
 )
 
 # Каждые 15 минут: проверяем истекшие тарифы

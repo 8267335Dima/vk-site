@@ -4,6 +4,7 @@ import structlog
 from fastapi import APIRouter, FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from redis.asyncio import Redis
 from fastapi_cache import FastAPICache
 from fastapi_cache.backends.redis import RedisBackend
@@ -15,10 +16,10 @@ from app.core.logging import configure_logging
 from app.db.session import engine
 from app.admin import init_admin
 from app.api.endpoints import (
-    auth_router, users_router_v2, websockets_router,
+    auth_router, users_router, websockets_router,
     stats_router, automations_router, billing_router,
     analytics_router, scenarios_router, notifications_router, proxies_router,
-    tasks_router_v2
+    tasks_router
 )
 from app.services.websocket_manager import redis_listener
 
@@ -54,6 +55,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Zenith API", version="4.0.0", docs_url="/api/docs", redoc_url="/api/redoc", lifespan=lifespan)
 
+# Добавляем middleware для корректной работы за прокси (для определения IP)
+# ВАЖНО: Этот middleware должен быть одним из первых
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+
+
 init_admin(app, engine)
 
 app.add_middleware(
@@ -64,12 +70,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- РЕГИСТРАЦИЯ РОУТЕРОВ v2 ---
+# --- РЕГИСТРАЦИЯ РОУТЕРОВ  ---
 api_router_v1 = APIRouter()
 api_router_v1.include_router(auth_router, prefix="/auth", tags=["Аутентификация"])
-api_router_v1.include_router(users_router_v2, prefix="/users", tags=["Пользователи"])
+api_router_v1.include_router(users_router, prefix="/users", tags=["Пользователи"])
 api_router_v1.include_router(proxies_router, prefix="/proxies", tags=["Прокси"])
-api_router_v1.include_router(tasks_router_v2, prefix="/tasks", tags=["Задачи и История"])
+api_router_v1.include_router(tasks_router, prefix="/tasks", tags=["Задачи и История"])
 api_router_v1.include_router(stats_router, prefix="/stats", tags=["Статистика"])
 api_router_v1.include_router(automations_router, prefix="/automations", tags=["Автоматизации"])
 api_router_v1.include_router(billing_router, prefix="/billing", tags=["Тарифы и оплата"])

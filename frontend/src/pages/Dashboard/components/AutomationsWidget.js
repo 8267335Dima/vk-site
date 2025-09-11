@@ -2,48 +2,40 @@
 import React from 'react';
 import {
     Paper, Typography, Stack, Switch, Tooltip, Box,
-    CircularProgress, Skeleton, IconButton
+    CircularProgress, Skeleton, IconButton, alpha
 } from '@mui/material';
 import SettingsIcon from '@mui/icons-material/Settings';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchAutomations, updateAutomation } from 'api';
+import { fetchAutomations, updateAutomation } from 'api.js';
 import { toast } from 'react-hot-toast';
-import { dashboardContent } from 'content/dashboardContent';
+import { content } from 'content/content';
 
 const AutomationRow = ({ icon, name, description, automationKey, automationData, onToggle, onSettingsClick }) => {
     const isAvailable = automationData?.is_available ?? true;
     const isActive = automationData?.is_active ?? false;
-    const mutation = onToggle;
-
+    
     const handleToggle = (event) => {
         const newIsActive = event.target.checked;
         if (newIsActive && !isAvailable) {
             toast.error(`Эта функция недоступна на вашем тарифе.`);
             return;
         }
-        mutation.mutate({
-            automationType: automationKey,
-            isActive: newIsActive,
-            settings: automationData?.settings || {}
-        });
+        onToggle.mutate({ automationType: automationKey, isActive: newIsActive, settings: automationData?.settings || {} });
     };
     
-    // --- НОВАЯ ЛОГИКА ---
-    // Определяем, есть ли у действия настройки
-    const hasSettings = !['view_stories'].includes(automationKey);
-
-    const isMutatingThisRow = mutation.isLoading && mutation.variables?.automationType === automationKey;
+    const hasSettings = !['view_stories', 'eternal_online'].includes(automationKey);
+    const isMutatingThisRow = onToggle.isLoading && onToggle.variables?.automationType === automationKey;
 
     return (
         <Stack
             direction="row" alignItems="center" justifyContent="space-between"
             sx={{
-                p: 2, borderRadius: 3, bgcolor: 'neutral.main',
+                p: 2, borderRadius: 3, bgcolor: 'background.default',
                 border: '1px solid', borderColor: 'divider',
                 opacity: isAvailable ? 1 : 0.6,
-                transition: 'opacity 0.3s ease, background-color 0.3s ease',
-                '&:hover': { bgcolor: isAvailable ? 'action.hover' : 'neutral.main' }
+                transition: 'all 0.3s ease',
+                '&:hover': { bgcolor: isAvailable ? (theme) => alpha(theme.palette.primary.main, 0.1) : 'background.default' }
             }}
         >
             <Stack direction="row" alignItems="center" spacing={2}>
@@ -58,7 +50,6 @@ const AutomationRow = ({ icon, name, description, automationKey, automationData,
                 </Box>
             </Stack>
             <Stack direction="row" alignItems="center" spacing={0.5}>
-                {/* --- ИЗМЕНЕНИЕ: Показываем кнопку только если есть настройки --- */}
                 {hasSettings && (
                     <IconButton size="small" disabled={!isAvailable || isMutatingThisRow} onClick={() => onSettingsClick(automationData)}>
                         <SettingsIcon fontSize="small" />
@@ -81,10 +72,8 @@ const AutomationRow = ({ icon, name, description, automationKey, automationData,
     );
 };
 
-export default function AutomationsWidget({ onSettingsClick }) { // <-- Принимаем новый prop
+export default function AutomationsWidget({ onSettingsClick }) {
     const queryClient = useQueryClient();
-    const { automations: content } = dashboardContent;
-
     const { data: automationsData, isLoading } = useQuery({ queryKey: ['automations'], queryFn: fetchAutomations });
 
     const mutation = useMutation({
@@ -104,15 +93,15 @@ export default function AutomationsWidget({ onSettingsClick }) { // <-- Прин
 
     return (
         <Paper sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column' }}>
-            <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mb: 2 }}>{content.title}</Typography>
+            <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mb: 2 }}>Центр Автоматизации</Typography>
             <Stack spacing={2} sx={{ flexGrow: 1 }}>
                 {isLoading ? (
-                    Array.from(new Array(3)).map((_, index) => (
+                    Array.from(new Array(4)).map((_, index) => (
                         <Skeleton key={index} variant="rounded" height={68} sx={{ borderRadius: 3 }} />
                     ))
                 ) : (
                     automationsData?.map(automation => {
-                         const config = content.list.find(c => c.key === automation.automation_type);
+                         const config = content.automations[automation.automation_type];
                          if (!config) return null;
                          return (
                             <AutomationRow
@@ -123,7 +112,7 @@ export default function AutomationsWidget({ onSettingsClick }) { // <-- Прин
                                 automationKey={automation.automation_type}
                                 automationData={automation}
                                 onToggle={mutation}
-                                onSettingsClick={onSettingsClick} // <-- Передаем обработчик
+                                onSettingsClick={onSettingsClick}
                             />
                          )
                      })

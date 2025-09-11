@@ -31,7 +31,7 @@ import ActionModal from './components/ActionModal';
 import TaskLogWidget from './components/TaskLogWidget';
 
 // Lazy-loaded Widgets
-const AutomationsWidget = lazy(() => import('./components/AutomationsWidget.v2'));
+const AutomationsWidget = lazy(() => import('./components/AutomationsWidget'));
 const ActivityChartWidget = lazy(() => import('./components/ActivityChartWidget'));
 const AudienceAnalyticsWidget = lazy(() => import('./components/AudienceAnalyticsWidget'));
 const ProfileGrowthWidget = lazy(() => import('./components/ProfileGrowthWidget'));

@@ -12,6 +12,6 @@ from .automations import router as automations_router
 from .billing import router as billing_router
 from .analytics import router as analytics_router
 from .scenarios import router as scenarios_router
-from .logs import router as logs_router
 from .notifications import router as notifications_router
 from .websockets import router as websockets_router
+from .users import router as users_router

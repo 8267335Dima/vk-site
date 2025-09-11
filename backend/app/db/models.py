@@ -38,6 +38,16 @@ class User(Base):
     scenarios = relationship("Scenario", back_populates="user", cascade="all, delete-orphan")
     profile_metrics = relationship("ProfileMetric", back_populates="user", cascade="all, delete-orphan")
 
+class LoginHistory(Base):
+    __tablename__ = "login_history"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    timestamp = Column(DateTime, default=datetime.datetime.utcnow, index=True)
+    ip_address = Column(String, nullable=True)
+    user_agent = Column(Text, nullable=True)
+
+    user = relationship("User")
+
 
 class Proxy(Base):
     __tablename__ = "proxies"
@@ -156,4 +166,68 @@ class ProfileMetric(Base):
     __table_args__ = (
         UniqueConstraint('user_id', 'date', name='_user_date_metric_uc'),
         Index('ix_profile_metrics_user_date', 'user_id', 'date'),
+    )
+
+class WeeklyStats(Base):
+    __tablename__ = "weekly_stats"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    week_identifier = Column(String, nullable=False)  # Например, '2024-35'
+    likes_count = Column(Integer, default=0, nullable=False)
+    friends_added_count = Column(Integer, default=0, nullable=False)
+    friend_requests_accepted_count = Column(Integer, default=0, nullable=False)
+    
+    user = relationship("User")
+    __table_args__ = (
+        UniqueConstraint('user_id', 'week_identifier', name='_user_week_uc'),
+    )
+
+class MonthlyStats(Base):
+    __tablename__ = "monthly_stats"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    month_identifier = Column(String, nullable=False) # Например, '2024-09'
+    likes_count = Column(Integer, default=0, nullable=False)
+    friends_added_count = Column(Integer, default=0, nullable=False)
+    friend_requests_accepted_count = Column(Integer, default=0, nullable=False)
+    
+    user = relationship("User")
+    __table_args__ = (
+        UniqueConstraint('user_id', 'month_identifier', name='_user_month_uc'),
+    )
+
+class ActionLog(Base):
+    __tablename__ = "action_logs"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    action_type = Column(String, nullable=False, index=True)
+    message = Column(Text, nullable=False)
+    status = Column(String, nullable=False) # e.g., 'SUCCESS', 'ERROR'
+    timestamp = Column(DateTime, default=datetime.datetime.utcnow, index=True)
+
+    user = relationship("User")
+
+class SentCongratulation(Base):
+    __tablename__ = "sent_congratulations"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    friend_vk_id = Column(BigInteger, nullable=False, index=True)
+    year = Column(Integer, nullable=False)
+
+    user = relationship("User")
+    __table_args__ = (
+        UniqueConstraint('user_id', 'friend_vk_id', 'year', name='_user_friend_year_uc'),
+    )
+
+class FriendsHistory(Base):
+    __tablename__ = "friends_history"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    date = Column(Date, default=datetime.date.today, nullable=False)
+    friends_count = Column(Integer, nullable=False)
+
+    user = relationship("User")
+    __table_args__ = (
+        UniqueConstraint('user_id', 'date', name='_user_date_friends_uc'),
+        Index('ix_friends_history_user_date', 'user_id', 'date'),
     )

@@ -35,6 +35,13 @@ class AdminAuth(AuthenticationBackend):
         return True
 
     async def authenticate(self, request: Request) -> bool:
+        # Проверка IP-адреса клиента по белому списку
+        if settings.ADMIN_IP_WHITELIST:
+            allowed_ips = [ip.strip() for ip in settings.ADMIN_IP_WHITELIST.split(',')]
+            # Чтобы это работало за прокси, в main.py нужно добавить ProxyHeadersMiddleware
+            if request.client and request.client.host not in allowed_ips:
+                return False
+
         token = request.session.get("token")
         if not token:
             return False

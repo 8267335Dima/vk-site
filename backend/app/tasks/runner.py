@@ -1,8 +1,11 @@
 # backend/app/tasks/runner.py
 from celery import shared_task, Task
 from redis.asyncio import Redis as AsyncRedis
-
-from app.db.models import User, TaskHistory
+import asyncio
+from sqlalchemy.future import select
+import random
+from sqlalchemy.orm import selectinload
+from app.db.models import Scenario, User, TaskHistory
 from app.services.event_emitter import RedisEventEmitter
 from app.services.feed_service import FeedService
 from app.services.incoming_request_service import IncomingRequestService
@@ -102,3 +105,64 @@ async def mass_messaging(self: Task, task_history_id: int, **kwargs):
 @shared_task(bind=True, base=AppBaseTask, max_retries=5, default_retry_delay=60)
 async def eternal_online(self: Task, task_history_id: int, **kwargs):
     await _execute_task_logic(task_history_id, "eternal_online", **kwargs)
+
+@shared_task(bind=True, base=AppBaseTask, max_retries=3, default_retry_delay=300)
+async def like_friends_feed(self: Task, task_history_id: int, **kwargs):
+    await _execute_task_logic(task_history_id, "like_friends_feed", **kwargs)
+
+@shared_task(bind=True, base=AppBaseTask, name="app.tasks.runner.run_scenario_from_scheduler")
+async def run_scenario_from_scheduler(self: Task, scenario_id: int):
+    """
+    Эта задача запускается по расписанию Celery Beat.
+    Она находит сценарий по ID и последовательно ставит в очередь его шаги.
+    """
+    log.info("scenario.runner.start", scenario_id=scenario_id)
+    async with AsyncSessionFactory_Celery() as session:
+        try:
+            # Загружаем сценарий и сразу его шаги, чтобы избежать доп. запросов
+            stmt = select(Scenario).where(Scenario.id == scenario_id).options(selectinload(Scenario.steps))
+            result = await session.execute(stmt)
+            scenario = result.scalar_one_or_none()
+
+            if not scenario or not scenario.is_active:
+                log.warn("scenario.runner.not_found_or_inactive", scenario_id=scenario_id)
+                return
+
+            # Сортируем шаги на случай, если они в БД хранятся не по порядку
+            sorted_steps = sorted(scenario.steps, key=lambda s: s.step_order)
+
+            for step in sorted_steps:
+                task_func = TASK_SERVICE_MAP.get(step.action_type, (None, None))[0]
+                if not task_func:
+                    log.warn("scenario.runner.task_not_found", action=step.action_type, scenario_id=scenario_id)
+                    continue
+
+                # Создаем запись в истории для этого шага
+                task_history = TaskHistory(
+                    user_id=scenario.user_id,
+                    task_name=f"Сценарий '{scenario.name}': Шаг {step.step_order}",
+                    status="PENDING",
+                    parameters=step.settings
+                )
+                session.add(task_history)
+                await session.flush() # Получаем ID для task_history
+
+                # Ставим задачу в очередь
+                task_result = task_func.apply_async(
+                    kwargs={'task_history_id': task_history.id, **step.settings},
+                    queue='default'
+                )
+                task_history.celery_task_id = task_result.id
+                await session.commit() # Сохраняем ID задачи Celery
+
+                log.info("scenario.runner.step_enqueued", step=step.step_order, action=step.action_type, scenario_id=scenario_id)
+                
+                # Добавляем небольшую случайную задержку между постановкой задач
+                await asyncio.sleep(random.randint(5, 15))
+
+        except Exception as e:
+            log.error("scenario.runner.critical_error", scenario_id=scenario_id, error=str(e))
+            # Здесь можно отправить уведомление пользователю о сбое сценария
+            raise
+
+    log.info("scenario.runner.finished", scenario_id=scenario_id)

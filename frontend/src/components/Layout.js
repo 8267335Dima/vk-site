@@ -1,16 +1,16 @@
-// frontend/src/components/Layout.v2.js
+// frontend/src/components/Layout.js
 import React from 'react';
 import {
     AppBar, Toolbar, Typography, Button, Container, Box, Stack,
     useTheme, useMediaQuery, IconButton, Drawer, List, ListItem, ListItemButton
 } from '@mui/material';
-import { Link as RouterLink, useLocation, Outlet } from 'react-router-dom';
+import { Link as RouterLink, useLocation, Outlet } from 'react-router-dom'; // <--- Outlet здесь ключ
 import { useUserStore } from 'store/userStore';
 import TrackChangesIcon from '@mui/icons-material/TrackChanges';
 import MenuIcon from '@mui/icons-material/Menu';
 import { content } from 'content/content';
 import NotificationsBell from './NotificationsBell';
-import Footer from './Footer'; // Новый компонент
+import Footer from './Footer';
 
 const NavButton = ({ to, children }) => {
     const location = useLocation();
@@ -67,7 +67,9 @@ const MobileDrawer = ({ navItems, open, onClose, onLogout }) => (
 );
 
 
-export default function Layout({ children }) {
+// --- ИЗМЕНЕНИЕ: Убираем проп 'children' ---
+// Layout теперь всегда является оберткой для роутов и использует <Outlet />
+export default function Layout() {
     const { jwtToken, logout } = useUserStore(state => ({ jwtToken: state.jwtToken, logout: state.logout }));
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
@@ -79,8 +81,6 @@ export default function Layout({ children }) {
         { label: content.nav.billing, to: "/billing" },
     ];
     
-    const pageContent = children || <Outlet />;
-
     return (
         <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
             <AppBar position="sticky" color="transparent" elevation={0} sx={{ backdropFilter: 'blur(10px)', backgroundColor: 'rgba(13, 14, 18, 0.7)', borderBottom: 1, borderColor: 'divider' }}>
@@ -128,7 +128,8 @@ export default function Layout({ children }) {
             {isMobile && jwtToken && <MobileDrawer navItems={navItems} open={drawerOpen} onClose={() => setDrawerOpen(false)} onLogout={() => { setDrawerOpen(false); logout(); }} />}
 
             <Box component="main" sx={{ flexGrow: 1 }}>
-                 {pageContent}
+                 {/* --- ИЗМЕНЕНИЕ: Всегда используем Outlet для вложенных роутов --- */}
+                 <Outlet />
             </Box>
 
             <Footer />
