@@ -39,7 +39,6 @@ async def login_via_vk(
     """
     vk_token = token_request.vk_token
     
-    # 1. Валидация токена VK
     vk_id = await is_token_valid(vk_token)
     if not vk_id:
         raise HTTPException(
@@ -47,7 +46,6 @@ async def login_via_vk(
             detail="Неверный или просроченный токен VK.",
         )
 
-    # 2. Поиск или создание пользователя
     query = select(User).where(User.vk_id == vk_id)
     result = await db.execute(query)
     user = result.scalar_one_or_none()
@@ -57,10 +55,8 @@ async def login_via_vk(
     base_plan_limits = get_limits_for_plan("Базовый")
 
     if user:
-        # Если пользователь существует, просто обновляем его токен
         user.encrypted_vk_token = encrypted_token
     else:
-        # Если пользователь новый, создаем его с пробным "Базовым" тарифом
         user = User(
             vk_id=vk_id, 
             encrypted_vk_token=encrypted_token,
@@ -71,39 +67,30 @@ async def login_via_vk(
         )
         db.add(user)
 
-    # 3. Специальная логика для администратора
     if str(vk_id) == settings.ADMIN_VK_ID:
         admin_limits = get_limits_for_plan("PRO")
         user.is_admin = True
         user.plan = "PRO"
-        user.plan_expires_at = None # Бессрочный тариф
+        user.plan_expires_at = None
         user.daily_likes_limit = admin_limits["daily_likes_limit"]
         user.daily_add_friends_limit = admin_limits["daily_add_friends_limit"]
 
-    # Отправляем изменения в БД, чтобы получить user.id для нового пользователя
     await db.flush()
     await db.refresh(user)
 
-    # 4. Логика записи в LoginHistory
     login_entry = LoginHistory(
         user_id=user.id,
-        ip_address=request.client.host,
+        ip_address=request.client.host if request.client else "unknown",
         user_agent=request.headers.get("user-agent", "unknown")
     )
     db.add(login_entry)
 
-    ### --- ГЛАВНОЕ ИСПРАВЛЕНИЕ --- ###
-    # Сохраняем ID пользователя в переменную ПЕРЕД коммитом,
-    # так как после коммита объект 'user' станет "просроченным".
     user_id_for_token = user.id
     
-    # Единственный коммит в конце всех операций
     await db.commit()
 
-    # 5. Логика создания JWT-токена
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     
-    # Используем сохраненный ID для создания токена
     access_token = create_access_token(
         data={"sub": str(user_id_for_token)}, expires_delta=access_token_expires
     )

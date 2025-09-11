@@ -47,27 +47,21 @@ const CtaSection = () => {
                 viewport={{ once: true, amount: 0.5 }}
                 transition={{ duration: 0.7 }}
             >
-                <Typography variant="h3" component="h2" sx={{ fontWeight: 700, color: 'white' }}>Готовы начать трансформацию?</Typography>
+                <Typography variant="h3" component="h2" sx={{ fontWeight: 700, color: 'white' }}>Готовы к росту?</Typography>
                 <Typography variant="h6" sx={{ my: 3, color: 'text.secondary', maxWidth: '600px', mx: 'auto' }}>
                     Присоединяйтесь к Zenith сегодня и начните свой путь к эффективному SMM.
                 </Typography>
-                <Button 
-                    variant="text" 
+                 <Button 
+                    variant="contained" 
                     size="large" 
                     component={RouterLink} 
                     to="/login"
                     sx={{
                         fontSize: '1.1rem',
-                        color: 'secondary.main',
-                        fontWeight: 600,
-                        '&:hover': {
-                            backgroundColor: 'transparent',
-                            color: 'secondary.light',
-                            textDecoration: 'underline'
-                        }
+                        px: 5
                     }}
                 >
-                    Начать путь к успеху →
+                    Начать использовать
                 </Button>
             </Box>
         </Paper>

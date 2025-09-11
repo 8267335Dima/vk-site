@@ -13,18 +13,14 @@ const ScenarioEditorModal = ({ open, onClose, scenario }) => {
     const [name, setName] = useState('');
     const [schedule, setSchedule] = useState('0 9 * * 1,2,3,4,5');
     const [steps, setSteps] = useState([]);
-    
-    // --- ИСПРАВЛЕНИЕ: Используем useRef для стабильного счетчика ID ---
     const localIdCounter = useRef(0);
 
     useEffect(() => {
         if (open) {
-            // Сбрасываем счетчик при каждом открытии
             localIdCounter.current = 0; 
             if (scenario) {
                 setName(scenario.name);
                 setSchedule(scenario.schedule);
-                // Присваиваем новые, но стабильные в рамках сессии, ID
                 setSteps(scenario.steps.map(s => ({ ...s, localId: localIdCounter.current++ })));
             } else {
                 setName('');
@@ -44,7 +40,6 @@ const ScenarioEditorModal = ({ open, onClose, scenario }) => {
         onError: (err) => toast.error(err.response?.data?.detail || 'Ошибка сохранения'),
     });
     
-    // --- ИСПРАВЛЕНИЕ: Используем счетчик для генерации нового ID ---
     const handleAddStep = () => setSteps([...steps, { localId: localIdCounter.current++, action_type: 'like_feed', settings: { count: 50, filters: {} } }]);
     const handleRemoveStep = (localId) => setSteps(steps.filter(s => s.localId !== localId));
     const handleStepChange = (localId, field, value) => setSteps(steps.map(s => s.localId === localId ? { ...s, [field]: value } : s));

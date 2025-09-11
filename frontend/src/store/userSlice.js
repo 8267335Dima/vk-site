@@ -1,22 +1,17 @@
 // frontend/src/store/userSlice.js
-import { fetchUserInfo } from 'api.js';
+import { fetchUserInfo } from 'api';
 
 const initialState = {
     userInfo: null,
     availableFeatures: [], 
 };
 
-// Аналогично, разделяем состояние и действия.
 export const createUserSlice = (set, get) => ({
-    // --- Состояние (State) ---
     ...initialState,
 
-    // --- Действия (Actions) ---
     actions: {
         loadUser: async () => {
-            // Используем get() для доступа к токену из authSlice
             if (!get().jwtToken) {
-                // Вызываем действие из authSlice
                 return get().actions.finishInitialLoad();
             }
             
@@ -28,10 +23,8 @@ export const createUserSlice = (set, get) => ({
                 });
             } catch (error) {
                 console.error("Failed to load user data, logging out.", error);
-                // Если загрузка не удалась (например, токен истек), выходим из системы
                 get().actions.logout(); 
             } finally {
-                // В любом случае завершаем начальную загрузку
                 get().actions.finishInitialLoad();
             }
         },
@@ -45,7 +38,6 @@ export const createUserSlice = (set, get) => ({
             }));
         },
         
-        // Действие для сброса этого слайса к начальному состоянию
         resetUserSlice: () => set(initialState),
     }
 });

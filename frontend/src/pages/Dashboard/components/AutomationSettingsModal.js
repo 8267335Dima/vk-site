@@ -14,7 +14,7 @@ const AutomationSettingsModal = ({ open, onClose, automation }) => {
         if (open && automation) {
             const defaults = {
                 count: 50,
-                filters: { sex: 0, is_online: false, allow_closed_profiles: false, remove_banned: true, last_seen_hours: 0, last_seen_days: 0 },
+                filters: { sex: 0, is_online: false, allow_closed_profiles: false, remove_banned: true, last_seen_hours: 0, last_seen_days: 0, min_friends: 0, min_followers: 0 },
             };
             setSettings({ ...defaults, ...automation.settings });
         }
@@ -32,14 +32,12 @@ const AutomationSettingsModal = ({ open, onClose, automation }) => {
         onError: (error) => toast.error(error.response?.data?.detail || 'Ошибка сохранения'),
     });
 
-    // --- ИСПРАВЛЕНИЕ: Универсальный обработчик, который принимает как (event), так и (name, value) ---
     const handleSettingsChange = (nameOrEvent, value) => {
         let name, val;
-        // Проверяем, пришел ли объект события или просто имя и значение
         if (typeof nameOrEvent === 'string') {
             name = nameOrEvent;
             val = value;
-        } else { // Это объект события
+        } else {
             const { target } = nameOrEvent;
             name = target.name;
             val = target.type === 'checkbox' ? target.checked : target.value;
@@ -65,7 +63,7 @@ const AutomationSettingsModal = ({ open, onClose, automation }) => {
     if (!automation) return null;
 
     const needsCount = ['like_feed', 'add_recommended', 'remove_friends', 'like_friends_feed'].includes(automation.automation_type);
-    const needsFilters = !['view_stories', 'birthday_congratulation'].includes(automation.automation_type);
+    const needsFilters = !['view_stories', 'birthday_congratulation', 'eternal_online'].includes(automation.automation_type);
 
     return (
         <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
@@ -81,8 +79,8 @@ const AutomationSettingsModal = ({ open, onClose, automation }) => {
                             multiline
                             rows={4}
                             label="Шаблон поздравления"
-                            name="message_template"
-                            value={settings.message_template || ''}
+                            name="message_template_default"
+                            value={settings.message_template_default || ''}
                             onChange={handleSettingsChange}
                             helperText="Используйте {name} для подстановки имени друга."
                         />

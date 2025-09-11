@@ -1,6 +1,6 @@
 // frontend/src/pages/Dashboard/components/AudienceAnalyticsWidget.js
 import React, { useMemo } from 'react';
-import { Paper, Typography, useTheme, Grid, Skeleton, Tooltip, IconButton, Stack, alpha } from '@mui/material';
+import { Paper, Typography, useTheme, Grid, Skeleton, Tooltip, IconButton, Stack, alpha, Box } from '@mui/material';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip as RechartsTooltip, PieChart, Pie, Cell, Legend } from 'recharts';
 import { useQuery } from '@tanstack/react-query';
 import { fetchAudienceAnalytics } from 'api.js';
@@ -22,10 +22,11 @@ export default function AudienceAnalyticsWidget() {
     const { data, isLoading, isError } = useQuery({ queryKey: ['audienceAnalytics'], queryFn: fetchAudienceAnalytics, staleTime: 1000 * 60 * 60 });
 
     const chartData = useMemo(() => {
-        const cityDistribution = data?.city_distribution || [];
-        const ageDistribution = data?.age_distribution || [];
-        const sexDistribution = data?.sex_distribution || [];
-        return { city: cityDistribution, age: ageDistribution, sex: sexDistribution };
+        return {
+            city: data?.city_distribution || [],
+            age: data?.age_distribution || [],
+            sex: data?.sex_distribution || [],
+        };
     }, [data]);
     
     const COLORS = [theme.palette.primary.main, theme.palette.secondary.main, theme.palette.warning.main, theme.palette.success.main, theme.palette.info.main];
@@ -33,7 +34,7 @@ export default function AudienceAnalyticsWidget() {
     const renderContent = () => {
         if (isLoading) return <Skeleton variant="rounded" height={250} />;
         if (isError) return <Typography color="error.main">Ошибка загрузки аналитики.</Typography>;
-        if (!data) return <Typography color="text.secondary">Нет данных для анализа.</Typography>;
+        if (!data || !data.sex_distribution || data.sex_distribution.length === 0) return <Box sx={{display: 'flex', height: 250, alignItems: 'center', justifyContent: 'center'}}><Typography color="text.secondary">Нет данных для анализа.</Typography></Box>;
 
         return (
             <Grid container spacing={3} alignItems="center">

@@ -22,7 +22,7 @@ const HeroSection = () => {
           Интеллектуальная SMM-платформа
         </Typography>
         <Typography variant="h5" color="text.secondary" paragraph sx={{ mt: 2, mb: 4, maxWidth: '750px', mx: 'auto', textAlign: 'center' }}>
-          Zenith — это ваш персональный ассистент для ВКонтакте, созданный для органического роста, повышения охватов и тотальной автоматизации рутины.
+          Zenith — это ваш персональный ассистент для ВКонтакте, созданный для органического роста, повышения охватов и комплексной автоматизации рутины.
         </Typography>
         <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ delay: 0.4, duration: 0.5 }}>
           <Box sx={{ display: 'flex', justifyContent: 'center' }}>

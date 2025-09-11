@@ -61,7 +61,6 @@ const TaskEntry = React.memo(({ task }) => {
 });
 
 export default function TaskLogWidget() {
-    // --- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: Фильтр теперь хранится как примитив (строка), а не объект ---
     const [statusFilter, setStatusFilter] = useState('');
     
     const {
@@ -73,7 +72,6 @@ export default function TaskLogWidget() {
         isFetchingNextPage,
         status,
     } = useInfiniteQuery({
-        // --- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: queryKey теперь зависит от стабильной строки, что предотвращает бесконечные запросы ---
         queryKey: ['task_history', statusFilter],
         queryFn: ({ pageParam = 1 }) => fetchTaskHistory({ pageParam }, { status: statusFilter || undefined }),
         getNextPageParam: (lastPage) => (lastPage.has_more ? lastPage.page + 1 : undefined),

@@ -2,17 +2,17 @@
 import { createTheme, responsiveFontSizes } from '@mui/material/styles';
 
 const palette = {
-  primary: '#5E5CE6', // Насыщенный индиго
-  secondary: '#00BAE2', // Яркий циан
-  backgroundDefault: '#0D0E12', // Очень темный, почти черный
-  backgroundPaper: '#17181D', // Темно-серый для карточек
+  primary: '#5E5CE6',
+  secondary: '#00BAE2',
+  backgroundDefault: '#0D0E12',
+  backgroundPaper: '#17181D',
   textPrimary: '#FFFFFF',
-  textSecondary: '#A0A3BD', // Приглушенный серо-голубой
+  textSecondary: '#A0A3BD',
   success: '#34C759',
   warning: '#FF9500',
   error: '#FF3B30',
   info: '#007AFF',
-  divider: 'rgba(160, 163, 189, 0.15)', // Полупрозрачный цвет текста
+  divider: 'rgba(160, 163, 189, 0.15)',
 };
 
 let theme = createTheme({
@@ -89,6 +89,7 @@ let theme = createTheme({
                 borderRadius: '8px',
                 border: `1px solid ${palette.divider}`,
                 fontSize: '0.875rem',
+                padding: '12px',
             },
             arrow: {
                 color: 'rgba(30, 31, 37, 0.9)',

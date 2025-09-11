@@ -7,7 +7,6 @@ import { Toaster } from 'react-hot-toast';
 
 import { theme, globalStyles } from './theme.js';
 import { WebSocketProvider } from './contexts/WebSocketProvider.js';
-// --- ИЗМЕНЕНИЕ: Импортируем хук, который возвращает стабильный объект с действиями ---
 import { useUserStore, useUserActions } from './store/userStore.js';
 import Layout from './components/Layout.js';
 import ErrorBoundary from './components/ErrorBoundary.js';
@@ -42,22 +41,17 @@ const PrivateRoutes = () => {
 };
 
 function App() {
-  // Получаем только необходимые данные (состояние)
   const jwtToken = useUserStore(state => state.jwtToken);
   const isLoading = useUserStore(state => state.isLoading);
-  // --- ИСПРАВЛЕНИЕ: Получаем все действия через новый стабильный хук ---
-  // Этот хук всегда возвращает один и тот же объект, что безопасно для useEffect
   const { loadUser, finishInitialLoad } = useUserActions();
 
   useEffect(() => {
-    // Теперь `loadUser` и `finishInitialLoad` гарантированно стабильны
-    // и не будут вызывать этот эффект без необходимости.
     if (jwtToken) {
       loadUser();
     } else {
       finishInitialLoad();
     }
-  }, [jwtToken, loadUser, finishInitialLoad]); // Зависимости теперь стабильны
+  }, [jwtToken, loadUser, finishInitialLoad]);
 
   if (isLoading) {
     return <FullscreenLoader />;

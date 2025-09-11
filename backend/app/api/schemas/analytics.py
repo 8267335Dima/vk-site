@@ -7,19 +7,14 @@ class AudienceStatItem(BaseModel):
     name: str = Field(..., description="Название (город, возрастная группа)")
     value: int = Field(..., description="Количество пользователей")
 
+class SexDistributionResponse(BaseModel):
+    name: str
+    value: int
+
 class AudienceAnalyticsResponse(BaseModel):
     city_distribution: List[AudienceStatItem]
     age_distribution: List[AudienceStatItem]
-
-class FunnelStage(BaseModel):
-    stage_name: str
-    value: int
-    description: str
-
-class FriendsFunnelResponse(BaseModel):
-    period_start: date
-    period_end: date
-    funnel: List[FunnelStage]
+    sex_distribution: List[SexDistributionResponse]
 
 class FriendsDynamicItem(BaseModel):
     date: date
@@ -28,10 +23,17 @@ class FriendsDynamicItem(BaseModel):
 class FriendsDynamicResponse(BaseModel):
     data: List[FriendsDynamicItem]
 
-# --- НОВЫЕ СХЕМЫ для нового графика ---
 class ActionSummaryItem(BaseModel):
     date: date
     total_actions: int
 
 class ActionSummaryResponse(BaseModel):
     data: List[ActionSummaryItem]
+
+class ProfileGrowthItem(BaseModel):
+    date: date
+    total_likes_on_content: int
+    friends_count: int
+
+class ProfileGrowthResponse(BaseModel):
+    data: List[ProfileGrowthItem]

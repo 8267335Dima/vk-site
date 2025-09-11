@@ -99,6 +99,7 @@ class DailyStats(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     date = Column(Date, default=datetime.date.today, nullable=False)
     likes_count = Column(Integer, default=0, nullable=False)
+    like_friends_feed_count = Column(Integer, default=0, nullable=False)
     friends_added_count = Column(Integer, default=0, nullable=False)
     friend_requests_accepted_count = Column(Integer, default=0, nullable=False)
     stories_viewed_count = Column(Integer, default=0, nullable=False)

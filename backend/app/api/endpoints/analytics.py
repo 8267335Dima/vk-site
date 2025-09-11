@@ -11,9 +11,9 @@ from app.api.dependencies import get_current_user
 from app.db.session import get_db
 from app.api.schemas.analytics import (
     AudienceAnalyticsResponse, AudienceStatItem, 
-    FriendsDynamicItem, FriendsDynamicResponse, 
-    FriendsFunnelResponse, FunnelStage,
-    ActionSummaryResponse, ActionSummaryItem
+    FriendsDynamicItem, FriendsDynamicResponse,
+    ActionSummaryResponse, ActionSummaryItem,
+    SexDistributionResponse
 )
 from app.services.vk_api import VKAPI
 from app.core.security import decrypt_data
@@ -21,7 +21,6 @@ from app.core.security import decrypt_data
 router = APIRouter()
 
 def calculate_age(bdate: str) -> int | None:
-    """Рассчитывает возраст по строке с датой рождения."""
     try:
         parts = bdate.split('.')
         if len(parts) == 3:
@@ -33,7 +32,6 @@ def calculate_age(bdate: str) -> int | None:
     return None
 
 def get_age_group(age: int) -> str:
-    """Определяет возрастную группу."""
     if age < 18: return "< 18"
     if 18 <= age <= 24: return "18-24"
     if 25 <= age <= 34: return "25-34"
@@ -42,18 +40,14 @@ def get_age_group(age: int) -> str:
     return "Не указан"
 
 @router.get("/audience", response_model=AudienceAnalyticsResponse)
-@cache(expire=21600) # Кешируем на 6 часов
+@cache(expire=21600)
 async def get_audience_analytics(current_user: User = Depends(get_current_user)):
-    """
-    Возвращает аналитику по аудитории (друзьям) пользователя.
-    Результат кешируется для снижения нагрузки на VK API.
-    """
     vk_token = decrypt_data(current_user.encrypted_vk_token)
     vk_api = VKAPI(access_token=vk_token)
 
-    friends = await vk_api.get_user_friends(user_id=current_user.vk_id)
+    friends = await vk_api.get_user_friends(user_id=current_user.vk_id, fields="sex,bdate,city")
     if not friends:
-        return AudienceAnalyticsResponse(city_distribution=[], age_distribution=[])
+        return AudienceAnalyticsResponse(city_distribution=[], age_distribution=[], sex_distribution=[])
 
     # --- Анализ по городам ---
     city_counter = Counter(
@@ -76,57 +70,17 @@ async def get_audience_analytics(current_user: User = Depends(get_current_user))
         for group, count in sorted(age_counter.items())
     ]
 
+    # --- Анализ по полу ---
+    sex_counter = Counter(
+        'Мужчины' if f.get('sex') == 2 else ('Женщины' if f.get('sex') == 1 else 'Не указан')
+        for f in friends if not f.get('deactivated')
+    )
+    sex_distribution = [SexDistributionResponse(name=k, value=v) for k, v in sex_counter.items()]
+
     return AudienceAnalyticsResponse(
         city_distribution=top_cities,
-        age_distribution=age_distribution
-    )
-
-
-@router.get("/friends-funnel", response_model=FriendsFunnelResponse)
-async def get_friends_funnel_analytics(
-    days: int = Query(30, ge=1, le=90),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Возвращает аналитику по воронке добавления друзей за последние N дней.
-    """
-    end_date = datetime.date.today()
-    start_date = end_date - datetime.timedelta(days=days - 1)
-
-    stmt = select(
-        func.sum(DailyStats.friends_added_count).label("sent_requests"),
-        func.sum(DailyStats.friend_requests_accepted_count).label("accepted_requests")
-    ).where(
-        DailyStats.user_id == current_user.id,
-        DailyStats.date.between(start_date, end_date)
-    )
-
-    result = await db.execute(stmt)
-    data = result.one_or_none()
-
-    sent = data.sent_requests or 0
-    accepted = data.accepted_requests or 0
-
-    # В будущем можно добавить сюда "просмотры профиля" из логов
-    # или "отправленные сообщения" для более детальной воронки
-    funnel_data = [
-        FunnelStage(
-            stage_name="Отправлено заявок",
-            value=sent,
-            description="Количество заявок в друзья, отправленных через автоматизацию 'Добавление друзей'."
-        ),
-        FunnelStage(
-            stage_name="Принято заявок",
-            value=accepted,
-            description="Количество входящих заявок, принятых через автоматизацию 'Прием заявок'."
-        )
-    ]
-
-    return FriendsFunnelResponse(
-        period_start=start_date,
-        period_end=end_date,
-        funnel=funnel_data
+        age_distribution=age_distribution,
+        sex_distribution=sex_distribution
     )
 
 @router.get("/friends-dynamic", response_model=FriendsDynamicResponse)
@@ -135,9 +89,6 @@ async def get_friends_dynamic(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    Возвращает динамику изменения количества друзей за последние N дней.
-    """
     end_date = datetime.date.today()
     start_date = end_date - datetime.timedelta(days=days - 1)
 
@@ -166,9 +117,6 @@ async def get_actions_summary(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    Возвращает суммарную статистику по всем выполненным действиям за каждый день.
-    """
     end_date = datetime.date.today()
     start_date = end_date - datetime.timedelta(days=days - 1)
 

@@ -1,15 +1,14 @@
 // frontend/src/components/Footer.js
 import React from 'react';
 import { Box, Container, Typography, Stack, Link } from '@mui/material';
-import { Link as RouterLink } from 'react-router-dom';
 import TrackChangesIcon from '@mui/icons-material/TrackChanges';
 import { content } from 'content/content';
 
-const FooterLink = ({ to, href, children }) => (
+const FooterLink = ({ href, children }) => (
     <Link 
-        component={to ? RouterLink : 'a'} 
-        to={to} 
         href={href}
+        target="_blank"
+        rel="noopener noreferrer"
         variant="body2" 
         sx={{ 
             color: 'text.secondary', 
@@ -33,9 +32,8 @@ export default function Footer() {
                         <Typography variant="body2" color="text.secondary">© {new Date().getFullYear()}</Typography>
                     </Stack>
                     <Stack direction="row" spacing={3} alignItems="center">
-                        <FooterLink to="/">Главная</FooterLink>
-                        {/* --- ИЗМЕНЕНИЕ: Ссылка "Тарифы" удалена --- */}
-                        <FooterLink href="#" target="_blank">Политика конфиденциальности</FooterLink>
+                        <FooterLink href="#">Политика конфиденциальности</FooterLink>
+                        <FooterLink href="#">Условия использования</FooterLink>
                     </Stack>
                 </Stack>
             </Container>
