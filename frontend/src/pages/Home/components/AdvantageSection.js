@@ -1,6 +1,6 @@
 // frontend/src/pages/Home/components/AdvantageSection.js
 import React from 'react';
-import { Grid, Typography, Stack, Paper, Box, alpha, useTheme } from '@mui/material';
+import { Grid, Typography, Stack, Paper, alpha, useTheme } from '@mui/material';
 import { motion } from 'framer-motion';
 import { XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Area, AreaChart } from 'recharts';
 
