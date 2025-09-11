@@ -19,7 +19,7 @@ export const content = {
         login: "Войти",
         logout: "Выйти",
     },
-    actions: { // Для ActionPanel и модальных окон
+    actions: {
         'accept_friends': { icon: <GroupAddIcon />, title: 'Прием заявок', modalTitle: "Прием входящих заявок" },
         'like_feed': { icon: <ThumbUpIcon />, title: 'Лайки в ленте', modalTitle: "Лайки в ленте новостей" },
         'add_recommended': { icon: <RecommendIcon />, title: 'Добавить друзей', modalTitle: "Добавление друзей из рекомендаций" },
@@ -28,16 +28,16 @@ export const content = {
         'remove_friends': { icon: <PersonRemoveIcon />, title: 'Чистка друзей', modalTitle: "Чистка списка друзей" },
         'mass_messaging': { icon: <SendIcon />, title: 'Массовая рассылка', modalTitle: "Массовая рассылка друзьям" },
     },
-    automations: { // Для AutomationsWidget
-        'like_feed': { icon: <ThumbUpIcon />, title: 'Авто-лайки в ленте' },
-        'add_recommended': { icon: <RecommendIcon />, title: 'Авто-добавление друзей' },
-        'birthday_congratulation': { icon: <CakeIcon />, title: 'Авто-поздравления' },
-        'accept_friends': { icon: <GroupAddIcon />, title: 'Авто-прием заявок' },
-        'remove_friends': { icon: <PersonRemoveIcon />, title: 'Авто-чистка друзей' },
-        'view_stories': { icon: <HistoryIcon />, title: 'Авто-просмотр историй' },
-        'like_friends_feed': { icon: <FavoriteIcon />, title: 'Авто-лайки друзьям' },
-        'mass_messaging': { icon: <SendIcon />, title: 'Авто-рассылка' },
-        'eternal_online': { icon: <OnlinePredictionIcon />, title: 'Вечный онлайн' },
+    automations: {
+        'like_feed': { icon: <ThumbUpIcon />, title: 'Авто-лайки в ленте', description: "Проставляет лайки на посты в ленте новостей." },
+        'add_recommended': { icon: <RecommendIcon />, title: 'Авто-добавление друзей', description: "Отправляет заявки пользователям из списка рекомендаций." },
+        'birthday_congratulation': { icon: <CakeIcon />, title: 'Авто-поздравления', description: "Поздравляет ваших друзей с Днем Рождения." },
+        'accept_friends': { icon: <GroupAddIcon />, title: 'Авто-прием заявок', description: "Принимает входящие заявки в друзья по вашим фильтрам." },
+        'remove_friends': { icon: <PersonRemoveIcon />, title: 'Авто-чистка друзей', description: "Удаляет неактивных и забаненных друзей." },
+        'view_stories': { icon: <HistoryIcon />, title: 'Авто-просмотр историй', description: "Просматривает все доступные истории друзей." },
+        'like_friends_feed': { icon: <FavoriteIcon />, title: 'Авто-лайки друзьям', description: "Проявляет активность, ставя лайки на посты друзей." },
+        'mass_messaging': { icon: <SendIcon />, title: 'Авто-рассылка', description: "Отправляет сообщения друзьям по заданным критериям." },
+        'eternal_online': { icon: <OnlinePredictionIcon />, title: 'Вечный онлайн', description: "Поддерживает статус 'онлайн' для вашего аккаунта." },
     },
     loginPage: {
         title: "Добро пожаловать в Zenith",
@@ -45,7 +45,7 @@ export const content = {
         textFieldLabel: "Вставьте ключ доступа VK",
         buttonText: "Войти",
         tooltip: {
-            step1: `1. Перейдите на сайт <a href="https://vkhost.github.io/" target="_blank" rel="noopener noreferrer">vkhost.github.io</a>.`,
+            step1: `1. Перейдите на сайт, нажав на <a href="https://vkhost.github.io/" target="_blank" rel="noopener noreferrer" style="color: #00BAE2; font-weight: 600;">эту ссылку</a>.`,
             step2: `2. Нажмите "Kate Mobile" и разрешите доступ.`,
             step3: `3. Скопируйте ВСЮ ссылку из адресной строки браузера и вставьте в поле ниже.`
         },
@@ -75,5 +75,3 @@ export const content = {
         }
     }
 };
-
-

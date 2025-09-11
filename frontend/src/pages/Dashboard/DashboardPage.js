@@ -1,6 +1,6 @@
-// frontend/src/pages/Dashboard/DashboardPage.js
+// frontend/src/pages/Dashboard/DashboardPage.js - ОБНОВЛЕННАЯ ВЕРСЯ
 
-import React, { Suspense, useState, lazy } from 'react';
+import React, { Suspense, useState, lazy, memo } from 'react';
 import { Box, Paper, Link, Chip, Stack, Typography, Avatar, Grid, Button, Tooltip, Select, MenuItem } from '@mui/material';
 import { motion } from 'framer-motion';
 
@@ -14,8 +14,7 @@ import ShutterSpeedIcon from '@mui/icons-material/ShutterSpeed';
 import SlowMotionVideoIcon from '@mui/icons-material/SlowMotionVideo';
 
 // Hooks & State Management
-import { useWebSocketContext } from 'contexts/WebSocketProvider';
-import { useUserStore, useUserActions } from 'store/userStore'; // --- ИМПОРТ: Стабильный хук для действий
+import { useUserStore, useUserActions } from 'store/userStore';
 import { useDashboardManager } from 'hooks/useDashboardManager';
 import { useFeatureFlag } from 'hooks/useFeatureFlag';
 import { useMutation } from '@tanstack/react-query';
@@ -44,9 +43,9 @@ const motionVariants = {
     animate: (i) => ({ opacity: 1, y: 0, transition: { delay: i * 0.1, duration: 0.5, ease: "easeOut" } }),
 };
 
-const UserProfileCard = ({ userInfo, connectionStatus, onProxyManagerOpen }) => {
+// --- УЛУЧШЕНИЕ: Мемоизация компонента для предотвращения лишних рендеров ---
+const UserProfileCard = memo(({ userInfo, connectionStatus, onProxyManagerOpen }) => {
     const { isFeatureAvailable } = useFeatureFlag();
-    // --- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: Получаем сеттер через стабильный хук, а не через getState() ---
     const { setUserInfo } = useUserActions();
     const canUseProxyManager = isFeatureAvailable('proxy_management');
     const canChangeSpeed = isFeatureAvailable('fast_slow_delay_profile');
@@ -75,7 +74,8 @@ const UserProfileCard = ({ userInfo, connectionStatus, onProxyManagerOpen }) => 
                     <Chip label={connectionStatus} color={connectionStatus === 'Live' ? 'success' : 'warning'} size="small" sx={{ flexShrink: 0, mt: 0.5 }} />
                 </Stack>
 
-                <Stack direction="row" spacing={1.5} flexWrap="wrap" useGap sx={{ mb: 2 }}>
+                <Stack direction="row" spacing={1.5} flexWrap="wrap" sx={{ mb: 2 }}>
+                    {/* --- ИЗМЕНЕНИЕ: Свойство 'useGap' было здесь, и я его УДАЛИЛ --- */}
                     <Chip icon={<WorkspacePremiumIcon />} label={`${userInfo.plan}`} color="primary" variant="filled" size="small"/>
                     <Chip icon={<GroupIcon />} label={`${userInfo.counters?.friends || '0'} друзей`} size="small" variant="outlined"/>
                     <Chip icon={<RssFeedIcon />} label={`${userInfo.counters?.followers || '0'} подписчиков`} size="small" variant="outlined"/>
@@ -124,20 +124,20 @@ const UserProfileCard = ({ userInfo, connectionStatus, onProxyManagerOpen }) => 
             </Box>
         </Paper>
     );
-};
+});
 
-// --- УЛУЧШЕНИЕ: Стабильный объект-заглушка, чтобы избежать ошибок при первом рендере ---
-const defaultWsContext = { connectionStatus: 'Подключение...' };
 
 export default function DashboardPage() {
-    // Оптимизация: выбираем только те части состояния, которые нужны этому компоненту
+    // --- УЛУЧШЕНИЕ: Оптимизированные селекторы для Zustand ---
     const userInfo = useUserStore(state => state.userInfo);
+    const connectionStatus = useUserStore(state => state.connectionStatus);
+    
     const { isFeatureAvailable } = useFeatureFlag();
-    const { connectionStatus } = useWebSocketContext() || defaultWsContext;
     const { modalState, openModal, closeModal, onActionSubmit } = useDashboardManager();
     const [isProxyModalOpen, setProxyModalOpen] = useState(false);
     const [automationToEdit, setAutomationToEdit] = useState(null);
 
+    // Если данные пользователя еще не загрузились, показываем загрузчик
     if (!userInfo) {
         return <LazyLoader />;
     }
@@ -199,6 +199,7 @@ export default function DashboardPage() {
                 </Grid>
             </Grid>
             
+            {/* Модальные окна остаются без изменений */}
             <ActionModal {...modalState} onClose={closeModal} onSubmit={onActionSubmit} />
             <Suspense>
                 {isProxyModalOpen && <ProxyManagerModal open={isProxyModalOpen} onClose={() => setProxyModalOpen(false)} />}

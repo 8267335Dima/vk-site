@@ -15,8 +15,8 @@ const PlanCard = ({ plan, isCurrent, onChoose, isLoading, isAnnual }) => {
     
     // Расчет цены
     const finalPrice = useMemo(() => {
-        if (plan.base_price === 0) return 0;
-        let price = plan.base_price * periodMonths;
+        if (plan.price === 0) return 0; // <-- Замена
+        let price = plan.price * periodMonths; // <-- Замена
         if (isAnnual && periodInfo) {
             price *= (1 - periodInfo.discount_percent / 100);
         }
@@ -53,7 +53,7 @@ const PlanCard = ({ plan, isCurrent, onChoose, isLoading, isAnnual }) => {
                         </Typography>
                          {finalPrice > 0 && <Typography variant="h6" component="span" color="text.secondary">₽ {periodLabel}</Typography>}
                     </Box>
-                    {isAnnual && plan.base_price > 0 && <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>{pricePerMonth} ₽ / мес.</Typography>}
+                    {isAnnual && plan.price > 0 && <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>{pricePerMonth} ₽ / мес.</Typography>}
 
                     <Divider sx={{ my: 2 }} />
 

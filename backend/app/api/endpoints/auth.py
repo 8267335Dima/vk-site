@@ -19,11 +19,16 @@ router = APIRouter()
 class TokenRequest(BaseModel):
     vk_token: str
 
+
+async def get_request_identifier(request: Request) -> str:
+    return request.client.host or "unknown"
+
 @router.post(
     "/vk", 
     response_model=TokenResponse, 
     summary="Аутентификация или регистрация по токену VK",
-    dependencies=[Depends(RateLimiter(times=5, minutes=1))]
+    # Теперь RateLimiter будет корректно вызывать нашу async-функцию
+    dependencies=[Depends(RateLimiter(times=5, minutes=1, identifier=get_request_identifier))]
 )
 async def login_via_vk(
     *,
@@ -31,12 +36,7 @@ async def login_via_vk(
     db: AsyncSession = Depends(get_db),
     token_request: TokenRequest
 ) -> TokenResponse:
-    """
-    Принимает 'vk_token', проверяет его, находит или создает пользователя.
-    - Для новых пользователей: назначает пробный период ('Базовый' тариф на 14 дней).
-    - Для существующих: обновляет их VK токен.
-    - Для всех: записывает историю входа и возвращает JWT-токен для доступа к API.
-    """
+    # ... остальная часть функции без изменений ...
     vk_token = token_request.vk_token
     
     vk_id = await is_token_valid(vk_token)

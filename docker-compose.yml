@@ -1,9 +1,4 @@
-# ---------------------------------------------------- #
-#       Production Docker Compose for Social Pilot     #
-# ---------------------------------------------------- #
-#  Запуск: docker-compose -f docker-compose.prod.yml up --build -d  #
-# ---------------------------------------------------- #
-
+# docker-compose.yml
 services:
   postgres:
     image: postgres:16-alpine
@@ -41,11 +36,13 @@ services:
       dockerfile: Dockerfile
     container_name: social_pilot_backend_prod
     env_file: ./.env
+    # --- ИЗМЕНЕНИЕ: volumes УДАЛЕНЫ для production-сборки ---
+    # Это гарантирует, что используется код, собранный в Docker-образе.
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
     command: >
-      sh -c "poetry run alembic upgrade head && poetry run uvicorn app.main:app --host 0.0.0.0 --port 8000"
+      sh -c "/app/.venv/bin/alembic upgrade head && /app/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000"
     restart: always
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
@@ -60,11 +57,12 @@ services:
       dockerfile: Dockerfile
     container_name: social_pilot_celery_worker_prod
     env_file: ./.env
+    # --- ИЗМЕНЕНИЕ: volumes УДАЛЕНЫ ---
     depends_on:
       - redis
       - backend
     command: >
-      poetry run celery -A app.celery_worker.celery_app worker 
+      /app/.venv/bin/celery -A app.celery_worker.celery_app worker 
       --loglevel=info -P gevent -c 10 
       -Q high_priority,default,low_priority
     restart: always
@@ -75,11 +73,12 @@ services:
       dockerfile: Dockerfile
     container_name: social_pilot_celery_beat_prod
     env_file: ./.env
+    # --- ИЗМЕНЕНИЕ: volumes УДАЛЕНЫ ---
     depends_on:
       - redis
       - backend
     command: >
-      poetry run celery -A app.celery_worker.celery_app beat 
+      /app/.venv/bin/celery -A app.celery_worker.celery_app beat 
       --loglevel=info 
       --scheduler=sqlalchemy_celery_beat.schedulers:DatabaseScheduler
     restart: always
@@ -138,10 +137,11 @@ services:
     ports:
       - "5555:5555"
     env_file: ./.env
+    # --- ИЗМЕНЕНИЕ: volumes УДАЛЕНЫ ---
     depends_on:
       - redis
     command: >
-      poetry run celery -A app.celery_worker.celery_app flower 
+      /app/.venv/bin/celery -A app.celery_worker.celery_app flower 
       --broker=redis://${REDIS_HOST}:${REDIS_PORT}/0
       --persistent=True --db=/home/appuser/flower.db
     restart: always

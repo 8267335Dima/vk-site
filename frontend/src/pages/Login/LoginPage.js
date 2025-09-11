@@ -4,7 +4,7 @@ import { Paper, Typography, TextField, Button, CircularProgress, Alert, Box, Too
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import { motion } from 'framer-motion';
 import { loginWithVkToken } from 'api.js';
-import { useUserStore } from 'store/userStore';
+import { useUserActions } from 'store/userStore';
 import { content } from 'content/content';
 
 const getErrorMessage = (error) => {
@@ -15,7 +15,7 @@ const getErrorMessage = (error) => {
 };
 
 export default function LoginPage() {
-    const login = useUserStore((state) => state.login);
+    const { login } = useUserActions();
     const [vkTokenInput, setVkTokenInput] = useState('');
     const [message, setMessage] = useState('');
     const [loading, setLoading] = useState(false);

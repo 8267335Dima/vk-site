@@ -14,11 +14,13 @@ apiClient.interceptors.request.use((config) => {
   return config;
 });
 
+// ПРАВИЛЬНО
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response && error.response.status === 401) {
-      useUserStore.getState().logout();
+      // Правильный путь к функции logout
+      useUserStore.getState().actions.logout(); 
     }
     return Promise.reject(error);
   }

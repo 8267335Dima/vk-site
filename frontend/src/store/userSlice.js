@@ -23,6 +23,7 @@ export const createUserSlice = (set, get) => ({
                 });
             } catch (error) {
                 console.error("Failed to load user data, logging out.", error);
+                // Правильный путь к функции logout
                 get().actions.logout(); 
             } finally {
                 get().actions.finishInitialLoad();

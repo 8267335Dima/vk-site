@@ -10,7 +10,7 @@ const fadeInUp = {
 
 const StepCard = ({ num, icon, title, desc }) => {
     return (
-        <motion.div variants={fadeInUp} style={{ height: '100%' }}>
+        <motion.div variants={fadeInUp} style={{ height: '100%' }} whileHover={{ y: -8, transition: { type: 'spring', stiffness: 300 } }}>
             <Paper 
                 variant="outlined"
                 sx={{ 
@@ -31,12 +31,14 @@ const StepCard = ({ num, icon, title, desc }) => {
                     variant="h1" 
                     sx={{
                         position: 'absolute',
-                        top: '-20px',
-                        left: '-10px',
+                        top: '-30px',
+                        left: '0px',
                         fontWeight: 800,
-                        fontSize: '8rem',
-                        color: (theme) => alpha(theme.palette.primary.main, 0.05),
-                        zIndex: 0
+                        fontSize: '9rem',
+                        lineHeight: 1,
+                        color: (theme) => alpha(theme.palette.text.primary, 0.04),
+                        zIndex: 0,
+                        userSelect: 'none'
                     }}
                 >
                     {num}

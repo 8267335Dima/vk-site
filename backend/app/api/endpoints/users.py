@@ -1,5 +1,6 @@
-# backend/app/api/endpoints/users.py
-from fastapi import APIRouter, Depends, HTTPException, status
+# backend/app/api/endpoints/users.py - ПОЛНАЯ ИСПРАВЛЕННАЯ ВЕРСЯ
+
+from fastapi import APIRouter, Depends, HTTPException, status, Query # <-- Добавлен Query
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 from datetime import datetime
@@ -11,6 +12,9 @@ from app.services.vk_api import VKAPI, VKAPIError
 from app.core.security import decrypt_data
 from app.repositories.stats import StatsRepository
 from app.core.plans import get_features_for_plan, is_feature_available_for_plan
+# --- НОВЫЙ ИМПОРТ ---
+from app.api.schemas.users import TaskInfoResponse
+
 
 router = APIRouter()
 
@@ -108,3 +112,38 @@ async def update_user_delay_profile(
     current_user.delay_profile = request_data.delay_profile
     await db.commit()
     return await read_users_me(current_user)
+
+# --- НОВЫЙ ЭНДПОИНТ ---
+@router.get("/task-info", response_model=TaskInfoResponse)
+async def get_task_info(
+    task_key: str = Query(...),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Возвращает дополнительную информацию для модального окна задачи.
+    - Для 'accept_friends': количество входящих заявок.
+    - Для 'remove_friends': общее количество друзей.
+    """
+    vk_token = decrypt_data(current_user.encrypted_vk_token)
+    vk_api = VKAPI(access_token=vk_token)
+    count = 0
+
+    try:
+        if task_key == "accept_friends":
+            response = await vk_api.get_incoming_friend_requests()
+            if response and "items" in response:
+                count = len(response["items"])
+        
+        elif task_key == "remove_friends":
+            # Используем get_user_info, так как это эффективнее
+            user_info = await vk_api.get_user_info(user_ids=str(current_user.vk_id))
+            if user_info and "counters" in user_info:
+                count = user_info["counters"].get("friends", 0)
+
+    except VKAPIError as e:
+        # Не блокируем фронтенд, если VK API недоступен, просто вернем 0
+        # В реальном приложении можно добавить логирование
+        print(f"Could not fetch task info for {task_key} due to VK API error: {e}")
+        count = 0
+
+    return TaskInfoResponse(count=count)

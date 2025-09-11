@@ -1,4 +1,5 @@
-// frontend/src/App.js
+// frontend/src/App.js - ОБНОВЛЕННАЯ ВЕРСИЯ
+
 import React, { useEffect, Suspense, lazy } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { ThemeProvider, CssBaseline, Box, CircularProgress } from '@mui/material';
@@ -6,11 +7,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'react-hot-toast';
 
 import { theme, globalStyles } from './theme.js';
-import { WebSocketProvider } from './contexts/WebSocketProvider.js';
+// --- ИЗМЕНЕНИЕ: WebSocketProvider больше не нужен ---
+// import { WebSocketProvider } from './contexts/WebSocketProvider.js'; 
 import { useUserStore, useUserActions } from './store/userStore.js';
 import Layout from './components/Layout.js';
 import ErrorBoundary from './components/ErrorBoundary.js';
 
+// Lazy-loaded компоненты остаются без изменений
 const HomePage = lazy(() => import('./pages/Home/HomePage.js'));
 const LoginPage = lazy(() => import('./pages/Login/LoginPage.js'));
 const DashboardPage = lazy(() => import('./pages/Dashboard/DashboardPage.js'));
@@ -35,9 +38,8 @@ const PrivateRoutes = () => {
         return <FullscreenLoader />;
     }
     
-    return jwtToken ? (
-        <WebSocketProvider><Outlet /></WebSocketProvider>
-    ) : <Navigate to="/login" replace />;
+    // --- ИЗМЕНЕНИЕ: Убрали обертку WebSocketProvider. Теперь соединение управляется глобально. ---
+    return jwtToken ? <Outlet /> : <Navigate to="/login" replace />;
 };
 
 function App() {
@@ -46,6 +48,7 @@ function App() {
   const { loadUser, finishInitialLoad } = useUserActions();
 
   useEffect(() => {
+    // Эта логика остается, она важна для загрузки данных пользователя
     if (jwtToken) {
       loadUser();
     } else {

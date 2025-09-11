@@ -26,17 +26,17 @@ async def get_available_plans():
     """
     available_plans = []
     for plan_id, config in PLAN_CONFIG.items():
-        if "base_price" in config:  # Отображаем только платные и бесплатные (с ценой 0)
-            periods = config.get("periods", [])
+        # Отображаем только платные и бесплатные (с ценой 0)
+        if "base_price" in config:
             available_plans.append({
                 "id": plan_id,
                 "display_name": config.get("display_name", plan_id),
-                "base_price": config["base_price"],
+                "price": config["base_price"], 
                 "currency": config.get("currency", "RUB"),
                 "description": config.get("description", ""),
                 "features": config.get("features", []),
                 "is_popular": config.get("is_popular", False),
-                "periods": periods
+                "periods": config.get("periods", [])
             })
     return {"plans": available_plans}
 

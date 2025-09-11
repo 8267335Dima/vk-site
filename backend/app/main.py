@@ -1,11 +1,15 @@
 # backend/app/main.py
 import asyncio
 import structlog
+# --- ИЗМЕНЕНИЕ: Убираем импорт синхронного redis ---
+# import redis 
+# ----------------------------------------------------
 from fastapi import APIRouter, FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
-from redis.asyncio import Redis
+# --- ИЗМЕНЕНИЕ: Оставляем только асинхронный клиент ---
+from redis.asyncio import Redis 
 from fastapi_cache import FastAPICache
 from fastapi_cache.backends.redis import RedisBackend
 from contextlib import asynccontextmanager
@@ -32,10 +36,14 @@ async def lifespan(app: FastAPI):
     try:
         redis_connection = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/0", encoding="utf-8", decode_responses=True)
         await FastAPILimiter.init(redis_connection)
+        # ----------------------------
         
+        # Для кэша используем тот же тип клиента, можно даже тот же инстанс,
+        # но для изоляции лучше создать новый, указывающий на другую БД Redis.
         redis_cache_connection = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/3", encoding="utf-8")
         FastAPICache.init(RedisBackend(redis_cache_connection), prefix="fastapi-cache")
         
+        # Для Pub/Sub тоже создаем свой асинхронный клиент.
         redis_pubsub_connection = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/1")
         redis_task = asyncio.create_task(redis_listener(redis_pubsub_connection))
         
@@ -50,27 +58,31 @@ async def lifespan(app: FastAPI):
         try: await redis_task
         except asyncio.CancelledError: log.info("lifespan.shutdown", message="Redis listener task cancelled.")
 
-    await FastAPICache.clear()
+    if FastAPICache.get_backend():
+        await FastAPICache.clear()
     log.info("lifespan.shutdown", message="Resources cleaned up.")
 
 app = FastAPI(title="Zenith API", version="4.0.0", docs_url="/api/docs", redoc_url="/api/redoc", lifespan=lifespan)
 
-# Добавляем middleware для корректной работы за прокси (для определения IP)
-# ВАЖНО: Этот middleware должен быть одним из первых
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
-
 
 init_admin(app, engine)
 
+allowed_origins_list = [
+    "http://localhost",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS.split(','),
+    allow_origins=allowed_origins_list, # <-- Используем наш список напрямую
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- РЕГИСТРАЦИЯ РОУТЕРОВ  ---
+# --- РЕГИСТРАЦИЯ РОУТЕРОВ (без изменений) ---
 api_router_v1 = APIRouter()
 api_router_v1.include_router(auth_router, prefix="/auth", tags=["Аутентификация"])
 api_router_v1.include_router(users_router, prefix="/users", tags=["Пользователи"])
