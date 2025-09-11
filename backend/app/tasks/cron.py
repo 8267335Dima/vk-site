@@ -7,7 +7,7 @@ from redis.asyncio import Redis
 
 from app.core.config import settings
 from app.db.session import AsyncSessionFactory
-from app.db.models import DailyStats, Automation, TaskHistory, User, Notification, ProfileMetric
+from app.db.models import DailyStats, WeeklyStats, MonthlyStats, Automation, TaskHistory, User, Notification
 from app.tasks.runner import (
     like_feed, add_recommended_friends, accept_friend_requests, 
     remove_friends_by_criteria, view_stories, like_friends_feed, eternal_online,
