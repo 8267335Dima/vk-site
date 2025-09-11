@@ -3,6 +3,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy.orm import selectinload
 from typing import List
 from croniter import croniter
 from app.db.session import get_db
@@ -27,21 +28,22 @@ async def _create_or_update_periodic_task(db: AsyncSession, scenario: Scenario):
         return
 
     try:
-        minute, hour, day, week, month = scenario.schedule.split(' ')
+        # croniter проверяет валидность, здесь мы просто разделяем строку
+        minute, hour, day_of_month, month_of_year, day_of_week = scenario.schedule.split(' ')
     except ValueError:
-        raise HTTPException(status_code=400, detail="Неверный формат CRON-строки.")
+        raise HTTPException(status_code=400, detail="Неверный формат CRON-строки. Ожидается 5 полей.")
 
     crontab_stmt = select(CrontabSchedule).where(
         CrontabSchedule.minute == minute, CrontabSchedule.hour == hour,
-        CrontabSchedule.day_of_month == day, CrontabSchedule.day_of_week == week,
-        CrontabSchedule.month_of_year == month
+        CrontabSchedule.day_of_month == day_of_month, CrontabSchedule.day_of_week == day_of_week,
+        CrontabSchedule.month_of_year == month_of_year
     )
     res = await db.execute(crontab_stmt)
     crontab = res.scalar_one_or_none()
     if not crontab:
         crontab = CrontabSchedule(
-            minute=minute, hour=hour, day_of_month=day,
-            day_of_week=week, month_of_year=month
+            minute=minute, hour=hour, day_of_month=day_of_month,
+            day_of_week=day_of_week, month_of_year=month_of_year
         )
         db.add(crontab)
         await db.flush()
@@ -64,7 +66,8 @@ async def _create_or_update_periodic_task(db: AsyncSession, scenario: Scenario):
 
 @router.get("", response_model=List[ScenarioSchema])
 async def get_user_scenarios(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    stmt = select(Scenario).where(Scenario.user_id == current_user.id)
+    # --- ИСПРАВЛЕНИЕ: Добавлено selectinload для предотвращения N+1 запросов ---
+    stmt = select(Scenario).where(Scenario.user_id == current_user.id).options(selectinload(Scenario.steps))
     result = await db.execute(stmt)
     return result.scalars().all()
 
@@ -87,7 +90,7 @@ async def create_scenario(scenario_data: ScenarioCreate, current_user: User = De
 
 @router.put("/{scenario_id}", response_model=ScenarioSchema)
 async def update_scenario(scenario_id: int, scenario_data: ScenarioUpdate, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    stmt = select(Scenario).where(Scenario.id == scenario_id, Scenario.user_id == current_user.id)
+    stmt = select(Scenario).where(Scenario.id == scenario_id, Scenario.user_id == current_user.id).options(selectinload(Scenario.steps))
     result = await db.execute(stmt)
     db_scenario = result.scalar_one_or_none()
     if not db_scenario:
@@ -99,6 +102,7 @@ async def update_scenario(scenario_id: int, scenario_data: ScenarioUpdate, curre
     db_scenario.schedule = scenario_data.schedule
     db_scenario.is_active = scenario_data.is_active
     
+    # Полное удаление и создание шагов - самый простой и надежный способ
     for step in db_scenario.steps:
         await db.delete(step)
     await db.flush()

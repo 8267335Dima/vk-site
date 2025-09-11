@@ -1,5 +1,5 @@
 // frontend/src/pages/Scenarios/ScenarioEditorModal.js
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Stack, CircularProgress } from '@mui/material';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { createScenario, updateScenario } from 'api';
@@ -13,17 +13,23 @@ const ScenarioEditorModal = ({ open, onClose, scenario }) => {
     const [name, setName] = useState('');
     const [schedule, setSchedule] = useState('0 9 * * 1,2,3,4,5');
     const [steps, setSteps] = useState([]);
+    
+    // --- ИСПРАВЛЕНИЕ: Используем useRef для стабильного счетчика ID ---
+    const localIdCounter = useRef(0);
 
     useEffect(() => {
         if (open) {
+            // Сбрасываем счетчик при каждом открытии
+            localIdCounter.current = 0; 
             if (scenario) {
                 setName(scenario.name);
                 setSchedule(scenario.schedule);
-                setSteps(scenario.steps.map(s => ({ ...s, localId: Math.random() })));
+                // Присваиваем новые, но стабильные в рамках сессии, ID
+                setSteps(scenario.steps.map(s => ({ ...s, localId: localIdCounter.current++ })));
             } else {
                 setName('');
                 setSchedule('0 9 * * 1,2,3,4,5');
-                setSteps([{ localId: Math.random(), action_type: 'like_feed', settings: { count: 50, filters: {} } }]);
+                setSteps([{ localId: localIdCounter.current++, action_type: 'like_feed', settings: { count: 50, filters: {} } }]);
             }
         }
     }, [scenario, open]);
@@ -37,8 +43,9 @@ const ScenarioEditorModal = ({ open, onClose, scenario }) => {
         },
         onError: (err) => toast.error(err.response?.data?.detail || 'Ошибка сохранения'),
     });
-
-    const handleAddStep = () => setSteps([...steps, { localId: Math.random(), action_type: 'like_feed', settings: { count: 50, filters: {} } }]);
+    
+    // --- ИСПРАВЛЕНИЕ: Используем счетчик для генерации нового ID ---
+    const handleAddStep = () => setSteps([...steps, { localId: localIdCounter.current++, action_type: 'like_feed', settings: { count: 50, filters: {} } }]);
     const handleRemoveStep = (localId) => setSteps(steps.filter(s => s.localId !== localId));
     const handleStepChange = (localId, field, value) => setSteps(steps.map(s => s.localId === localId ? { ...s, [field]: value } : s));
     
@@ -53,7 +60,7 @@ const ScenarioEditorModal = ({ open, onClose, scenario }) => {
         }
         const payload = {
             name, schedule,
-            is_active: scenario?.is_active || false,
+            is_active: scenario?.is_active ?? false,
             steps: steps.map((step, index) => ({
                 step_order: index + 1, action_type: step.action_type, settings: step.settings,
             })),
@@ -66,7 +73,7 @@ const ScenarioEditorModal = ({ open, onClose, scenario }) => {
         <Dialog open={open} onClose={onClose} fullWidth maxWidth="md">
             <DialogTitle sx={{ fontWeight: 600 }}>{scenario ? 'Редактировать сценарий' : 'Новый сценарий'}</DialogTitle>
             <DialogContent dividers>
-                <Stack spacing={3}>
+                <Stack spacing={3} py={2}>
                     <TextField label="Название сценария" value={name} onChange={(e) => setName(e.target.value)} />
                     <CronBuilder schedule={schedule} setSchedule={setSchedule} />
                     <ScenarioStepList 
@@ -78,7 +85,7 @@ const ScenarioEditorModal = ({ open, onClose, scenario }) => {
                     <Button startIcon={<AddIcon />} onClick={handleAddStep} sx={{ alignSelf: 'flex-start' }}>Добавить шаг</Button>
                 </Stack>
             </DialogContent>
-            <DialogActions>
+            <DialogActions sx={{ p: 2 }}>
                 <Button onClick={onClose}>Отмена</Button>
                 <Button onClick={handleSave} variant="contained" disabled={mutation.isLoading}>
                     {mutation.isLoading ? <CircularProgress size={24} /> : 'Сохранить'}

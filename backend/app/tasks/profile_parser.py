@@ -1,7 +1,6 @@
 # backend/app/tasks/profile_parser.py
-
 import asyncio
-import datetime  # <--- ИСПРАВЛЕНИЕ: Добавлен этот импорт
+import datetime
 import structlog
 from celery import shared_task
 from sqlalchemy import select
@@ -20,7 +19,7 @@ async def snapshot_all_users_metrics():
     Запускается один раз в сутки.
     """
     async with AsyncSessionFactory() as session:
-        # Используем .utcnow() для консистентности
+        # --- ИСПРАВЛЕНИЕ: Используем utcnow() для консистентности с остальным кодом ---
         stmt = select(User).where(User.plan_expires_at > datetime.datetime.utcnow())
         result = await session.execute(stmt)
         active_users = result.scalars().all()
@@ -31,12 +30,10 @@ async def snapshot_all_users_metrics():
 
         log.info("snapshot_metrics_task.start", count=len(active_users))
         
-        tasks = []
-        for user in active_users:
-            task = asyncio.create_task(_process_user(user))
-            tasks.append(task)
-        
+        # Запускаем обработку пользователей параллельно для ускорения
+        tasks = [_process_user(user) for user in active_users]
         await asyncio.gather(*tasks)
+        
         log.info("snapshot_metrics_task.finished")
 
 async def _process_user(user: User):

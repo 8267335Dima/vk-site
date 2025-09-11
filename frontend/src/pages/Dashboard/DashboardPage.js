@@ -15,9 +15,9 @@ import SlowMotionVideoIcon from '@mui/icons-material/SlowMotionVideo';
 
 // Hooks & State Management
 import { useWebSocketContext } from 'contexts/WebSocketProvider';
-import { useUserStore } from 'store/userStore';
+import { useUserStore, useUserActions } from 'store/userStore'; // --- ИМПОРТ: Стабильный хук для действий
 import { useDashboardManager } from 'hooks/useDashboardManager';
-import { useFeatureFlag } from 'hooks/useFeatureFlag'; // <-- Централизованная проверка прав
+import { useFeatureFlag } from 'hooks/useFeatureFlag';
 import { useMutation } from '@tanstack/react-query';
 
 // API & Utils
@@ -45,22 +45,22 @@ const motionVariants = {
 };
 
 const UserProfileCard = ({ userInfo, connectionStatus, onProxyManagerOpen }) => {
-    // --- ИСПРАВЛЕНИЕ: Используем хук useFeatureFlag для проверки прав ---
     const { isFeatureAvailable } = useFeatureFlag();
+    // --- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: Получаем сеттер через стабильный хук, а не через getState() ---
+    const { setUserInfo } = useUserActions();
     const canUseProxyManager = isFeatureAvailable('proxy_management');
     const canChangeSpeed = isFeatureAvailable('fast_slow_delay_profile');
 
     const mutation = useMutation({
         mutationFn: updateUserDelayProfile,
         onSuccess: (response) => {
-            useUserStore.getState().setUserInfo(response.data);
+            setUserInfo(response.data);
             toast.success(`Скорость работы изменена!`);
         },
         onError: () => toast.error("Не удалось изменить скорость.")
     });
 
     const handleSpeedChange = (event) => {
-        // Передаем объект, как ожидает API-эндпоинт
         mutation.mutate({ delay_profile: event.target.value });
     };
 
@@ -126,10 +126,14 @@ const UserProfileCard = ({ userInfo, connectionStatus, onProxyManagerOpen }) => 
     );
 };
 
+// --- УЛУЧШЕНИЕ: Стабильный объект-заглушка, чтобы избежать ошибок при первом рендере ---
+const defaultWsContext = { connectionStatus: 'Подключение...' };
+
 export default function DashboardPage() {
+    // Оптимизация: выбираем только те части состояния, которые нужны этому компоненту
     const userInfo = useUserStore(state => state.userInfo);
     const { isFeatureAvailable } = useFeatureFlag();
-    const { connectionStatus } = useWebSocketContext() || { connectionStatus: 'Подключение...' };
+    const { connectionStatus } = useWebSocketContext() || defaultWsContext;
     const { modalState, openModal, closeModal, onActionSubmit } = useDashboardManager();
     const [isProxyModalOpen, setProxyModalOpen] = useState(false);
     const [automationToEdit, setAutomationToEdit] = useState(null);
@@ -140,7 +144,6 @@ export default function DashboardPage() {
 
     return (
         <Box sx={{ py: 4, px: { xs: 1, sm: 2, lg: 3 } }}>
-            {/* --- Приветствие --- */}
             <motion.div custom={0} variants={motionVariants} initial="initial" animate="animate">
                 <Typography variant="h4" component="h1" sx={{ fontWeight: 700, mb: 3 }}>
                     Здравствуйте, {userInfo.first_name}!
@@ -148,13 +151,12 @@ export default function DashboardPage() {
             </motion.div>
             
             <Grid container spacing={3}>
-                {/* ====== Левая колонка: Управление ====== */}
                 <Grid item xs={12} lg={4}>
-                    <Stack spacing={3}>
-                        <motion.div custom={1} variants={motionVariants} initial="initial" animate="animate">
+                    <Stack spacing={3} sx={{ height: '100%' }}>
+                        <motion.div custom={1} variants={motionVariants} initial="initial" animate="animate" style={{ flex: 1 }}>
                            <ActionPanel onConfigure={openModal} />
                         </motion.div>
-                         <motion.div custom={2} variants={motionVariants} initial="initial" animate="animate">
+                         <motion.div custom={2} variants={motionVariants} initial="initial" animate="animate" style={{ flex: 1 }}>
                            <Suspense fallback={<LazyLoader />}>
                                 <AutomationsWidget onSettingsClick={setAutomationToEdit} />
                             </Suspense>
@@ -162,7 +164,6 @@ export default function DashboardPage() {
                     </Stack>
                 </Grid>
                 
-                {/* ====== Правая колонка: Аналитика ====== */}
                 <Grid item xs={12} lg={8}>
                     <Stack spacing={3}>
                         <motion.div custom={3} variants={motionVariants} initial="initial" animate="animate">
@@ -191,7 +192,6 @@ export default function DashboardPage() {
                     </Stack>
                 </Grid>
 
-                 {/* ====== Нижний блок: Журнал задач ====== */}
                 <Grid item xs={12}>
                     <motion.div custom={7} variants={motionVariants} initial="initial" animate="animate">
                          <TaskLogWidget />
@@ -199,7 +199,6 @@ export default function DashboardPage() {
                 </Grid>
             </Grid>
             
-            {/* ====== Модальные окна ====== */}
             <ActionModal {...modalState} onClose={closeModal} onSubmit={onActionSubmit} />
             <Suspense>
                 {isProxyModalOpen && <ProxyManagerModal open={isProxyModalOpen} onClose={() => setProxyModalOpen(false)} />}

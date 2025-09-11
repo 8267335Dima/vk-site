@@ -3,50 +3,41 @@ import React, { createContext, useState, useEffect, useMemo, useCallback, useCon
 import useWebSocket, { ReadyState } from 'react-use-websocket';
 import { toast } from 'react-hot-toast';
 import { useQueryClient } from '@tanstack/react-query';
-import { useUserStore } from 'store/userStore';
+// --- ИСПРАВЛЕНИЕ: Используем хук для получения стабильных действий ---
+import { useUserStore, useUserActions } from 'store/userStore';
 
-// 1. Создаем контекст
 export const WebSocketContext = createContext(null);
 
-// 2. Создаем кастомный хук для удобного и безопасного доступа к контексту
 export const useWebSocketContext = () => {
-    // useContext может вернуть null, если компонент находится вне провайдера
     return useContext(WebSocketContext);
 };
 
-// 3. Создаем компонент-провайдер, который будет оборачивать наше приложение
 export const WebSocketProvider = ({ children }) => {
     const queryClient = useQueryClient();
     const jwtToken = useUserStore(state => state.jwtToken);
-    const updateDailyStats = useUserStore(state => state.updateDailyStats);
+    // --- ИСПРАВЛЕНИЕ: Получаем действие через стабильный хук ---
+    const { setUserInfo } = useUserActions(); 
     
-    // Хранилища для данных, получаемых по WebSocket
     const [logs, setLogs] = useState([]);
     const [taskHistory, setTaskHistory] = useState({});
 
-    // Формируем URL для WebSocket-соединения.
-    // useMemo гарантирует, что URL будет пересчитан только при изменении токена.
     const socketUrl = useMemo(() => {
         if (!jwtToken) return null;
         const location = window.location;
         const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        
-        const wsHost = location.host; 
-        
+        const wsHost = process.env.NODE_ENV === 'development' ? 'localhost:8000' : location.host;
         return `${wsProtocol}//${wsHost}/api/v1/ws`;
     }, [jwtToken]);
     
-    // Настройки для WebSocket-соединения, включая передачу JWT в subprotocol для аутентификации.
     const socketOptions = useMemo(() => ({
         protocols: jwtToken ? ['bearer', jwtToken] : undefined,
-        shouldReconnect: (closeEvent) => !!jwtToken, // Переподключаться, только если пользователь авторизован
-        reconnectInterval: 5000, // Попытка переподключения каждые 5 секунд
+        shouldReconnect: (closeEvent) => !!jwtToken,
+        reconnectInterval: 5000,
     }), [jwtToken]);
 
-    // Основной хук, который управляет WebSocket-соединением
     const { lastJsonMessage, readyState } = useWebSocket(socketUrl, socketOptions);
     
-    // Обработчик обновлений истории задач
+    // --- ИСПРАВЛЕНИЕ: Оборачиваем обработчик в useCallback для стабильности ---
     const handleTaskHistoryUpdate = useCallback((payload) => {
         setTaskHistory(prev => ({ ...prev, [payload.task_history_id]: payload }));
         if (payload.status === 'SUCCESS') {
@@ -55,16 +46,14 @@ export const WebSocketProvider = ({ children }) => {
         if (payload.status === 'FAILURE') {
             toast.error(`Задача провалена: ${payload.result}`, { duration: 8000 });
         }
-        // Обновляем данные в React Query, чтобы страница истории обновилась
         queryClient.invalidateQueries({ queryKey: ['task_history'] });
     }, [queryClient]);
 
-    // Обработчик новых уведомлений
+    // --- ИСПРАВЛЕНИЕ: Оборачиваем обработчик в useCallback для стабильности ---
     const handleNewNotification = useCallback((payload) => {
         const message = payload.message;
         if (payload.level === 'error') {
             toast.error(message, { duration: 8000 });
-            // Если пришла ошибка (например, невалидный токен), обновляем данные по автоматизациям
             queryClient.invalidateQueries({ queryKey: ['automations'] });
             queryClient.invalidateQueries({ queryKey: ['scenarios'] });
         } else {
@@ -73,18 +62,22 @@ export const WebSocketProvider = ({ children }) => {
         queryClient.invalidateQueries({ queryKey: ['notifications'] });
     }, [queryClient]);
 
-    // useEffect для обработки всех входящих сообщений
+    // --- ИСПРАВЛЕНИЕ: Оборачиваем обработчик в useCallback для стабильности ---
+    const handleStatsUpdate = useCallback((payload) => {
+        // Обновляем userInfo, добавляя или обновляя счетчики
+        setUserInfo({ counters: payload });
+    }, [setUserInfo]);
+
     useEffect(() => {
         if (lastJsonMessage !== null) {
             const { type, payload } = lastJsonMessage;
             
             switch (type) {
                 case 'log':
-                    // Добавляем новый лог в начало массива, ограничивая его размер
                     setLogs(prev => [payload, ...prev.slice(0, 199)]);
                     break;
                 case 'stats_update':
-                    updateDailyStats(payload.stat, payload.value);
+                    handleStatsUpdate(payload);
                     break;
                 case 'task_history_update':
                     handleTaskHistoryUpdate(payload);
@@ -96,9 +89,8 @@ export const WebSocketProvider = ({ children }) => {
                     break;
             }
         }
-    }, [lastJsonMessage, updateDailyStats, handleTaskHistoryUpdate, handleNewNotification]);
+    }, [lastJsonMessage, handleStatsUpdate, handleTaskHistoryUpdate, handleNewNotification]);
 
-    // Преобразуем числовой статус соединения в человекочитаемый текст
     const connectionStatus = useMemo(() => ({
         [ReadyState.CONNECTING]: 'Подключение...',
         [ReadyState.OPEN]: 'Live',
@@ -107,7 +99,6 @@ export const WebSocketProvider = ({ children }) => {
         [ReadyState.UNINSTANTIATED]: 'Не подключено',
     }[readyState]), [readyState]);
 
-    // Формируем объект `value`, который будет доступен всем дочерним компонентам
     const value = useMemo(() => ({
         logs,
         connectionStatus,

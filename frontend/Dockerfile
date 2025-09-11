@@ -1,35 +1,35 @@
 # frontend/Dockerfile
 
-# --- STAGE 1: Build ---
-FROM node:20-alpine AS builder
+# --- Этап 1: Сборка зависимостей ---
+FROM node:20-alpine AS deps
 WORKDIR /app
+COPY package.json ./
+COPY package-lock.json ./
+RUN npm ci
 
-# Копируем package.json и yarn.lock для кеширования установки зависимостей
-COPY package.json yarn.lock ./
-RUN yarn install --frozen-lockfile
-
-# Теперь копируем остальной код приложения
+# --- Этап 2: Сборка исходного кода ---
+FROM deps AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-
-# Передаем переменную сборки из docker-compose.yml
+# Переменная окружения для API
 ARG REACT_APP_API_BASE_URL
 ENV REACT_APP_API_BASE_URL=$REACT_APP_API_BASE_URL
+RUN npm run build
 
-# Собираем production-билд
-RUN yarn build
-
-
-# --- STAGE 2: Serve ---
-FROM nginx:1.23-alpine
-
-# Копируем готовый билд из предыдущей стадии
-COPY --from=builder /app/build /usr/share/nginx/html
-
-# Копируем конфиг Nginx для правильной работы React Router
+# --- Этап 3: Финальный образ с Nginx для Production ---
+FROM nginx:1.27-alpine AS production
+# Копируем кастомный конфиг Nginx
 COPY nginx.conf /etc/nginx/conf.d/default.conf
-
-# Открываем порт 80, на котором работает Nginx
+# Копируем собранные статические файлы
+COPY --from=builder /app/build /usr/share/nginx/html
 EXPOSE 80
-
-# Запускаем Nginx
 CMD ["nginx", "-g", "daemon off;"]
+
+# --- Этап для разработки (не используется в прод-сборке) ---
+FROM deps AS development
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+EXPOSE 3000
+CMD ["npm", "start"]

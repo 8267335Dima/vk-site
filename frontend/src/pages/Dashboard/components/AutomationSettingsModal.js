@@ -12,7 +12,6 @@ const AutomationSettingsModal = ({ open, onClose, automation }) => {
 
     useEffect(() => {
         if (open && automation) {
-            // Устанавливаем настройки при открытии модального окна
             const defaults = {
                 count: 50,
                 filters: { sex: 0, is_online: false, allow_closed_profiles: false, remove_banned: true, last_seen_hours: 0, last_seen_days: 0 },
@@ -33,11 +32,22 @@ const AutomationSettingsModal = ({ open, onClose, automation }) => {
         onError: (error) => toast.error(error.response?.data?.detail || 'Ошибка сохранения'),
     });
 
-    const handleFieldChange = (e) => {
-        const { name, value, type, checked } = e.target;
-        const val = type === 'checkbox' ? checked : value;
-        
-        if (['sex', 'is_online', 'allow_closed_profiles', 'remove_banned', 'last_seen_hours', 'last_seen_days'].includes(name)) {
+    // --- ИСПРАВЛЕНИЕ: Универсальный обработчик, который принимает как (event), так и (name, value) ---
+    const handleSettingsChange = (nameOrEvent, value) => {
+        let name, val;
+        // Проверяем, пришел ли объект события или просто имя и значение
+        if (typeof nameOrEvent === 'string') {
+            name = nameOrEvent;
+            val = value;
+        } else { // Это объект события
+            const { target } = nameOrEvent;
+            name = target.name;
+            val = target.type === 'checkbox' ? target.checked : target.value;
+        }
+
+        const filterKeys = ['sex', 'is_online', 'allow_closed_profiles', 'remove_banned', 'last_seen_hours', 'last_seen_days', 'min_friends', 'min_followers'];
+
+        if (filterKeys.includes(name)) {
             setSettings(s => ({ ...s, filters: { ...s.filters, [name]: val } }));
         } else {
             setSettings(s => ({ ...s, [name]: val }));
@@ -61,7 +71,7 @@ const AutomationSettingsModal = ({ open, onClose, automation }) => {
         <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
             <DialogTitle sx={{ fontWeight: 600 }}>Настройки: {automation.name}</DialogTitle>
             <DialogContent dividers>
-                <Stack spacing={2}>
+                <Stack spacing={3} py={2}>
                     <Typography variant="body2" color="text.secondary">
                         Здесь вы можете задать параметры для автоматического выполнения задачи. Настройки сохраняются для каждого действия индивидуально.
                     </Typography>
@@ -73,7 +83,7 @@ const AutomationSettingsModal = ({ open, onClose, automation }) => {
                             label="Шаблон поздравления"
                             name="message_template"
                             value={settings.message_template || ''}
-                            onChange={handleFieldChange}
+                            onChange={handleSettingsChange}
                             helperText="Используйте {name} для подстановки имени друга."
                         />
                     )}
@@ -85,25 +95,25 @@ const AutomationSettingsModal = ({ open, onClose, automation }) => {
                             label="Количество действий за один запуск"
                             name="count"
                             value={settings.count || ''}
-                            onChange={handleFieldChange}
+                            onChange={handleSettingsChange}
                         />
                     )}
 
                     {needsFilters && <Divider />}
 
                     {needsFilters && automation.automation_type === 'remove_friends' && (
-                        <RemoveFriendsFilters filters={settings.filters || {}} onChange={handleFieldChange} />
+                        <RemoveFriendsFilters filters={settings.filters || {}} onChange={handleSettingsChange} />
                     )}
                     {needsFilters && !['remove_friends'].includes(automation.automation_type) && (
                         <CommonFiltersSettings
                             filters={settings.filters || {}}
-                            onChange={handleFieldChange}
+                            onChange={handleSettingsChange}
                             actionKey={automation.automation_type}
                         />
                     )}
                 </Stack>
             </DialogContent>
-            <DialogActions>
+            <DialogActions sx={{p: 2}}>
                 <Button onClick={onClose}>Отмена</Button>
                 <Button onClick={handleSave} variant="contained" disabled={mutation.isLoading}>
                     {mutation.isLoading ? <CircularProgress size={24} /> : 'Сохранить'}

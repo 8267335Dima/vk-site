@@ -5,77 +5,60 @@ import { ThemeProvider, CssBaseline, Box, CircularProgress } from '@mui/material
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'react-hot-toast';
 
-// Локальные импорты
 import { theme, globalStyles } from './theme.js';
 import { WebSocketProvider } from './contexts/WebSocketProvider.js';
-import { useUserStore } from './store/userStore.js';
+// --- ИЗМЕНЕНИЕ: Импортируем хук, который возвращает стабильный объект с действиями ---
+import { useUserStore, useUserActions } from './store/userStore.js';
 import Layout from './components/Layout.js';
 import ErrorBoundary from './components/ErrorBoundary.js';
 
-// Ленивая загрузка страниц для улучшения производительности
 const HomePage = lazy(() => import('./pages/Home/HomePage.js'));
 const LoginPage = lazy(() => import('./pages/Login/LoginPage.js'));
 const DashboardPage = lazy(() => import('./pages/Dashboard/DashboardPage.js'));
 const ScenariosPage = lazy(() => import('./pages/Scenarios/ScenarioPage.js'));
 const BillingPage = lazy(() => import('./pages/Billing/BillingPage.js'));
 
-// Конфигурация React Query
 const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 1000 * 60 * 5, // 5 минут
-      retry: 1, // Повторять запрос при ошибке 1 раз
-    },
-  },
+  defaultOptions: { queries: { staleTime: 1000 * 60 * 5, retry: 1 } },
 });
 
-// Компонент-загрузчик на весь экран
 const FullscreenLoader = () => (
     <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
         <CircularProgress />
     </Box>
 );
 
-/**
- * Компонент-"охранник" для приватных роутов.
- * Он не рендерит UI, а только проверяет авторизацию.
- * Если пользователь авторизован, он рендерит дочерние роуты (`<Outlet />`),
- * обернув их в WebSocketProvider. В противном случае — перенаправляет на страницу входа.
- */
 const PrivateRoutes = () => {
-    const { jwtToken, isLoading } = useUserStore(state => ({ jwtToken: state.jwtToken, isLoading: state.isLoading }));
+    const jwtToken = useUserStore(state => state.jwtToken);
+    const isLoading = useUserStore(state => state.isLoading);
 
     if (isLoading) {
         return <FullscreenLoader />;
     }
     
     return jwtToken ? (
-        <WebSocketProvider>
-            <Outlet /> 
-        </WebSocketProvider>
+        <WebSocketProvider><Outlet /></WebSocketProvider>
     ) : <Navigate to="/login" replace />;
 };
 
-
 function App() {
-  const { jwtToken, isLoading, loadUser, finishInitialLoad } = useUserStore(state => ({
-      jwtToken: state.jwtToken,
-      isLoading: state.isLoading,
-      loadUser: state.loadUser,
-      finishInitialLoad: state.finishInitialLoad
-  }));
+  // Получаем только необходимые данные (состояние)
+  const jwtToken = useUserStore(state => state.jwtToken);
+  const isLoading = useUserStore(state => state.isLoading);
+  // --- ИСПРАВЛЕНИЕ: Получаем все действия через новый стабильный хук ---
+  // Этот хук всегда возвращает один и тот же объект, что безопасно для useEffect
+  const { loadUser, finishInitialLoad } = useUserActions();
 
-  // Этот эффект отвечает за начальную загрузку данных пользователя
-  // или завершение загрузки, если токена нет.
   useEffect(() => {
+    // Теперь `loadUser` и `finishInitialLoad` гарантированно стабильны
+    // и не будут вызывать этот эффект без необходимости.
     if (jwtToken) {
       loadUser();
     } else {
       finishInitialLoad();
     }
-  }, [jwtToken, loadUser, finishInitialLoad]);
+  }, [jwtToken, loadUser, finishInitialLoad]); // Зависимости теперь стабильны
 
-  // Показываем глобальный загрузчик, пока идет самая первая проверка токена
   if (isLoading) {
     return <FullscreenLoader />;
   }
@@ -84,50 +67,21 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider theme={theme}>
         <CssBaseline />
-        <Toaster
-          position="bottom-right"
-          toastOptions={{
-            className: 'toaster-custom',
-            style: {
-              background: 'rgba(30, 31, 37, 0.9)',
-              backdropFilter: 'blur(10px)',
-              color: '#FFFFFF',
-              borderRadius: '12px',
-              border: '1px solid rgba(160, 163, 189, 0.15)',
-              boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.2)',
-            },
-          }}
-          containerStyle={{
-            maxHeight: 'calc(3 * (60px + 16px))',
-            overflow: 'hidden',
-          }}
-        />
+        <Toaster position="bottom-right" toastOptions={{ style: { background: '#17181D', color: '#FFFFFF', border: '1px solid rgba(160, 163, 189, 0.15)' } }} />
         <style>{globalStyles}</style>
         <Router>
           <ErrorBoundary>
             <Suspense fallback={<FullscreenLoader />}>
               <Routes>
-                {/* 
-                  Layout теперь является единой точкой входа для всех страниц.
-                  Он рендерит шапку и футер, а внутри себя через <Outlet /> 
-                  отображает нужную страницу в зависимости от URL.
-                */}
                 <Route element={<Layout />}>
-                  
-                  {/* --- Публичные роуты --- */}
                   <Route path="/" element={<HomePage />} />
                   <Route path="/login" element={jwtToken ? <Navigate to="/dashboard" replace /> : <LoginPage />} />
                   <Route path="/billing" element={<BillingPage />} />
-
-                  {/* --- Приватные роуты, защищенные "охранником" PrivateRoutes --- */}
                   <Route element={<PrivateRoutes />}>
                     <Route path="/dashboard" element={<DashboardPage />} />
                     <Route path="/scenarios" element={<ScenariosPage />} />
                   </Route>
-
-                  {/* --- Обработка всех остальных путей (404) --- */}
                   <Route path="*" element={<Navigate to="/" replace />} />
-
                 </Route>
               </Routes>
             </Suspense>

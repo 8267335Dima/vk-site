@@ -4,13 +4,21 @@ import {
     AppBar, Toolbar, Typography, Button, Container, Box, Stack,
     useTheme, useMediaQuery, IconButton, Drawer, List, ListItem, ListItemButton
 } from '@mui/material';
-import { Link as RouterLink, useLocation, Outlet } from 'react-router-dom'; // <--- Outlet здесь ключ
-import { useUserStore } from 'store/userStore';
+import { Link as RouterLink, useLocation, Outlet } from 'react-router-dom';
+import { useUserStore, useUserActions } from 'store/userStore'; // Импортируем useUserActions
 import TrackChangesIcon from '@mui/icons-material/TrackChanges';
 import MenuIcon from '@mui/icons-material/Menu';
 import { content } from 'content/content';
 import NotificationsBell from './NotificationsBell';
 import Footer from './Footer';
+
+// --- ИСПРАВЛЕНИЕ: Выносим массив navItems за пределы компонента ---
+// Теперь это стабильная константа, которая не будет пересоздаваться при каждом рендере.
+const navItems = [
+    { label: content.nav.dashboard, to: "/dashboard" },
+    { label: content.nav.scenarios, to: "/scenarios" },
+    { label: content.nav.billing, to: "/billing" },
+];
 
 const NavButton = ({ to, children }) => {
     const location = useLocation();
@@ -47,7 +55,7 @@ const NavButton = ({ to, children }) => {
     );
 };
 
-const MobileDrawer = ({ navItems, open, onClose, onLogout }) => (
+const MobileDrawer = ({ open, onClose, onLogout }) => (
     <Drawer anchor="right" open={open} onClose={onClose} PaperProps={{ sx: { backgroundColor: 'background.default' }}}>
         <Box sx={{ width: 250, p: 2, height: '100%' }} role="presentation">
             <List>
@@ -67,19 +75,14 @@ const MobileDrawer = ({ navItems, open, onClose, onLogout }) => (
 );
 
 
-// --- ИЗМЕНЕНИЕ: Убираем проп 'children' ---
-// Layout теперь всегда является оберткой для роутов и использует <Outlet />
 export default function Layout() {
-    const { jwtToken, logout } = useUserStore(state => ({ jwtToken: state.jwtToken, logout: state.logout }));
+    // --- ИСПРАВЛЕНИЕ: Получаем каждое значение из стора по отдельности для оптимизации ---
+    const jwtToken = useUserStore(state => state.jwtToken);
+    const { logout } = useUserActions(); // Используем хук для стабильного получения действия
+    
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
     const [drawerOpen, setDrawerOpen] = React.useState(false);
-
-    const navItems = [
-        { label: content.nav.dashboard, to: "/dashboard" },
-        { label: content.nav.scenarios, to: "/scenarios" },
-        { label: content.nav.billing, to: "/billing" },
-    ];
     
     return (
         <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
@@ -125,10 +128,9 @@ export default function Layout() {
                 </Container>
             </AppBar>
             
-            {isMobile && jwtToken && <MobileDrawer navItems={navItems} open={drawerOpen} onClose={() => setDrawerOpen(false)} onLogout={() => { setDrawerOpen(false); logout(); }} />}
+            {isMobile && jwtToken && <MobileDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} onLogout={() => { setDrawerOpen(false); logout(); }} />}
 
             <Box component="main" sx={{ flexGrow: 1 }}>
-                 {/* --- ИЗМЕНЕНИЕ: Всегда используем Outlet для вложенных роутов --- */}
                  <Outlet />
             </Box>
 

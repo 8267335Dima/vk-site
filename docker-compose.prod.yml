@@ -1,8 +1,12 @@
-#docker-compose.prod.yml
+# ---------------------------------------------------- #
+#       Production Docker Compose for Social Pilot     #
+# ---------------------------------------------------- #
+#  Запуск: docker-compose -f docker-compose.prod.yml up --build -d  #
+# ---------------------------------------------------- #
 
 services:
   postgres:
-    image: postgres:15-alpine
+    image: postgres:16-alpine
     container_name: social_pilot_postgres_prod
     env_file: ./.env
     ports:
@@ -36,15 +40,12 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: social_pilot_backend_prod
-    # --- ИСПРАВЛЕНИЕ: Добавлен проброс порта ---
-    ports:
-      - "8000:8000"
     env_file: ./.env
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
     command: >
-      sh -c "poetry run uvicorn app.main:app --host 0.0.0.0 --port 8000"
+      sh -c "poetry run alembic upgrade head && poetry run uvicorn app.main:app --host 0.0.0.0 --port 8000"
     restart: always
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
@@ -62,7 +63,10 @@ services:
     depends_on:
       - redis
       - backend
-    command: poetry run celery -A app.celery_worker.celery_app worker --loglevel=info -c 2 -Q high_priority,default,low_priority
+    command: >
+      poetry run celery -A app.celery_worker.celery_app worker 
+      --loglevel=info -P gevent -c 10 
+      -Q high_priority,default,low_priority
     restart: always
 
   celery_beat:
@@ -84,9 +88,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      target: production
       args:
-        # Убедитесь, что эта переменная НЕ задана в .env для production,
-        # чтобы фронтенд использовал относительные пути к API.
         - REACT_APP_API_BASE_URL=${REACT_APP_API_BASE_URL}
     container_name: social_pilot_frontend_prod
     ports:
@@ -94,20 +97,7 @@ services:
     depends_on:
       - backend
     restart: always
-
-  flower:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: social_pilot_flower_prod
-    ports:
-      - "5555:5555"
-    env_file: ./.env
-    depends_on:
-      - redis
-    command: poetry run celery -A app.celery_worker.celery_app flower --persistent=True --db=/home/appuser/flower.db
-    restart: always
-
+  
   loki:
     image: grafana/loki:latest
     container_name: social_pilot_loki_prod
@@ -139,6 +129,22 @@ services:
     restart: always
     depends_on:
       - loki
+
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: social_pilot_flower_prod
+    ports:
+      - "5555:5555"
+    env_file: ./.env
+    depends_on:
+      - redis
+    command: >
+      poetry run celery -A app.celery_worker.celery_app flower 
+      --broker=redis://${REDIS_HOST}:${REDIS_PORT}/0
+      --persistent=True --db=/home/appuser/flower.db
+    restart: always
 
 volumes:
   postgres_data_prod: {}

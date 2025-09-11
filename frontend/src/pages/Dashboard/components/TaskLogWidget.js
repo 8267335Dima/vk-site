@@ -20,13 +20,19 @@ const statusMap = {
     RETRY: { label: 'Повтор', color: 'secondary' },
 };
 
-const TaskEntry = ({ task }) => {
+const TaskEntry = React.memo(({ task }) => {
     const [open, setOpen] = useState(false);
     const statusInfo = statusMap[task.status] || { label: task.status, color: 'default' };
 
     return (
-        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
-            <Paper variant="outlined" sx={{ mb: 1.5, bgcolor: 'background.default' }}>
+        <motion.div
+            layout
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, transition: { duration: 0.1 } }}
+            transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+        >
+            <Paper variant="outlined" sx={{ mb: 1.5, bgcolor: 'background.default', transition: 'box-shadow 0.2s', '&:hover': { boxShadow: 3 } }}>
                 <Box
                     sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 2, cursor: task.parameters ? 'pointer' : 'default' }}
                     onClick={() => task.parameters && setOpen(!open)}
@@ -42,7 +48,7 @@ const TaskEntry = ({ task }) => {
                 </Box>
                 <Collapse in={open} timeout="auto" unmountOnExit>
                     <Box sx={{ px: 2, pb: 2, pl: '72px' }}>
-                        <Box sx={{ whiteSpace: 'pre-wrap', fontFamily: '"Fira Code", monospace', fontSize: '0.8rem', bgcolor: (theme) => alpha(theme.palette.divider, 0.3), p: 1.5, borderRadius: 2 }}>
+                        <Box sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: '0.8rem', bgcolor: (theme) => alpha(theme.palette.divider, 0.3), p: 1.5, borderRadius: 2 }}>
                             <Typography variant="caption" display="block">ID Задачи: {task.celery_task_id || 'N/A'}</Typography>
                             {task.result && <Typography variant="caption" display="block">Результат: {task.result}</Typography>}
                             {task.parameters && <Typography variant="caption">Параметры: {JSON.stringify(task.parameters, null, 2)}</Typography>}
@@ -52,14 +58,26 @@ const TaskEntry = ({ task }) => {
             </Paper>
         </motion.div>
     );
-};
+});
 
 export default function TaskLogWidget() {
-    const [filters, setFilters] = useState({ status: '' });
-    const { data, error, fetchNextPage, hasNextPage, isFetching, isFetchingNextPage, status } = useInfiniteQuery({
-        queryKey: ['task_history', filters],
-        queryFn: (context) => fetchTaskHistory(context, filters),
-        getNextPageParam: (lastPage) => lastPage.has_more ? lastPage.page + 1 : undefined,
+    // --- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: Фильтр теперь хранится как примитив (строка), а не объект ---
+    const [statusFilter, setStatusFilter] = useState('');
+    
+    const {
+        data,
+        error,
+        fetchNextPage,
+        hasNextPage,
+        isFetching,
+        isFetchingNextPage,
+        status,
+    } = useInfiniteQuery({
+        // --- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: queryKey теперь зависит от стабильной строки, что предотвращает бесконечные запросы ---
+        queryKey: ['task_history', statusFilter],
+        queryFn: ({ pageParam = 1 }) => fetchTaskHistory({ pageParam }, { status: statusFilter || undefined }),
+        getNextPageParam: (lastPage) => (lastPage.has_more ? lastPage.page + 1 : undefined),
+        initialPageParam: 1,
     });
 
     const observer = useRef();
@@ -80,7 +98,7 @@ export default function TaskLogWidget() {
                 <Typography variant="h6" sx={{ fontWeight: 600 }}>Журнал задач</Typography>
                 <FormControl sx={{ minWidth: 200 }} size="small">
                     <InputLabel>Статус</InputLabel>
-                    <Select value={filters.status} label="Статус" onChange={(e) => setFilters({ ...filters, status: e.target.value })}>
+                    <Select value={statusFilter} label="Статус" onChange={(e) => setStatusFilter(e.target.value)}>
                         <MenuItem value=""><em>Все статусы</em></MenuItem>
                         {Object.entries(statusMap).map(([key, value]) => (
                             <MenuItem key={key} value={key}>{value.label}</MenuItem>
@@ -90,7 +108,7 @@ export default function TaskLogWidget() {
             </Stack>
 
             <Box sx={{ flexGrow: 1, overflowY: 'auto', pr: 1, maxHeight: '600px' }}>
-                {status === 'loading' && <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}><CircularProgress /></Box>}
+                {status === 'pending' && <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}><CircularProgress /></Box>}
                 {status === 'error' && <Typography color="error">Ошибка: {error.message}</Typography>}
                 
                 <AnimatePresence>
