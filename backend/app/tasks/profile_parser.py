@@ -9,6 +9,7 @@ from app.db.session import AsyncSessionFactory
 from app.db.models import User 
 from app.services.profile_analytics_service import ProfileAnalyticsService
 from app.services.vk_api import VKAuthError
+from app.tasks.utils import run_async_from_sync
 
 log = structlog.get_logger(__name__)
 
@@ -45,4 +46,4 @@ async def _process_user(user: User):
 @shared_task(name="app.tasks.profile_parser.snapshot_all_users_metrics")
 def snapshot_all_users_metrics():
     """Синхронная задача-обертка для Celery."""
-    asyncio.run(_snapshot_all_users_metrics_async())
+    run_async_from_sync(_snapshot_all_users_metrics_async()) 

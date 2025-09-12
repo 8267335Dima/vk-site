@@ -1,5 +1,6 @@
 # backend/app/tasks/runner.py
-from celery import shared_task, Task
+from app.celery_app import celery_app  # Импортируем наш экземпляр
+from celery import Task # Task нужен для type hinting в `self`
 from redis.asyncio import Redis as AsyncRedis
 import asyncio
 from sqlalchemy.future import select
@@ -72,45 +73,43 @@ async def _execute_task_logic(task_history_id: int, task_name_key: str, **kwargs
 
 # --- Определения задач Celery ---
 
-@shared_task(bind=True, base=AppBaseTask, max_retries=3, default_retry_delay=300)
+@celery_app.task(bind=True, base=AppBaseTask, max_retries=3, default_retry_delay=300)
 async def like_feed(self: Task, task_history_id: int, **kwargs):
     await _execute_task_logic(task_history_id, "like_feed", **kwargs)
 
-# ... (аналогичные декораторы для всех задач из TASK_SERVICE_MAP)
-@shared_task(bind=True, base=AppBaseTask, max_retries=3, default_retry_delay=300)
+@celery_app.task(bind=True, base=AppBaseTask, max_retries=3, default_retry_delay=300)
 async def add_recommended_friends(self: Task, task_history_id: int, **kwargs):
     await _execute_task_logic(task_history_id, "add_recommended", **kwargs)
 
-@shared_task(bind=True, base=AppBaseTask, max_retries=3, default_retry_delay=60)
+@celery_app.task(bind=True, base=AppBaseTask, max_retries=3, default_retry_delay=60)
 async def accept_friend_requests(self: Task, task_history_id: int, **kwargs):
     await _execute_task_logic(task_history_id, "accept_friends", **kwargs)
 
-@shared_task(bind=True, base=AppBaseTask, max_retries=2, default_retry_delay=60)
+@celery_app.task(bind=True, base=AppBaseTask, max_retries=2, default_retry_delay=60)
 async def remove_friends_by_criteria(self: Task, task_history_id: int, **kwargs):
     await _execute_task_logic(task_history_id, "remove_friends", **kwargs)
 
-@shared_task(bind=True, base=AppBaseTask, max_retries=2, default_retry_delay=60)
+@celery_app.task(bind=True, base=AppBaseTask, max_retries=2, default_retry_delay=60)
 async def view_stories(self: Task, task_history_id: int, **kwargs):
     await _execute_task_logic(task_history_id, "view_stories", **kwargs)
 
-@shared_task(bind=True, base=AppBaseTask, max_retries=2, default_retry_delay=120)
+@celery_app.task(bind=True, base=AppBaseTask, max_retries=2, default_retry_delay=120)
 async def birthday_congratulation(self: Task, task_history_id: int, **kwargs):
     await _execute_task_logic(task_history_id, "birthday_congratulation", **kwargs)
 
-# НОВЫЕ ЗАДАЧИ
-@shared_task(bind=True, base=AppBaseTask, max_retries=2, default_retry_delay=300)
+@celery_app.task(bind=True, base=AppBaseTask, max_retries=2, default_retry_delay=300)
 async def mass_messaging(self: Task, task_history_id: int, **kwargs):
     await _execute_task_logic(task_history_id, "mass_messaging", **kwargs)
 
-@shared_task(bind=True, base=AppBaseTask, max_retries=5, default_retry_delay=60)
+@celery_app.task(bind=True, base=AppBaseTask, max_retries=5, default_retry_delay=60)
 async def eternal_online(self: Task, task_history_id: int, **kwargs):
     await _execute_task_logic(task_history_id, "eternal_online", **kwargs)
 
-@shared_task(bind=True, base=AppBaseTask, max_retries=3, default_retry_delay=300)
+@celery_app.task(bind=True, base=AppBaseTask, max_retries=3, default_retry_delay=300)
 async def like_friends_feed(self: Task, task_history_id: int, **kwargs):
     await _execute_task_logic(task_history_id, "like_friends_feed", **kwargs)
 
-@shared_task(bind=True, base=AppBaseTask, name="app.tasks.runner.run_scenario_from_scheduler")
+@celery_app.task(bind=True, base=AppBaseTask, name="app.tasks.runner.run_scenario_from_scheduler")
 async def run_scenario_from_scheduler(self: Task, scenario_id: int):
     """
     Эта задача запускается по расписанию Celery Beat.

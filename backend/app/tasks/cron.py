@@ -22,6 +22,7 @@ from app.core.config_loader import PLAN_CONFIG
 from app.core.plans import get_limits_for_plan
 from app.services.analytics_service import AnalyticsService
 from app.services.vk_api import VKAuthError
+from app.tasks.utils import run_async_from_sync  # <--- КЛЮЧЕВОЕ ИЗМЕНЕНИЕ
 
 log = structlog.get_logger(__name__)
 redis_client = Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, db=2, decode_responses=True)
@@ -37,7 +38,7 @@ TASK_FUNC_MAP = {
     "eternal_online": eternal_online,
 }
 
-# --- АСИНХРОННЫЕ ХЕЛПЕРЫ И ЛОГИКА ---
+# --- АСИНХРОННЫЕ ХЕЛПЕРЫ И ЛОГИКА (без изменений) ---
 
 async def _create_and_run_task(session, user_id, task_name, settings):
     """(Асинхронный хелпер) Создает TaskHistory и запускает Celery задачу."""
@@ -217,35 +218,24 @@ async def _snapshot_all_users_friends_count_async():
         
         log.info("snapshot_friends.success", processed=processed_count)
 
-# --- УТИЛИТА ДЛЯ ЗАПУСКА ASYNC ИЗ SYNC КОНТЕКСТА CELERY ---
-
-def run_async_task(coro):
-    """Надежно запускает корутину, используя существующий или новый event loop."""
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    return loop.run_until_complete(coro)
-
-# --- СИНХРОННЫЕ ЗАДАЧИ-ОБЕРТКИ ДЛЯ CELERY ---
+# --- СИНХРОННЫЕ ЗАДАЧИ-ОБЕРТКИ ДЛЯ CELERY (ИСПРАВЛЕНО) ---
 
 @shared_task(name="app.tasks.cron.aggregate_daily_stats")
 def aggregate_daily_stats():
     """Синхронная входная точка для Celery."""
-    run_async_task(_aggregate_daily_stats_async())
+    run_async_from_sync(_aggregate_daily_stats_async())
 
 @shared_task(name="app.tasks.cron.run_daily_automations", ignore_result=True)
 def run_daily_automations(automation_group: str):
     """Синхронная входная точка для Celery."""
-    run_async_task(_run_daily_automations_async(automation_group))
+    run_async_from_sync(_run_daily_automations_async(automation_group))
 
 @shared_task(name="app.tasks.cron.check_expired_plans")
 def check_expired_plans():
     """Синхронная входная точка для Celery."""
-    run_async_task(_check_expired_plans_async())
+    run_async_from_sync(_check_expired_plans_async())
 
 @shared_task(name="app.tasks.cron.snapshot_all_users_friends_count")
 def snapshot_all_users_friends_count():
     """Синхронная входная точка для Celery."""
-    run_async_task(_snapshot_all_users_friends_count_async())
+    run_async_from_sync(_snapshot_all_users_friends_count_async())

@@ -1,11 +1,11 @@
 # backend/app/tasks/maintenance.py
 import datetime
-import asyncio # --- НОВЫЙ ИМПОРТ ---
 from celery import shared_task
 from sqlalchemy import delete
 from app.db.session import AsyncSessionFactory
 from app.db.models import ActionLog
 import structlog
+from app.tasks.utils import run_async_from_sync # <--- ИМПОРТ
 
 log = structlog.get_logger(__name__)
 
@@ -21,4 +21,4 @@ async def _clear_old_action_logs_async():
 @shared_task(name="app.tasks.maintenance.clear_old_action_logs")
 def clear_old_action_logs():
     """Синхронная задача-обертка для Celery."""
-    asyncio.run(_clear_old_action_logs_async())
+    run_async_from_sync(_clear_old_action_logs_async()) # <--- ЗАМЕНА
