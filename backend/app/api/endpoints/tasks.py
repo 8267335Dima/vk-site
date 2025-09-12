@@ -46,32 +46,22 @@ async def _enqueue_task(
         raise HTTPException(status_code=404, detail="Задача не найдена.")
     
     task_config = next((item for item in AUTOMATIONS_CONFIG if item['id'] == task_key), {})
-    task_name = task_config.get('name', "Неизвестная задача")
+    task_display_name = task_config.get('name', "Неизвестная задача") # <--- ИЗМЕНЕНИЕ 1: Сохраняем имя в переменную
 
     task_history = TaskHistory(
-        user_id=user.id, task_name=task_name, status="PENDING",
+        user_id=user.id, task_name=task_display_name, status="PENDING", # <--- ИЗМЕНЕНИЕ 2: Используем переменную
         parameters=request_data.model_dump()
     )
     db.add(task_history)
     await db.flush()
 
-    # --- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ ЛОГИКИ ---
     celery_kwargs = {}
     model_dict = request_data.model_dump()
 
     if params_key:
-        # Если указан ключ (например, 'filters'), мы берем значение из этого ключа
-        # и распаковываем его как аргументы для Celery.
-        # Это решает проблему для AcceptFriendsRequest.
-        # model_dict['filters'] -> {'sex': 0, ...}
-        # celery_kwargs -> {'sex': 0, ...}
         if params_key in model_dict and isinstance(model_dict[params_key], dict):
             celery_kwargs = model_dict[params_key]
     else:
-        # Если ключ не указан, распаковываем всю модель.
-        # Это работает для AddFriendsRequest и других.
-        # model_dict -> {'count': 20, 'filters': {...}}
-        # celery_kwargs -> {'count': 20, 'filters': {...}}
         celery_kwargs = model_dict
 
     task_result = task_func.apply_async(
@@ -81,8 +71,11 @@ async def _enqueue_task(
     task_history.celery_task_id = task_result.id
     await db.commit()
     
+    # --- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ ---
+    # Мы больше не обращаемся к объекту task_history после коммита.
+    # Мы используем переменную, которую сохранили заранее.
     return ActionResponse(
-        message=f"Задача '{task_history.task_name}' успешно добавлена в очередь.",
+        message=f"Задача '{task_display_name}' успешно добавлена в очередь.",
         task_id=task_result.id
     )
 

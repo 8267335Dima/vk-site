@@ -25,7 +25,6 @@
     "react-hot-toast": "^2.4.1",
     "react-router-dom": "^6.25.1",
     "react-scripts": "5.0.1",
-    "react-use-websocket": "^4.8.1",
     "recharts": "^2.12.7",
     "web-vitals": "^4.2.2",
     "zustand": "^4.5.4"
@@ -33,10 +32,10 @@
   "scripts": {
     "start": "react-scripts start",
     "start-backend": "cd ../backend && poetry run uvicorn app.main:app --reload",
-    "start-celery": "cd ../backend && poetry run celery -A app.celery_worker.celery_app worker --loglevel=info -P gevent",
-    "services:up": "cd ../ && docker compose up",
-    "services:down": "cd ../ && docker compose down --remove-orphans",
-    "dev": "concurrently --kill-others --names \"SERVICES,FRONTEND\" -c \"auto\" \"npm:services:up\" \"npm:start\"",
+    "start-celery": "cd ../backend && poetry run celery -A app.celery_worker.celery_app worker --loglevel=info",
+    "services:up": "cd ../ && docker-compose up",
+    "services:down": "cd ../ && docker-compose down --remove-orphans",
+    "dev": "concurrently --kill-others --names \"SERVICES,BACKEND,CELERY,FRONTEND\" -c \"auto\" \"npm:services:up\" \"npm:start-backend\" \"npm:start-celery\" \"npm:start\"",
     "build": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject"

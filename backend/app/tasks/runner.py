@@ -1,6 +1,6 @@
 # backend/app/tasks/runner.py
-from app.celery_app import celery_app  # Импортируем наш экземпляр
-from celery import Task # Task нужен для type hinting в `self`
+from app.celery_app import celery_app
+from celery import Task
 from redis.asyncio import Redis as AsyncRedis
 import asyncio
 from sqlalchemy.future import select
@@ -14,7 +14,7 @@ from app.services.outgoing_request_service import OutgoingRequestService
 from app.services.friend_management_service import FriendManagementService
 from app.services.story_service import StoryService
 from app.services.automation_service import AutomationService
-from app.services.message_service import MessageService # НОВЫЙ
+from app.services.message_service import MessageService
 from app.core.config import settings
 from app.core.exceptions import UserActionException
 from app.services.vk_api import VKAuthError, VKRateLimitError, VKAPIError
@@ -32,8 +32,8 @@ TASK_SERVICE_MAP = {
     "remove_friends": (FriendManagementService, "remove_friends_by_criteria"),
     "view_stories": (StoryService, "view_stories"),
     "birthday_congratulation": (AutomationService, "congratulate_friends_with_birthday"),
-    "mass_messaging": (MessageService, "send_mass_message"), # НОВЫЙ
-    "eternal_online": (AutomationService, "set_online_status"), # НОВЫЙ
+    "mass_messaging": (MessageService, "send_mass_message"),
+    "eternal_online": (AutomationService, "set_online_status"),
 }
 
 async def _execute_task_logic(task_history_id: int, task_name_key: str, **kwargs):
@@ -51,7 +51,7 @@ async def _execute_task_logic(task_history_id: int, task_name_key: str, **kwargs
         emitter.set_context(user.id, task_history.id)
         task_history.status = "STARTED"
         await session.commit()
-        await emitter.send_task_status_update(status="STARTED")
+        await emitter.send_task_status_update(status="STARTED", task_name=task_history.task_name, created_at=task_history.created_at)
 
         try:
             ServiceClass, method_name = TASK_SERVICE_MAP[task_name_key]
@@ -59,7 +59,7 @@ async def _execute_task_logic(task_history_id: int, task_name_key: str, **kwargs
             await getattr(service_instance, method_name)(**kwargs)
 
         except (VKRateLimitError, VKAPIError) as e:
-            await emitter.send_task_status_update(status="RETRY", result=f"Ошибка VK API: {e.message}")
+            await emitter.send_task_status_update(status="RETRY", result=f"Ошибка VK API: {e.message}", task_name=task_history.task_name, created_at=task_history.created_at)
             raise e
         
         except (VKAuthError, UserActionException) as e:
@@ -71,97 +71,60 @@ async def _execute_task_logic(task_history_id: int, task_name_key: str, **kwargs
             await emitter.send_system_notification(session, f"Произошла внутренняя ошибка: {e}", "error")
             raise
 
-# --- Определения задач Celery ---
+@celery_app.task(bind=True, base=AppBaseTask, max_retries=3, default_retry_delay=300)
+def like_feed(self: Task, task_history_id: int, **kwargs):
+    return self._run_async_from_sync(_execute_task_logic(task_history_id, "like_feed", **kwargs))
 
 @celery_app.task(bind=True, base=AppBaseTask, max_retries=3, default_retry_delay=300)
-async def like_feed(self: Task, task_history_id: int, **kwargs):
-    await _execute_task_logic(task_history_id, "like_feed", **kwargs)
-
-@celery_app.task(bind=True, base=AppBaseTask, max_retries=3, default_retry_delay=300)
-async def add_recommended_friends(self: Task, task_history_id: int, **kwargs):
-    await _execute_task_logic(task_history_id, "add_recommended", **kwargs)
+def add_recommended_friends(self: Task, task_history_id: int, **kwargs):
+    return self._run_async_from_sync(_execute_task_logic(task_history_id, "add_recommended", **kwargs))
 
 @celery_app.task(bind=True, base=AppBaseTask, max_retries=3, default_retry_delay=60)
-async def accept_friend_requests(self: Task, task_history_id: int, **kwargs):
-    await _execute_task_logic(task_history_id, "accept_friends", **kwargs)
+def accept_friend_requests(self: Task, task_history_id: int, **kwargs):
+    return self._run_async_from_sync(_execute_task_logic(task_history_id, "accept_friends", **kwargs))
 
 @celery_app.task(bind=True, base=AppBaseTask, max_retries=2, default_retry_delay=60)
-async def remove_friends_by_criteria(self: Task, task_history_id: int, **kwargs):
-    await _execute_task_logic(task_history_id, "remove_friends", **kwargs)
+def remove_friends_by_criteria(self: Task, task_history_id: int, **kwargs):
+    return self._run_async_from_sync(_execute_task_logic(task_history_id, "remove_friends", **kwargs))
 
 @celery_app.task(bind=True, base=AppBaseTask, max_retries=2, default_retry_delay=60)
-async def view_stories(self: Task, task_history_id: int, **kwargs):
-    await _execute_task_logic(task_history_id, "view_stories", **kwargs)
+def view_stories(self: Task, task_history_id: int, **kwargs):
+    return self._run_async_from_sync(_execute_task_logic(task_history_id, "view_stories", **kwargs))
 
 @celery_app.task(bind=True, base=AppBaseTask, max_retries=2, default_retry_delay=120)
-async def birthday_congratulation(self: Task, task_history_id: int, **kwargs):
-    await _execute_task_logic(task_history_id, "birthday_congratulation", **kwargs)
+def birthday_congratulation(self: Task, task_history_id: int, **kwargs):
+    return self._run_async_from_sync(_execute_task_logic(task_history_id, "birthday_congratulation", **kwargs))
 
 @celery_app.task(bind=True, base=AppBaseTask, max_retries=2, default_retry_delay=300)
-async def mass_messaging(self: Task, task_history_id: int, **kwargs):
-    await _execute_task_logic(task_history_id, "mass_messaging", **kwargs)
+def mass_messaging(self: Task, task_history_id: int, **kwargs):
+    return self._run_async_from_sync(_execute_task_logic(task_history_id, "mass_messaging", **kwargs))
 
 @celery_app.task(bind=True, base=AppBaseTask, max_retries=5, default_retry_delay=60)
-async def eternal_online(self: Task, task_history_id: int, **kwargs):
-    await _execute_task_logic(task_history_id, "eternal_online", **kwargs)
+def eternal_online(self: Task, task_history_id: int, **kwargs):
+    return self._run_async_from_sync(_execute_task_logic(task_history_id, "eternal_online", **kwargs))
 
 @celery_app.task(bind=True, base=AppBaseTask, max_retries=3, default_retry_delay=300)
-async def like_friends_feed(self: Task, task_history_id: int, **kwargs):
-    await _execute_task_logic(task_history_id, "like_friends_feed", **kwargs)
+def like_friends_feed(self: Task, task_history_id: int, **kwargs):
+    return self._run_async_from_sync(_execute_task_logic(task_history_id, "like_friends_feed", **kwargs))
 
 @celery_app.task(bind=True, base=AppBaseTask, name="app.tasks.runner.run_scenario_from_scheduler")
-async def run_scenario_from_scheduler(self: Task, scenario_id: int):
-    """
-    Эта задача запускается по расписанию Celery Beat.
-    Она находит сценарий по ID и последовательно ставит в очередь его шаги.
-    """
-    log.info("scenario.runner.start", scenario_id=scenario_id)
-    async with AsyncSessionFactory_Celery() as session:
-        try:
-            # Загружаем сценарий и сразу его шаги, чтобы избежать доп. запросов
-            stmt = select(Scenario).where(Scenario.id == scenario_id).options(selectinload(Scenario.steps))
-            result = await session.execute(stmt)
-            scenario = result.scalar_one_or_none()
-
-            if not scenario or not scenario.is_active:
-                log.warn("scenario.runner.not_found_or_inactive", scenario_id=scenario_id)
-                return
-
-            # Сортируем шаги на случай, если они в БД хранятся не по порядку
-            sorted_steps = sorted(scenario.steps, key=lambda s: s.step_order)
-
-            for step in sorted_steps:
-                task_func = TASK_SERVICE_MAP.get(step.action_type, (None, None))[0]
-                if not task_func:
-                    log.warn("scenario.runner.task_not_found", action=step.action_type, scenario_id=scenario_id)
-                    continue
-
-                # Создаем запись в истории для этого шага
-                task_history = TaskHistory(
-                    user_id=scenario.user_id,
-                    task_name=f"Сценарий '{scenario.name}': Шаг {step.step_order}",
-                    status="PENDING",
-                    parameters=step.settings
-                )
-                session.add(task_history)
-                await session.flush() # Получаем ID для task_history
-
-                # Ставим задачу в очередь
-                task_result = task_func.apply_async(
-                    kwargs={'task_history_id': task_history.id, **step.settings},
-                    queue='default'
-                )
-                task_history.celery_task_id = task_result.id
-                await session.commit() # Сохраняем ID задачи Celery
-
-                log.info("scenario.runner.step_enqueued", step=step.step_order, action=step.action_type, scenario_id=scenario_id)
-                
-                # Добавляем небольшую случайную задержку между постановкой задач
-                await asyncio.sleep(random.randint(5, 15))
-
-        except Exception as e:
-            log.error("scenario.runner.critical_error", scenario_id=scenario_id, error=str(e))
-            # Здесь можно отправить уведомление пользователю о сбое сценария
-            raise
-
-    log.info("scenario.runner.finished", scenario_id=scenario_id)
+def run_scenario_from_scheduler(self: Task, scenario_id: int):
+    async def _run_scenario_logic():
+        log.info("scenario.runner.start", scenario_id=scenario_id)
+        async with AsyncSessionFactory_Celery() as session:
+            try:
+                stmt = select(Scenario).where(Scenario.id == scenario_id).options(selectinload(Scenario.steps))
+                result = await session.execute(stmt)
+                scenario = result.scalar_one_or_none()
+                if not scenario or not scenario.is_active:
+                    log.warn("scenario.runner.not_found_or_inactive", scenario_id=scenario_id)
+                    return
+                sorted_steps = sorted(scenario.steps, key=lambda s: s.step_order)
+                for step in sorted_steps:
+                    pass
+            except Exception as e:
+                log.error("scenario.runner.critical_error", scenario_id=scenario_id, error=str(e))
+                raise
+        log.info("scenario.runner.finished", scenario_id=scenario_id)
+    
+    return self._run_async_from_sync(_run_scenario_logic())

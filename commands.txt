@@ -1,4 +1,8 @@
 Запустите FastAPI сервер: uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
-Запустите воркер: celery -A app.celery_worker.celery_app worker --loglevel=info -c 10
+Запустите воркер: poetry run celery -A app.celery_worker.celery_app worker --loglevel=info -P gevent -c 10 -Q high_priority,default,low_priority
 Запустите сервер для разработки: npm start
 Откройте в браузере http://localhost:3000
+
+запуск сразу:
+# Выполнять в терминале в папке frontend
+npm run dev

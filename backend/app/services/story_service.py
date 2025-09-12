@@ -4,10 +4,10 @@ from app.services.base import BaseVKService
 
 class StoryService(BaseVKService):
 
-    async def view_stories(self, filters: Dict[str, Any]):
-        return await self._execute_logic(self._view_stories_logic, filters)
+    async def view_stories(self, **kwargs):
+        return await self._execute_logic(self._view_stories_logic)
 
-    async def _view_stories_logic(self, filters: Dict[str, Any]):
+    async def _view_stories_logic(self):
         await self.humanizer.imitate_page_view()
         await self.emitter.send_log("Начинаем просмотр историй...", "info")
         stats = await self._get_today_stats()

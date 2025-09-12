@@ -1,4 +1,6 @@
 // frontend/src/store/authSlice.js
+import { disconnectWebSocket } from '../websocket';
+
 export const createAuthSlice = (set, get) => ({
   jwtToken: localStorage.getItem('jwtToken') || null,
   isLoading: true,
@@ -10,6 +12,7 @@ export const createAuthSlice = (set, get) => ({
     },
     logout: () => {
       localStorage.removeItem('jwtToken');
+      disconnectWebSocket();
       get().actions.resetUserSlice(); 
       set({ jwtToken: null, isLoading: false });
     },

@@ -6,7 +6,7 @@ from app.core.exceptions import UserLimitReachedError
 
 class FeedService(BaseVKService):
 
-    async def like_newsfeed(self, count: int, filters: Dict[str, Any]):
+    async def like_newsfeed(self, count: int, filters: Dict[str, Any], **kwargs):
         return await self._execute_logic(self._like_newsfeed_logic, count, filters)
 
     async def _like_newsfeed_logic(self, count: int, filters: Dict[str, Any]):
@@ -43,7 +43,7 @@ class FeedService(BaseVKService):
             if owner_id > 0 and owner_id not in filtered_author_ids:
                 continue
 
-            await self.humanizer.imitate_simple_action_delay()
+            await self.humanizer.imitate_simple_action()
             result = await self.vk_api.add_like('post', owner_id, post['post_id'])
             
             if result and 'likes' in result:
@@ -57,7 +57,7 @@ class FeedService(BaseVKService):
 
         await self.emitter.send_log(f"Задача завершена. Поставлено лайков: {processed_count}.", "success")
 
-    async def like_friends_feed(self, count: int, filters: Dict[str, Any]):
+    async def like_friends_feed(self, count: int, filters: Dict[str, Any], **kwargs):
         return await self._execute_logic(self._like_friends_feed_logic, count, filters)
 
     async def _like_friends_feed_logic(self, count: int, filters: Dict[str, Any]):
@@ -94,7 +94,7 @@ class FeedService(BaseVKService):
                 continue
 
             post_to_like = random.choice(posts_to_like)
-            await self.humanizer.imitate_simple_action_delay()
+            await self.humanizer.imitate_simple_action()
             result = await self.vk_api.add_like('post', friend_id, post_to_like['id'])
             
             if result and 'likes' in result:
@@ -113,8 +113,6 @@ class FeedService(BaseVKService):
     async def _get_user_profiles(self, user_ids: List[int]) -> List[Dict[str, Any]]:
         if not user_ids:
             return []
-        # VK API позволяет запрашивать до 1000 пользователей за раз
-        # execute здесь не нужен, обычного чанкинга достаточно
         user_profiles = []
         for i in range(0, len(user_ids), 1000):
             chunk = user_ids[i:i + 1000]
@@ -125,7 +123,6 @@ class FeedService(BaseVKService):
         return user_profiles
 
     def _apply_filters_to_profiles(self, profiles: List[Dict[str, Any]], filters: Dict[str, Any]) -> List[Dict[str, Any]]:
-
         import datetime
         filtered_profiles = []
         now_ts = datetime.datetime.now().timestamp()

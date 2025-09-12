@@ -54,17 +54,8 @@ services:
   celery_worker:
     build:
       context: ./backend
-      dockerfile: Dockerfile
-    container_name: social_pilot_celery_worker_prod
-    env_file: ./.env
-    # --- ИЗМЕНЕНИЕ: volumes УДАЛЕНЫ ---
-    depends_on:
-      - redis
-      - backend
-    command: >
-      /app/.venv/bin/celery -A app.celery_worker.celery_app worker 
-      --loglevel=info -P gevent -c 10 
-      -Q high_priority,default,low_priority
+    # Убираем "-P gevent". Celery будет использовать стандартный, совместимый с asyncio пул воркеров.
+    command: poetry run celery -A app.celery_worker.celery_app worker --loglevel=info -c 10 -Q high_priority,default,low_priority
     restart: always
 
   celery_beat:

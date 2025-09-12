@@ -6,14 +6,9 @@ from typing import Tuple
 class ProxyService:
     @staticmethod
     async def check_proxy(proxy_url: str) -> Tuple[bool, str]:
-        """
-        Проверяет работоспособность прокси, пытаясь подключиться к VK.
-        Возвращает кортеж (is_working: bool, status_message: str).
-        """
         if not proxy_url:
             return False, "URL прокси не может быть пустым."
 
-        # Используем надежный и быстрый эндпоинт для проверки
         test_url = "https://api.vk.com/method/utils.getServerTime"
         
         try:

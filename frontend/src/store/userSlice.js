@@ -1,9 +1,15 @@
 // frontend/src/store/userSlice.js
-import { fetchUserInfo } from 'api';
+import { fetchUserInfo, fetchUserLimits } from 'api';
 
 const initialState = {
     userInfo: null,
     availableFeatures: [], 
+    dailyLimits: {
+        likes_limit: 0,
+        likes_today: 0,
+        friends_add_limit: 0,
+        friends_add_today: 0,
+    }
 };
 
 export const createUserSlice = (set, get) => ({
@@ -16,14 +22,18 @@ export const createUserSlice = (set, get) => ({
             }
             
             try {
-                const userResponse = await fetchUserInfo();
+                const [userResponse, limitsResponse] = await Promise.all([
+                    fetchUserInfo(),
+                    fetchUserLimits()
+                ]);
+
                 set({
                     userInfo: userResponse.data,
                     availableFeatures: userResponse.data.available_features || [],
+                    dailyLimits: limitsResponse.data,
                 });
             } catch (error) {
                 console.error("Failed to load user data, logging out.", error);
-                // Правильный путь к функции logout
                 get().actions.logout(); 
             } finally {
                 get().actions.finishInitialLoad();
@@ -32,10 +42,13 @@ export const createUserSlice = (set, get) => ({
         
         setUserInfo: (newUserInfo) => {
             set(state => ({
-                userInfo: {
-                    ...state.userInfo,
-                    ...newUserInfo,
-                }
+                userInfo: { ...state.userInfo, ...newUserInfo }
+            }));
+        },
+
+        setDailyLimits: (newLimits) => {
+             set(state => ({
+                dailyLimits: { ...state.dailyLimits, ...newLimits }
             }));
         },
         

@@ -17,19 +17,15 @@ ARG REACT_APP_API_BASE_URL
 ENV REACT_APP_API_BASE_URL=$REACT_APP_API_BASE_URL
 RUN npm run build
 
-# --- Этап 3: Финальный образ с Nginx для Production ---
+# Этап 3: Финальный образ для production
 FROM nginx:1.27-alpine AS production
-# Копируем кастомный конфиг Nginx
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+# Мы удалили строку `COPY nginx.conf ...`, так как используем стандартный конфиг Nginx
 # Копируем собранные статические файлы
 COPY --from=builder /app/build /usr/share/nginx/html
-EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
 
-# --- Этап для разработки (не используется в прод-сборке) ---
-FROM deps AS development
-WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
-COPY . .
-EXPOSE 3000
-CMD ["npm", "start"]
+# Открываем порт 80
+EXPOSE 80
+
+# Запускаем Nginx
+CMD ["nginx", "-g", "daemon off;"]

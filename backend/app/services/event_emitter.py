@@ -33,12 +33,19 @@ class RedisEventEmitter:
         }
         await self._publish(f"ws:user:{self.user_id}", {"type": "log", "payload": payload})
 
-    async def send_stats_update(self, stat: str, value: Any):
-        await self._publish(f"ws:user:{self.user_id}", {"type": "stats_update", "payload": {"stat": stat, "value": value}})
+    async def send_stats_update(self, stats_dict: Dict[str, Any]):
+        await self._publish(f"ws:user:{self.user_id}", {"type": "stats_update", "payload": stats_dict})
 
-    async def send_task_status_update(self, status: str, result: str | None = None):
+    async def send_task_status_update(self, status: str, result: str | None = None, task_name: str | None = None, created_at: datetime.datetime | None = None):
         if not self.task_history_id: return
-        payload = {"task_history_id": self.task_history_id, "status": status, "result": result}
+        
+        payload = {
+            "task_history_id": self.task_history_id, 
+            "status": status, 
+            "result": result,
+            "task_name": task_name,
+            "created_at": created_at.isoformat() if created_at else None
+        }
         await self._publish(f"ws:user:{self.user_id}", {"type": "task_history_update", "payload": payload})
 
     async def send_system_notification(self, db: AsyncSession, message: str, level: LogLevel):

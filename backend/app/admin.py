@@ -16,12 +16,10 @@ class AdminAuth(AuthenticationBackend):
         form = await request.form()
         username, password = form.get("username"), form.get("password")
 
-        # Проверка логина и пароля администратора из .env
         is_user_correct = secrets.compare_digest(username, settings.ADMIN_USER)
         is_password_correct = secrets.compare_digest(password, settings.ADMIN_PASSWORD)
 
         if is_user_correct and is_password_correct:
-            # Создаем JWT токен с определенным временем жизни и областью видимости
             access_token_expires = timedelta(hours=8)
             token_data = {"sub": username, "scope": "admin_access"}
             access_token = create_access_token(data=token_data, expires_delta=access_token_expires)
@@ -35,10 +33,8 @@ class AdminAuth(AuthenticationBackend):
         return True
 
     async def authenticate(self, request: Request) -> bool:
-        # Проверка IP-адреса клиента по белому списку
         if settings.ADMIN_IP_WHITELIST:
             allowed_ips = [ip.strip() for ip in settings.ADMIN_IP_WHITELIST.split(',')]
-            # Чтобы это работало за прокси, в main.py нужно добавить ProxyHeadersMiddleware
             if request.client and request.client.host not in allowed_ips:
                 return False
 
@@ -50,12 +46,9 @@ class AdminAuth(AuthenticationBackend):
             payload = jwt.decode(
                 token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
             )
-            # Проверяем, что токен предназначен именно для админ-панели
             if payload.get("scope") != "admin_access":
                 return False
             
-            # Дополнительная проверка: ищем пользователя в БД по VK ID админа
-            # Это позволяет мгновенно отозвать доступ, если админ удален или его права изменены
             async with AsyncSessionFactory() as session:
                 admin_user = await session.get(User, int(settings.ADMIN_VK_ID))
                 if not admin_user or not admin_user.is_admin:
@@ -69,7 +62,6 @@ class AdminAuth(AuthenticationBackend):
 authentication_backend = AdminAuth(secret_key=settings.SECRET_KEY)
 
 
-# --- Модели (без изменений) ---
 class UserAdmin(ModelView, model=User):
     column_list = [User.id, User.vk_id, User.plan, User.plan_expires_at, User.is_admin, User.created_at]
     form_columns = [User.plan, User.plan_expires_at, User.is_admin, User.daily_likes_limit, User.daily_add_friends_limit]

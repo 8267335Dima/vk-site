@@ -1,32 +1,24 @@
-// frontend/src/App.js - ОБНОВЛЕННАЯ ВЕРСИЯ
-
+// frontend/src/App.js
 import React, { useEffect, Suspense, lazy } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { ThemeProvider, CssBaseline, Box, CircularProgress } from '@mui/material';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'react-hot-toast';
-
+import { queryClient } from './queryClient.js';
 import { theme, globalStyles } from './theme.js';
-// --- ИЗМЕНЕНИЕ: WebSocketProvider больше не нужен ---
-// import { WebSocketProvider } from './contexts/WebSocketProvider.js'; 
 import { useUserStore, useUserActions } from './store/userStore.js';
 import Layout from './components/Layout.js';
 import ErrorBoundary from './components/ErrorBoundary.js';
 
-// Lazy-loaded компоненты остаются без изменений
 const HomePage = lazy(() => import('./pages/Home/HomePage.js'));
 const LoginPage = lazy(() => import('./pages/Login/LoginPage.js'));
 const DashboardPage = lazy(() => import('./pages/Dashboard/DashboardPage.js'));
 const ScenariosPage = lazy(() => import('./pages/Scenarios/ScenarioPage.js'));
 const BillingPage = lazy(() => import('./pages/Billing/BillingPage.js'));
 
-const queryClient = new QueryClient({
-  defaultOptions: { queries: { staleTime: 1000 * 60 * 5, retry: 1 } },
-});
-
 const FullscreenLoader = () => (
     <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
-        <CircularProgress />
+        <CircularProgress size={60} />
     </Box>
 );
 
@@ -38,7 +30,6 @@ const PrivateRoutes = () => {
         return <FullscreenLoader />;
     }
     
-    // --- ИЗМЕНЕНИЕ: Убрали обертку WebSocketProvider. Теперь соединение управляется глобально. ---
     return jwtToken ? <Outlet /> : <Navigate to="/login" replace />;
 };
 
@@ -48,7 +39,6 @@ function App() {
   const { loadUser, finishInitialLoad } = useUserActions();
 
   useEffect(() => {
-    // Эта логика остается, она важна для загрузки данных пользователя
     if (jwtToken) {
       loadUser();
     } else {
@@ -61,6 +51,7 @@ function App() {
   }
   
   return (
+    // <-- ИЗМЕНЕНИЕ 3: Используем импортированный queryClient
     <QueryClientProvider client={queryClient}>
       <ThemeProvider theme={theme}>
         <CssBaseline />

@@ -2,8 +2,10 @@
 import asyncio
 import datetime
 import structlog
-from celery import shared_task
-from sqlalchemy import select, or_ # --- ИЗМЕНЕНИЕ: Добавлен импорт or_ ---
+from sqlalchemy import select, or_
+
+from app.celery_app import celery_app
+from celery import Task
 
 from app.db.session import AsyncSessionFactory
 from app.db.models import User 
@@ -14,7 +16,6 @@ from app.tasks.utils import run_async_from_sync
 log = structlog.get_logger(__name__)
 
 async def _snapshot_all_users_metrics_async():
-    """Асинхронная логика сбора метрик."""
     async with AsyncSessionFactory() as session:
         now = datetime.datetime.utcnow()
         stmt = select(User).where(or_(User.plan_expires_at == None, User.plan_expires_at > now))
@@ -33,7 +34,6 @@ async def _snapshot_all_users_metrics_async():
         log.info("snapshot_metrics_task.finished")
 
 async def _process_user(user: User):
-    """Изолированная логика обработки одного пользователя."""
     async with AsyncSessionFactory() as user_session:
         try:
             service = ProfileAnalyticsService(db=user_session, user=user, emitter=None)
@@ -43,7 +43,6 @@ async def _process_user(user: User):
         except Exception as e:
             log.error("snapshot_metrics_task.user_error", user_id=user.id, error=str(e))
 
-@shared_task(name="app.tasks.profile_parser.snapshot_all_users_metrics")
+@celery_app.task(name="app.tasks.profile_parser.snapshot_all_users_metrics")
 def snapshot_all_users_metrics():
-    """Синхронная задача-обертка для Celery."""
-    run_async_from_sync(_snapshot_all_users_metrics_async()) 
+    run_async_from_sync(_snapshot_all_users_metrics_async())

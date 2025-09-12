@@ -5,7 +5,6 @@ import json
 from typing import Optional, Dict, Any, List
 from app.core.config import settings
 
-# ... (Классы исключений без изменений) ...
 class VKAPIError(Exception):
     def __init__(self, message: str, error_code: int):
         self.message = message
@@ -74,22 +73,21 @@ class VKAPI:
         response = await self._make_request("friends.get", params=params)
         return response.get("items") if response else None
 
-    # --- ИЗМЕНЕНИЕ: Метод friends.add теперь принимает опциональное сообщение ---
     async def add_friend(self, user_id: int, text: Optional[str] = None) -> Optional[Dict[str, Any]]:
         params = {"user_id": user_id}
         if text:
             params["text"] = text
         return await self._make_request("friends.add", params=params)
 
-    # ... (Остальные методы VK API без изменений) ...
     async def get_wall(self, owner_id: int, count: int = 5) -> Optional[Dict[str, Any]]:
         return await self._make_request("wall.get", params={"owner_id": owner_id, "count": count})
 
     async def get_stories(self) -> Optional[Dict[str, Any]]:
         return await self._make_request("stories.get", params={})
 
-    async def get_incoming_friend_requests(self, count: int = 1000) -> Optional[Dict[str, Any]]:
-        return await self._make_request("friends.getRequests", params={"count": count, "extended": 0})
+    async def get_incoming_friend_requests(self, count: int = 1000, **kwargs) -> Optional[Dict[str, Any]]:
+        params = {"count": count, "extended": 0, **kwargs}
+        return await self._make_request("friends.getRequests", params=params)
 
     async def accept_friend_request(self, user_id: int) -> Optional[Dict[str, Any]]:
         return await self._make_request("friends.add", params={"user_id": user_id})
@@ -108,6 +106,15 @@ class VKAPI:
 
     async def send_message(self, user_id: int, message: str) -> Optional[int]:
         return await self._make_request("messages.send", params={"user_id": user_id, "message": message, "random_id": random.randint(0, 2**31)})
+
+    async def get_conversations(self, count: int = 200) -> Optional[Dict[str, Any]]:
+        return await self._make_request("messages.getConversations", params={"count": count})
+
+    async def get_photos(self, owner_id: int, count: int = 200) -> Optional[Dict[str, Any]]:
+        return await self._make_request("photos.getAll", params={"owner_id": owner_id, "count": count, "extended": 1})
+
+    async def set_online(self) -> Optional[int]:
+        return await self._make_request("account.setOnline")
 
 async def is_token_valid(vk_token: str) -> Optional[int]:
     vk_api = VKAPI(access_token=vk_token)

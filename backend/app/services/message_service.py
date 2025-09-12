@@ -7,19 +7,16 @@ from app.services.vk_api import VKAccessDeniedError
 
 class MessageService(BaseVKService):
 
-    async def send_mass_message(self, count: int, filters: Dict[str, Any], message_text: str, only_new_dialogs: bool):
-        """Обертка для запуска логики массовой рассылки."""
+    async def send_mass_message(self, count: int, filters: Dict[str, Any], message_text: str, only_new_dialogs: bool, **kwargs):
         return await self._execute_logic(self._send_mass_message_logic, count, filters, message_text, only_new_dialogs)
 
     async def _send_mass_message_logic(self, count: int, filters: Dict[str, Any], message_text: str, only_new_dialogs: bool):
-        """Основная логика для массовой отправки сообщений друзьям."""
         if not message_text or not message_text.strip():
             raise InvalidActionSettingsError("Текст сообщения не может быть пустым.")
 
         await self.emitter.send_log(f"Запуск массовой рассылки. Цель: {count} сообщений.", "info")
         stats = await self._get_today_stats()
 
-        # 1. Получаем и фильтруем друзей
         friends_response = await self.vk_api.get_user_friends(self.user.vk_id, fields="sex,online,last_seen")
         if not friends_response:
             await self.emitter.send_log("Не удалось получить список друзей.", "error")
@@ -33,7 +30,6 @@ class MessageService(BaseVKService):
         await self.emitter.send_log(f"Найдено друзей по фильтрам: {len(filtered_friends)}. Начинаем обработку.", "info")
         random.shuffle(filtered_friends)
         
-        # 2. Фильтруем по диалогам, если требуется
         target_friends = []
         if only_new_dialogs:
             dialogs = await self.vk_api.get_conversations(count=200)
@@ -47,7 +43,6 @@ class MessageService(BaseVKService):
             await self.emitter.send_log("Не найдено подходящих получателей.", "success")
             return
             
-        # 3. Отправляем сообщения
         processed_count = 0
         for friend in target_friends:
             if processed_count >= count:
@@ -57,7 +52,6 @@ class MessageService(BaseVKService):
             name = f"{friend.get('first_name', '')} {friend.get('last_name', '')}"
             url = f"https://vk.com/id{friend_id}"
             
-            # Заменяем плейсхолдер имени
             final_message = message_text.replace("{name}", friend.get('first_name', ''))
 
             await self.humanizer.imitate_page_view()
@@ -78,7 +72,6 @@ class MessageService(BaseVKService):
         await self.emitter.send_log(f"Рассылка завершена. Отправлено сообщений: {processed_count}.", "success")
 
     def _apply_filters_to_profiles(self, profiles: List[Dict[str, Any]], filters: Dict[str, Any]) -> List[Dict[str, Any]]:
-        # Эта функция-фильтр может быть вынесена в базовый класс или утилиты, если используется в нескольких сервисах
         import datetime
         filtered_profiles = []
         now_ts = datetime.datetime.now().timestamp()

@@ -11,6 +11,8 @@ from fastapi_cache.backends.redis import RedisBackend
 from contextlib import asynccontextmanager
 from fastapi_limiter import FastAPILimiter
 
+from app.celery_app import celery_app
+
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.db.session import engine
@@ -36,7 +38,7 @@ async def lifespan(app: FastAPI):
         redis_cache_connection = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/3", encoding="utf-8")
         FastAPICache.init(RedisBackend(redis_cache_connection), prefix="fastapi-cache")
         
-        redis_pubsub_connection = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/1")
+        redis_pubsub_connection = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/1", decode_responses=True)
         redis_task = asyncio.create_task(redis_listener(redis_pubsub_connection))
         
         log.info("lifespan.startup", message="Dependencies initialized.")
@@ -60,15 +62,10 @@ app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 init_admin(app, engine)
 
-# --- КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Правильная обработка CORS ---
 if settings.ALLOWED_ORIGINS:
     allowed_origins_list = [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(',')]
 else:
-    # Значения по умолчанию для локальной разработки, если .env пуст
-    allowed_origins_list = [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ]
+    allowed_origins_list = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -78,7 +75,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- РЕГИСТРАЦІЯ РОУТЕРОВ (без изменений) ---
 api_router_v1 = APIRouter()
 api_router_v1.include_router(auth_router, prefix="/auth", tags=["Аутентификация"])
 api_router_v1.include_router(users_router, prefix="/users", tags=["Пользователи"])

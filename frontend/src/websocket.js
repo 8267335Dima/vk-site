@@ -1,78 +1,81 @@
 // frontend/src/websocket.js
-
 import { toast } from 'react-hot-toast';
 import { useUserStore } from 'store/userStore';
+import { queryClient } from './queryClient';
 
 let socket = null;
 let reconnectInterval = 5000;
+let reconnectTimeout = null;
 
 const getSocketUrl = () => {
-    const location = window.location;
-    const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsHost = location.host;
-    return `${wsProtocol}//${wsHost}/api/v1/ws`;
+    const apiUrl = process.env.REACT_APP_API_BASE_URL || window.location.origin;
+    const wsUrl = new URL(apiUrl);
+    wsUrl.protocol = wsUrl.protocol.replace('http', 'ws');
+    wsUrl.pathname = '/api/v1/ws';
+    return wsUrl.toString();
 };
 
 const handleMessage = (event) => {
-    const { type, payload } = JSON.parse(event.data);
-    const { setUserInfo } = useUserStore.getState().actions;
+    try {
+        const { type, payload } = JSON.parse(event.data);
+        const { setDailyLimits } = useUserStore.getState().actions;
 
-    switch (type) {
-        case 'log':
-            // Эту логику можно будет потом перенести в store, если нужно
-            console.log('WS Log:', payload);
-            break;
-        case 'stats_update':
-            // Обновляем userInfo в store
-            setUserInfo({ counters: payload });
-            break;
-        case 'task_history_update':
-            if (payload.status === 'SUCCESS') {
-                toast.success('Задача успешно завершена!', { duration: 5000 });
-            }
-            if (payload.status === 'FAILURE') {
-                toast.error(`Задача провалена: ${payload.result}`, { duration: 8000 });
-            }
-            // Здесь можно добавить обновление истории задач в store, если потребуется
-            break;
-        case 'new_notification':
-            const message = payload.message;
-            if (payload.level === 'error') {
-                toast.error(message, { duration: 8000 });
-                // Можно добавить инвалидацию запросов, если нужно
-            } else {
-                toast.success(message, { duration: 5000 });
-            }
-            break;
-        default:
-            break;
+        switch (type) {
+            case 'log':
+                console.log('WS Log:', payload);
+                break;
+            case 'stats_update':
+                setDailyLimits({
+                    likes_today: payload.likes_count,
+                    friends_add_today: payload.friends_added_count
+                });
+                break;
+            case 'task_history_update':
+                 queryClient.invalidateQueries({ queryKey: ['task_history'] });
+                if (payload.status === 'SUCCESS') {
+                    toast.success(`Задача "${payload.task_name}" успешно завершена!`);
+                }
+                if (payload.status === 'FAILURE') {
+                    toast.error(`Задача "${payload.task_name}" провалена: ${payload.result}`, { duration: 8000 });
+                }
+                break;
+            case 'new_notification':
+                queryClient.invalidateQueries({ queryKey: ['notifications'] });
+                const message = payload.message;
+                const options = { duration: 8000 };
+                if (payload.level === 'error') toast.error(message, options);
+                else if (payload.level === 'warning') toast.error(message, options); // Using toast.error for visibility
+                else toast.success(message, { duration: 5000 });
+                break;
+            default:
+                break;
+        }
+    } catch (error) {
+        console.error("Error parsing WebSocket message:", error);
     }
 };
 
 export const connectWebSocket = (token) => {
-    if (socket || !token) {
-        return;
-    }
+    if (socket || !token) return;
 
-    const url = getSocketUrl();
-    socket = new WebSocket(url, ['bearer', token]);
+    const url = `${getSocketUrl()}?token=${token}`;
+    socket = new WebSocket(url);
 
     socket.onopen = () => {
         console.log('WebSocket connected');
-        useUserStore.getState().actions.setConnectionStatus('Live');
+        useUserStore.getState().actions.setConnectionStatus('На связи');
+        if (reconnectTimeout) clearTimeout(reconnectTimeout);
     };
 
-    socket.onclose = () => {
-        console.log('WebSocket disconnected');
+    socket.onclose = (event) => {
+        console.log(`WebSocket disconnected: ${event.code}`);
         socket = null;
-        useUserStore.getState().actions.setConnectionStatus('Отключено');
-        // Попытка переподключения, если токен все еще есть
-        setTimeout(() => {
-            const currentToken = useUserStore.getState().jwtToken;
-            if (currentToken) {
-                connectWebSocket(currentToken);
-            }
-        }, reconnectInterval);
+        useUserStore.getState().actions.setConnectionStatus('Переподключение...');
+        
+        const currentToken = useUserStore.getState().jwtToken;
+        if (currentToken) {
+           reconnectTimeout = setTimeout(() => connectWebSocket(currentToken), reconnectInterval);
+        }
     };
 
     socket.onerror = (error) => {
@@ -84,8 +87,10 @@ export const connectWebSocket = (token) => {
 };
 
 export const disconnectWebSocket = () => {
+    if (reconnectTimeout) clearTimeout(reconnectTimeout);
     if (socket) {
         socket.close();
         socket = null;
+        useUserStore.getState().actions.setConnectionStatus('Отключено');
     }
 };

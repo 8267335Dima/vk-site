@@ -5,14 +5,14 @@ from app.services.base import BaseVKService
 
 class FriendManagementService(BaseVKService):
 
-    async def remove_friends_by_criteria(self, count: int, filters: Dict[str, Any]):
+    async def remove_friends_by_criteria(self, count: int, filters: Dict[str, Any], **kwargs):
         return await self._execute_logic(self._remove_friends_by_criteria_logic, count, filters)
 
     async def _remove_friends_by_criteria_logic(self, count: int, filters: Dict[str, Any]):
         await self.emitter.send_log(f"Начинаем чистку друзей. Цель: удалить {count} чел.", "info")
         stats = await self._get_today_stats()
 
-        all_friends = await self.vk_api.get_user_friends(self.user.vk_id)
+        all_friends = await self.vk_api.get_user_friends(self.user.vk_id, fields="sex,online,last_seen,is_closed,deactivated")
         if not all_friends:
             await self.emitter.send_log("Не удалось получить список друзей.", "warning")
             return
@@ -36,7 +36,6 @@ class FriendManagementService(BaseVKService):
         await self.emitter.send_log(f"Всего к удалению: {len(friends_to_remove)} чел. Начинаем процесс...", "info")
         processed_count = 0
         
-        # ИЗМЕНЕНИЕ: Обрабатываем друзей пачками по 25
         batch_size = 25
         for i in range(0, len(friends_to_remove), batch_size):
             batch = friends_to_remove[i:i + batch_size]
@@ -46,12 +45,10 @@ class FriendManagementService(BaseVKService):
                 for friend in batch
             ]
             
-            # Добавляем паузу перед пакетным запросом
-            await self.humanizer.imitate_short_action_delay()
+            await self.humanizer.imitate_simple_action()
             
             results = await self.vk_api.execute(calls)
             
-            # Результат - это список ответов для каждого вызова
             if results is None:
                 await self.emitter.send_log(f"Пакетный запрос на удаление не удался.", "error")
                 continue
@@ -67,7 +64,6 @@ class FriendManagementService(BaseVKService):
                     reason = f"({friend.get('deactivated', 'неактивность')})"
                     await self.emitter.send_log(f"Удален друг: {name} {reason}", "success", target_url=url)
                 else:
-                    # VK может вернуть `false` в случае ошибки
                     error_msg = result.get('error_msg', 'неизвестная ошибка') if isinstance(result, dict) else 'неизвестная ошибка'
                     await self.emitter.send_log(f"Не удалось удалить друга {name}. Причина: {error_msg}", "error", target_url=url)
 
@@ -80,10 +76,13 @@ class FriendManagementService(BaseVKService):
         for profile in profiles:
             if not filters.get('allow_closed_profiles', False) and profile.get('is_closed', True): continue
             if filters.get('sex') and profile.get('sex') != filters['sex']: continue
-            if filters.get('is_online', False) and not profile.get('online', 0): continue
+            
             last_seen_ts = profile.get('last_seen', {}).get('time', 0)
             if last_seen_ts == 0: continue
+            
             last_seen_days = filters.get('last_seen_days')
-            if last_seen_days and (now_ts - last_seen_ts) > (last_seen_days * 86400): continue
-            filtered_profiles.append(profile)
+            if last_seen_days and (now_ts - last_seen_ts) > (last_seen_days * 86400):
+                filtered_profiles.append(profile)
+                continue
+
         return filtered_profiles

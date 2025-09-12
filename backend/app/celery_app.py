@@ -2,23 +2,14 @@
 from celery import Celery
 from app.core.config import settings
 
-# Определяем URL для Redis
 redis_url = f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/0"
 
-# Создаем и КОНФИГУРИРУЕМ экземпляр Celery здесь
 celery_app = Celery(
     "worker",
     broker=redis_url,
-    backend=redis_url,
-    include=[
-        "app.tasks.runner",
-        "app.tasks.cron",
-        "app.tasks.maintenance",
-        "app.tasks.profile_parser"
-    ]
+    backend=redis_url
 )
 
-# Дополнительно применяем конфигурацию через .conf для надежности
 celery_app.conf.broker_url = redis_url
 celery_app.conf.result_backend = redis_url
 

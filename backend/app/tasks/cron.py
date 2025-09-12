@@ -2,11 +2,13 @@
 import asyncio
 import datetime
 import structlog
-from celery import shared_task
+from redis.asyncio import Redis
 from sqlalchemy import func, select, or_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import selectinload
-from redis.asyncio import Redis
+
+from app.celery_app import celery_app
+from celery import Task
 
 from app.core.config import settings
 from app.db.session import AsyncSessionFactory
@@ -22,7 +24,7 @@ from app.core.config_loader import PLAN_CONFIG
 from app.core.plans import get_limits_for_plan
 from app.services.analytics_service import AnalyticsService
 from app.services.vk_api import VKAuthError
-from app.tasks.utils import run_async_from_sync  # <--- КЛЮЧЕВОЕ ИЗМЕНЕНИЕ
+from app.tasks.utils import run_async_from_sync
 
 log = structlog.get_logger(__name__)
 redis_client = Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, db=2, decode_responses=True)
@@ -38,10 +40,7 @@ TASK_FUNC_MAP = {
     "eternal_online": eternal_online,
 }
 
-# --- АСИНХРОННЫЕ ХЕЛПЕРЫ И ЛОГИКА (без изменений) ---
-
 async def _create_and_run_task(session, user_id, task_name, settings):
-    """(Асинхронный хелпер) Создает TaskHistory и запускает Celery задачу."""
     task_func = TASK_FUNC_MAP.get(task_name)
     if not task_func:
         log.warn("cron.task_not_found", task_name=task_name)
@@ -64,7 +63,6 @@ async def _create_and_run_task(session, user_id, task_name, settings):
     task_history.celery_task_id = task_result.id
 
 async def _aggregate_daily_stats_async():
-    """Асинхронная логика: Агрегирует дневную статистику в недельную и месячную."""
     async with AsyncSessionFactory() as session:
         yesterday = datetime.date.today() - datetime.timedelta(days=1)
         week_id = yesterday.strftime('%Y-%W')
@@ -104,7 +102,6 @@ async def _aggregate_daily_stats_async():
         log.info("aggregate_daily_stats.success", users_count=len(daily_sums), date=yesterday.isoformat())
 
 async def _run_daily_automations_async(automation_group: str):
-    """Асинхронная логика: Находит и запускает активные автоматизации."""
     lock_key = f"lock:task:run_automations:{automation_group}"
     if not await redis_client.set(lock_key, "1", ex=240, nx=True):
         log.warn("run_daily_automations.already_running", group=automation_group)
@@ -138,7 +135,6 @@ async def _run_daily_automations_async(automation_group: str):
                     User.plan.in_(available_plans),
                     or_(User.plan_expires_at.is_(None), User.plan_expires_at > now)
                 )
-                # --- ИСПРАВЛЕНИЕ: Правильное использование selectinload ---
                 .options(selectinload(Automation.user))
             )
 
@@ -159,7 +155,6 @@ async def _run_daily_automations_async(automation_group: str):
         await redis_client.delete(lock_key)
 
 async def _check_expired_plans_async():
-    """Асинхронная логика: Находит пользователей с истекшим тарифом и деактивирует их."""
     async with AsyncSessionFactory() as session:
         now = datetime.datetime.utcnow()
         stmt = select(User).where(User.plan_expires_at != None, User.plan_expires_at < now, User.daily_likes_limit > 0)
@@ -192,7 +187,6 @@ async def _check_expired_plans_async():
         log.info("plans.expired_processed_and_deactivated", count=len(user_ids_to_deactivate))
 
 async def _snapshot_all_users_friends_count_async():
-    """Асинхронная логика: Собирает данные о количестве друзей для всех активных пользователей."""
     async with AsyncSessionFactory() as session:
         now = datetime.datetime.utcnow()
         stmt = select(User).where(or_(User.plan_expires_at.is_(None), User.plan_expires_at > now))
@@ -218,24 +212,18 @@ async def _snapshot_all_users_friends_count_async():
         
         log.info("snapshot_friends.success", processed=processed_count)
 
-# --- СИНХРОННЫЕ ЗАДАЧИ-ОБЕРТКИ ДЛЯ CELERY (ИСПРАВЛЕНО) ---
-
-@shared_task(name="app.tasks.cron.aggregate_daily_stats")
+@celery_app.task(name="app.tasks.cron.aggregate_daily_stats")
 def aggregate_daily_stats():
-    """Синхронная входная точка для Celery."""
     run_async_from_sync(_aggregate_daily_stats_async())
 
-@shared_task(name="app.tasks.cron.run_daily_automations", ignore_result=True)
+@celery_app.task(name="app.tasks.cron.run_daily_automations", ignore_result=True)
 def run_daily_automations(automation_group: str):
-    """Синхронная входная точка для Celery."""
     run_async_from_sync(_run_daily_automations_async(automation_group))
 
-@shared_task(name="app.tasks.cron.check_expired_plans")
+@celery_app.task(name="app.tasks.cron.check_expired_plans")
 def check_expired_plans():
-    """Синхронная входная точка для Celery."""
     run_async_from_sync(_check_expired_plans_async())
 
-@shared_task(name="app.tasks.cron.snapshot_all_users_friends_count")
+@celery_app.task(name="app.tasks.cron.snapshot_all_users_friends_count")
 def snapshot_all_users_friends_count():
-    """Синхронная входная точка для Celery."""
     run_async_from_sync(_snapshot_all_users_friends_count_async())

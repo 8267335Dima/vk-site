@@ -25,7 +25,6 @@ class BaseVKService:
         self.humanizer: Humanizer | None = None
 
     async def _initialize_vk_api(self):
-        """Асинхронно инициализирует VKAPI и Humanizer."""
         if self.vk_api:
             return
 
@@ -36,13 +35,7 @@ class BaseVKService:
         self.humanizer = Humanizer(delay_profile=self.user.delay_profile, logger_func=self.emitter.send_log)
 
     async def _get_working_proxy(self) -> str | None:
-        """
-        --- ИЗМЕНЕНИЕ: Получает случайный рабочий прокси из базы данных для пользователя. ---
-        """
-        # Загружаем связанные прокси, если они еще не загружены
         if 'proxies' not in self.user.__dict__:
-             # В редких случаях, когда объект User был получен без 'selectinload',
-             # нам нужно будет выполнить явный запрос
              stmt = select(User).where(User.id == self.user.id).options(selectinload(User.proxies))
              result = await self.db.execute(stmt)
              self.user = result.scalar_one()
@@ -61,13 +54,9 @@ class BaseVKService:
         current_value = getattr(stats, field_name)
         new_value = current_value + value
         setattr(stats, field_name, new_value)
-        await self.emitter.send_stats_update(field_name, new_value)
+        await self.emitter.send_stats_update({field_name: new_value})
 
     async def _execute_logic(self, logic_func, *args, **kwargs):
-        """
-        Обертка для выполнения методов сервиса. Гарантирует инициализацию VK API
-        и обработку транзакций.
-        """
         await self._initialize_vk_api()
         
         try:
