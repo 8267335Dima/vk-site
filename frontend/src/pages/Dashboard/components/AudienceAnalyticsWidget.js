@@ -71,7 +71,7 @@ export default function AudienceAnalyticsWidget() {
         <Paper sx={{ p: 3, height: '100%' }}>
              <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
                 <Typography variant="h6" sx={{ fontWeight: 600, m: 0 }}>Анализ аудитории</Typography>
-                <Tooltip title="Анализ проводится по топ-1000 друзей. Данные кешируются на 6 часов." arrow>
+                <Tooltip title="Анализ на основе ваших друзей. Данные периодически обновляются для поддержания актуальности." arrow>
                     <IconButton size="small"><InfoOutlinedIcon fontSize='small' /></IconButton>
                 </Tooltip>
              </Stack>

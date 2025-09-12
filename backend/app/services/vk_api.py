@@ -86,7 +86,10 @@ class VKAPI:
         return await self._make_request("stories.get", params={})
 
     async def get_incoming_friend_requests(self, count: int = 1000, **kwargs) -> Optional[Dict[str, Any]]:
-        params = {"count": count, "extended": 0, **kwargs}
+        # --- ИСПРАВЛЕНИЕ: Убираем need_viewed, используем extended для получения профилей ---
+        params = {"count": count, **kwargs}
+        if 'extended' in params and params['extended'] == 1:
+            params['fields'] = "sex,online,last_seen,is_closed,status,counters"
         return await self._make_request("friends.getRequests", params=params)
 
     async def accept_friend_request(self, user_id: int) -> Optional[Dict[str, Any]]:
@@ -123,3 +126,9 @@ async def is_token_valid(vk_token: str) -> Optional[int]:
         return user_info.get('id') if user_info else None
     except VKAPIError:
         return None
+    
+async def get_groups(self, user_id: int, extended: int = 1, fields: str = "members_count", count: int = 1000) -> Optional[Dict[str, Any]]:
+        return await self._make_request("groups.get", params={"user_id": user_id, "extended": extended, "fields": fields, "count": count})
+
+async def leave_group(self, group_id: int) -> Optional[int]:
+        return await self._make_request("groups.leave", params={"group_id": group_id})

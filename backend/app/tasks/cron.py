@@ -27,7 +27,7 @@ from app.services.vk_api import VKAuthError
 from app.tasks.utils import run_async_from_sync
 
 log = structlog.get_logger(__name__)
-redis_client = Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, db=2, decode_responses=True)
+# <-- ИЗМЕНЕНИЕ: Глобальный клиент redis_client удален отсюда.
 
 TASK_FUNC_MAP = {
     "like_feed": like_feed,
@@ -102,9 +102,12 @@ async def _aggregate_daily_stats_async():
         log.info("aggregate_daily_stats.success", users_count=len(daily_sums), date=yesterday.isoformat())
 
 async def _run_daily_automations_async(automation_group: str):
+    redis_client = Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, db=2, decode_responses=True)
     lock_key = f"lock:task:run_automations:{automation_group}"
+    
     if not await redis_client.set(lock_key, "1", ex=240, nx=True):
         log.warn("run_daily_automations.already_running", group=automation_group)
+        await redis_client.close()
         return
     
     try:
@@ -153,11 +156,17 @@ async def _run_daily_automations_async(automation_group: str):
             await session.commit()
     finally:
         await redis_client.delete(lock_key)
+        await redis_client.close() 
 
 async def _check_expired_plans_async():
     async with AsyncSessionFactory() as session:
         now = datetime.datetime.utcnow()
-        stmt = select(User).where(User.plan_expires_at != None, User.plan_expires_at < now, User.daily_likes_limit > 0)
+        # <-- ИСПРАВЛЕНИЕ: Упрощенная логика для поиска истекших планов
+        stmt = select(User).where(
+            User.plan != 'Expired',
+            User.plan_expires_at != None,
+            User.plan_expires_at < now
+        )
         result = await session.execute(stmt)
         expired_users = result.scalars().all()
 
@@ -177,7 +186,9 @@ async def _check_expired_plans_async():
         deactivate_automations_stmt = update(Automation).where(Automation.user_id.in_(user_ids_to_deactivate)).values(is_active=False)
         await session.execute(deactivate_automations_stmt)
 
+        # <-- ИСПРАВЛЕНИЕ: Меняем план на 'Expired'
         deactivate_users_stmt = update(User).where(User.id.in_(user_ids_to_deactivate)).values(
+            plan="Expired",
             daily_likes_limit=expired_plan_limits["daily_likes_limit"],
             daily_add_friends_limit=expired_plan_limits["daily_add_friends_limit"]
         )

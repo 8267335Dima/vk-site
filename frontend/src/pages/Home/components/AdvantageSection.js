@@ -1,15 +1,20 @@
 // frontend/src/pages/Home/components/AdvantageSection.js
 import React from 'react';
-import { Typography, Stack, Paper, alpha, useTheme, Box } from '@mui/material';
+import { Typography, Stack, Paper, alpha, useTheme, Box, Grid } from '@mui/material';
 import { motion } from 'framer-motion';
-import { XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Area, AreaChart } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import SecurityIcon from '@mui/icons-material/Security';
 import TimerIcon from '@mui/icons-material/Timer';
 
 const projectionData = [
-  { name: 'Старт', 'Охват': 350 }, { name: 'Неделя 1', 'Охват': 520 }, { name: 'Неделя 2', 'Охват': 810 },
-  { name: 'Неделя 3', 'Охват': 1350 }, { name: 'Неделя 4', 'Охват': 2280 }, { name: 'Неделя 5', 'Охват': 3450 }, { name: 'Неделя 6', 'Охват': 5250 },
+  { name: 'Старт', 'Охват': 350, 'Подписчики': 1000 },
+  { name: 'Неделя 1', 'Охват': 520, 'Подписчики': 1015 },
+  { name: 'Неделя 2', 'Охват': 810, 'Подписчики': 1045 },
+  { name: 'Неделя 3', 'Охват': 1350, 'Подписчики': 1110 },
+  { name: 'Неделя 4', 'Охват': 2280, 'Подписчики': 1250 },
+  { name: 'Неделя 5', 'Охват': 3450, 'Подписчики': 1480 },
+  { name: 'Неделя 6', 'Охват': 5250, 'Подписчики': 1800 },
 ];
 
 const fadeInUp = {
@@ -20,52 +25,72 @@ const staggerContainer = {
     animate: { transition: { staggerChildren: 0.15 } }
 };
 
+const CustomTooltip = ({ active, payload, label }) => {
+    if (active && payload && payload.length) {
+        return (
+            <Paper sx={{ p: 2, background: 'rgba(30, 31, 37, 0.9)', backdropFilter: 'blur(5px)', borderRadius: 2 }}>
+                <Typography variant="body2" sx={{ mb: 1, fontWeight: 600 }}>{label}</Typography>
+                {payload.map(p => (
+                    <Typography key={p.name} variant="body2" sx={{ color: p.color }}>
+                        {`${p.name}: ${p.value.toLocaleString('ru-RU')}`}
+                    </Typography>
+                ))}
+            </Paper>
+        );
+    }
+    return null;
+};
+
+
 const AdvantageSection = () => {
     const theme = useTheme();
 
     return (
-        <Stack spacing={6} alignItems="center">
-            <motion.div initial="initial" whileInView="animate" variants={staggerContainer} viewport={{ once: true, amount: 0.5 }}>
-                <motion.div variants={fadeInUp}>
-                    <Typography variant="h3" component="h2" sx={{ fontWeight: 700, mb: 2, textAlign: 'center' }}>
-                        Ваше технологическое преимущество
-                    </Typography>
-                    <Typography variant="h6" color="text.secondary" sx={{ mb: 4, textAlign: 'center', maxWidth: '700px' }}>
-                        Мы объединили передовые технологии и глубокое понимание алгоритмов, чтобы вы получали измеримый результат.
-                    </Typography>
-                </motion.div>
-                <motion.div variants={fadeInUp}>
-                    <Stack direction={{xs: 'column', md: 'row'}} spacing={3} justifyContent="center">
-                        <Stack direction="row" spacing={2}><SecurityIcon color="primary"/><Typography><b>Безопасность — наш приоритет:</b> работа через временный токен VK и поддержка личных прокси.</Typography></Stack>
-                        <Stack direction="row" spacing={2}><AutoAwesomeIcon color="primary"/><Typography><b>Интеллектуальная имитация:</b> алгоритм Humanizer™ делает автоматизацию неотличимой от ручной работы.</Typography></Stack>
-                        <Stack direction="row" spacing={2}><TimerIcon color="primary"/><Typography><b>Автоматизация 24/7:</b> настройте сценарии один раз, и Zenith будет работать на вас круглосуточно.</Typography></Stack>
+        <Grid container spacing={6} alignItems="center">
+            <Grid item xs={12} md={5}>
+                 <motion.div initial="initial" whileInView="animate" variants={staggerContainer} viewport={{ once: true, amount: 0.5 }}>
+                    <motion.div variants={fadeInUp}>
+                        <Typography variant="h3" component="h2" sx={{ fontWeight: 700, mb: 2 }}>
+                           Ваше технологическое преимущество
+                        </Typography>
+                        <Typography variant="h6" color="text.secondary" sx={{ mb: 4 }}>
+                            Мы объединили передовые технологии и глубокое понимание алгоритмов, чтобы вы получали измеримый результат.
+                        </Typography>
+                    </motion.div>
+                    <Stack spacing={3}>
+                        <motion.div variants={fadeInUp}>
+                            <Stack direction="row" spacing={2}><SecurityIcon color="primary"/><Typography><b>Безопасность — наш приоритет:</b> работа через временный токен VK и поддержка личных прокси для полной анонимности.</Typography></Stack>
+                        </motion.div>
+                        <motion.div variants={fadeInUp}>
+                            <Stack direction="row" spacing={2}><AutoAwesomeIcon color="primary"/><Typography><b>Интеллектуальная имитация:</b> алгоритм Humanizer™ делает автоматизацию неотличимой от ручной работы, предотвращая блокировки.</Typography></Stack>
+                        </motion.div>
+                         <motion.div variants={fadeInUp}>
+                            <Stack direction="row" spacing={2}><TimerIcon color="primary"/><Typography><b>Автоматизация 24/7:</b> настройте сценарии один раз, и Zenith будет работать на вас круглосуточно, даже когда вы оффлайн.</Typography></Stack>
+                        </motion.div>
                     </Stack>
-                </motion.div>
-            </motion.div>
-            <Box sx={{width: '100%', maxWidth: '900px'}}>
+                 </motion.div>
+            </Grid>
+            <Grid item xs={12} md={7}>
                 <motion.div initial={{ opacity: 0, scale: 0.9 }} whileInView={{ opacity: 1, scale: 1 }} viewport={{ once: true, amount: 0.5 }} transition={{ duration: 0.7 }}>
                      <Paper sx={{ p: {xs: 2, sm: 3}, height: 400, display: 'flex', flexDirection: 'column' }}>
-                         <Typography variant="h6" sx={{ fontWeight: 600 }}>Прогнозируемый рост охватов</Typography>
-                         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Пример влияния регулярной активности на видимость вашего профиля.</Typography>
+                         <Typography variant="h6" sx={{ fontWeight: 600 }}>Прогнозируемый рост</Typography>
+                         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Пример влияния регулярной активности на видимость профиля.</Typography>
                          <ResponsiveContainer width="100%" height="100%">
-                             <AreaChart data={projectionData} margin={{ top: 5, right: 20, left: -10, bottom: 5 }}>
-                                 <defs>
-                                     <linearGradient id="colorUv" x1="0" y1="0" x2="0" y2="1">
-                                         <stop offset="5%" stopColor={theme.palette.secondary.main} stopOpacity={0.7}/>
-                                         <stop offset="95%" stopColor={theme.palette.secondary.main} stopOpacity={0}/>
-                                     </linearGradient>
-                                 </defs>
-                                 <XAxis dataKey="name" stroke="#A0A3BD" fontSize="0.8rem" />
-                                 <YAxis stroke="#A0A3BD" fontSize="0.8rem"/>
-                                 <CartesianGrid strokeDasharray="3 3" stroke={alpha("#A0A3BD", 0.1)} />
-                                 <Tooltip contentStyle={{ backgroundColor: 'rgba(23, 24, 29, 0.8)', border: '1px solid #A0A3BD25', borderRadius: '12px', backdropFilter: 'blur(5px)' }}/>
-                                 <Area type="monotone" dataKey="Охват" stroke={theme.palette.secondary.main} fillOpacity={1} fill="url(#colorUv)" strokeWidth={3} />
-                             </AreaChart>
+                            <LineChart data={projectionData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke={alpha("#A0A3BD", 0.1)} />
+                                <XAxis dataKey="name" stroke="#A0A3BD" fontSize="0.8rem" />
+                                <YAxis yAxisId="left" stroke={theme.palette.primary.main} fontSize="0.8rem" />
+                                <YAxis yAxisId="right" orientation="right" stroke={theme.palette.secondary.main} fontSize="0.8rem" />
+                                <Tooltip content={<CustomTooltip />} />
+                                <Legend />
+                                <Line yAxisId="left" type="monotone" dataKey="Охват" stroke={theme.palette.primary.main} strokeWidth={3} dot={false}/>
+                                <Line yAxisId="right" type="monotone" dataKey="Подписчики" stroke={theme.palette.secondary.main} strokeWidth={3} dot={false}/>
+                            </LineChart>
                          </ResponsiveContainer>
                      </Paper>
                 </motion.div>
-            </Box>
-        </Stack>
+            </Grid>
+        </Grid>
     );
 };
 

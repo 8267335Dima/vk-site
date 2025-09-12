@@ -6,19 +6,27 @@ from fastapi_cache.decorator import cache
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import FriendsHistory, User, DailyStats
+from app.db.models import FriendsHistory, User, DailyStats, ProfileMetric
 from app.api.dependencies import get_current_user
 from app.db.session import get_db
 from app.api.schemas.analytics import (
     AudienceAnalyticsResponse, AudienceStatItem, 
     FriendsDynamicItem, FriendsDynamicResponse,
     ActionSummaryResponse, ActionSummaryItem,
-    SexDistributionResponse
+    SexDistributionResponse,
+    ProfileGrowthResponse, ProfileGrowthItem 
 )
 from app.services.vk_api import VKAPI
 from app.core.security import decrypt_data
+from pydantic import BaseModel
 
 router = APIRouter()
+
+class ProfileSummaryResponse(BaseModel):
+    friends: int
+    followers: int
+    photos: int
+    wall_posts: int
 
 def calculate_age(bdate: str) -> int | None:
     try:
@@ -82,6 +90,61 @@ async def get_audience_analytics(current_user: User = Depends(get_current_user))
         age_distribution=age_distribution,
         sex_distribution=sex_distribution
     )
+
+@router.get("/profile-summary", response_model=ProfileSummaryResponse)
+@cache(expire=3600) # Кеш на 1 час
+async def get_profile_summary(current_user: User = Depends(get_current_user)):
+    """Возвращает сводную информацию по профилю пользователя."""
+    vk_token = decrypt_data(current_user.encrypted_vk_token)
+    vk_api = VKAPI(access_token=vk_token)
+    
+    # Получаем основную информацию, включая счетчики
+    user_info = await vk_api.get_user_info(user_ids=str(current_user.vk_id), fields="counters")
+    
+    friends = user_info[0].get('counters', {}).get('friends', 0) if user_info else 0
+    followers = user_info[0].get('counters', {}).get('followers', 0) if user_info else 0
+    photos = user_info[0].get('counters', {}).get('photos', 0) if user_info else 0
+    
+    # Количество постов на стене нужно запрашивать отдельно
+    wall_info = await vk_api.get_wall(owner_id=current_user.vk_id, count=1)
+    wall_posts = wall_info.get('count', 0) if wall_info else 0
+    
+    return ProfileSummaryResponse(
+        friends=friends,
+        followers=followers,
+        photos=photos,
+        wall_posts=wall_posts
+    )
+
+@router.get("/profile-growth", response_model=ProfileGrowthResponse)
+async def get_profile_growth_analytics(
+    days: int = Query(30, ge=7, le=90),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    end_date = datetime.date.today()
+    start_date = end_date - datetime.timedelta(days=days - 1)
+
+    stmt = (
+        select(ProfileMetric)
+        .where(
+            ProfileMetric.user_id == current_user.id,
+            ProfileMetric.date.between(start_date, end_date)
+        )
+        .order_by(ProfileMetric.date)
+    )
+    result = await db.execute(stmt)
+    data = result.scalars().all()
+    
+    response_data = [
+        ProfileGrowthItem(
+            date=row.date, 
+            total_likes_on_content=row.total_likes_on_content,
+            friends_count=row.friends_count
+        ) for row in data
+    ]
+
+    return ProfileGrowthResponse(data=response_data)
 
 @router.get("/friends-dynamic", response_model=FriendsDynamicResponse)
 async def get_friends_dynamic(

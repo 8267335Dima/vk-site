@@ -31,7 +31,22 @@ const handleMessage = (event) => {
                 });
                 break;
             case 'task_history_update':
-                 queryClient.invalidateQueries({ queryKey: ['task_history'] });
+                // --- ИЗМЕНЕНИЕ: Оптимистичное обновление вместо полной перезагрузки ---
+                queryClient.setQueryData(['task_history'], (oldData) => {
+                    if (!oldData) return oldData;
+                    
+                    const newPages = oldData.pages.map(page => ({
+                        ...page,
+                        items: page.items.map(task => 
+                            task.id === payload.task_history_id 
+                                ? { ...task, status: payload.status, result: payload.result } 
+                                : task
+                        )
+                    }));
+
+                    return { ...oldData, pages: newPages };
+                });
+
                 if (payload.status === 'SUCCESS') {
                     toast.success(`Задача "${payload.task_name}" успешно завершена!`);
                 }
@@ -44,7 +59,7 @@ const handleMessage = (event) => {
                 const message = payload.message;
                 const options = { duration: 8000 };
                 if (payload.level === 'error') toast.error(message, options);
-                else if (payload.level === 'warning') toast.error(message, options); // Using toast.error for visibility
+                else if (payload.level === 'warning') toast.error(message, options);
                 else toast.success(message, { duration: 5000 });
                 break;
             default:

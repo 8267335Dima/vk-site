@@ -6,7 +6,6 @@ import { useUserStore } from 'store/userStore';
 
 export const useActionModalState = (open, actionKey, title) => {
     const [params, setParams] = useState({});
-    // --- ИСПРАВЛЕНИЕ: Выбираем только нужные поля, чтобы избежать лишних ререндеров ---
     const daily_add_friends_limit = useUserStore(state => state.userInfo?.daily_add_friends_limit);
     const daily_likes_limit = useUserStore(state => state.userInfo?.daily_likes_limit);
 
@@ -14,17 +13,17 @@ export const useActionModalState = (open, actionKey, title) => {
         queryKey: ['taskInfo', actionKey],
         queryFn: () => fetchTaskInfo(actionKey),
         enabled: !!(open && actionKey),
-        staleTime: 1000 * 60 * 5, // Кешируем на 5 минут
+        staleTime: 1000 * 60 * 5,
     });
 
     useEffect(() => {
         if (open) {
             const defaults = {
                 count: 50,
-                filters: { sex: 0, is_online: false, allow_closed_profiles: false, remove_banned: true, min_friends: 0, min_followers: 0, last_seen_hours: 0, last_seen_days: 0 },
+                filters: { sex: 0, is_online: false, allow_closed_profiles: false, remove_banned: true, min_friends: null, max_friends: null, min_followers: null, max_followers: null, last_seen_hours: 0, last_seen_days: 0 },
                 like_config: { enabled: false, targets: ['avatar'] },
                 send_message_on_add: false,
-                message_text: "Привет! Увидел(а) тебя в рекомендациях, решил(а) добавиться. Будем знакомы!",
+                message_text: "Привет, {name}! Увидел(а) твой профиль в рекомендациях, буду рад(а) знакомству.",
                 only_new_dialogs: false,
             };
             if (actionKey === 'add_recommended') defaults.count = 20;
@@ -33,14 +32,14 @@ export const useActionModalState = (open, actionKey, title) => {
         }
     }, [open, actionKey]);
     
-    // --- ИСПРАВЛЕНИЕ: Оборачиваем в useCallback для стабильности ---
     const handleParamChange = useCallback((name, value) => {
         setParams(p => {
             const keys = name.split('.');
             if (keys.length > 1) {
-                const newParams = structuredClone(p); // Простое глубокое копирование для вложенных объектов
+                const newParams = { ...p };
                 let current = newParams;
                 for (let i = 0; i < keys.length - 1; i++) {
+                    current[keys[i]] = { ...current[keys[i]] };
                     current = current[keys[i]];
                 }
                 current[keys[keys.length - 1]] = value;
@@ -50,7 +49,6 @@ export const useActionModalState = (open, actionKey, title) => {
         });
     }, []);
     
-    // --- ИСПРАВЛЕНИЕ: Оборачиваем в useCallback ---
     const getModalTitle = useCallback(() => {
         let fullTitle = title;
         if (isLoadingInfo) {
@@ -62,7 +60,6 @@ export const useActionModalState = (open, actionKey, title) => {
         return fullTitle;
     }, [title, actionKey, taskInfo, isLoadingInfo]);
 
-    // --- ИСПРАВЛЕНИЕ: Оборачиваем в useCallback и используем стабильные зависимости ---
     const getActionLimit = useCallback(() => {
         if (actionKey?.includes('add')) return daily_add_friends_limit || 100;
         if (actionKey?.includes('like')) return daily_likes_limit || 1000;

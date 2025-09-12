@@ -1,4 +1,3 @@
-# backend/app/tasks/base_task.py
 import asyncio
 from celery import Task
 from sqlalchemy import create_engine
@@ -7,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import engine
 from app.db.models import TaskHistory
 from app.core.config import settings
+from app.tasks.utils import run_async_from_sync
 
 AsyncSessionFactory_Celery = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
@@ -16,6 +16,10 @@ SyncSessionFactory_Celery = sessionmaker(autocommit=False, autoflush=False, bind
 
 class AppBaseTask(Task):
     acks_late = True
+
+    # --- ИЗМЕНЕНИЕ: Добавлена обертка для асинхронных вызовов ---
+    def _run_async_from_sync(self, coro):
+        return run_async_from_sync(coro)
 
     def _update_task_history_sync(self, task_history_id: int, status: str, result: str):
         if not task_history_id:

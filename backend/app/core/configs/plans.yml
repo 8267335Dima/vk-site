@@ -1,6 +1,5 @@
 # backend/app/core/configs/plans.yml
 # Единый источник правды о тарифных планах.
-# Цены и скидки настраиваются здесь и автоматически применяются в API.
 
 Expired:
   display_name: "Истёкший"
@@ -8,21 +7,25 @@ Expired:
   limits:
     daily_likes_limit: 0
     daily_add_friends_limit: 0
+    daily_message_limit: 0
   available_features: []
 
 Базовый:
-  display_name: "Базовый (Пробный)"
+  display_name: "Базовый"
   description: "Ознакомительный период на 14 дней для ручного запуска задач."
   features:
     - "Ручной запуск всех задач"
-    - "Лимит 20 заявок в друзья / день"
-    - "Лимит 400 лайков / день"
+    - "Лимит: 20 заявок в друзья / день"
+    - "Лимит: 400 лайков / день"
+    - "До 3-х задач одновременно"
     - "Базовые фильтры аудитории"
     - "История последних 50 действий"
     - "Базовая аналитика аудитории"
   limits:
     daily_likes_limit: 400
     daily_add_friends_limit: 20
+    daily_message_limit: 0
+    max_concurrent_tasks: 3
   available_features:
     - "like_feed"
     - "add_recommended"
@@ -33,29 +36,36 @@ Expired:
 
 Plus:
   display_name: "Plus"
-  base_price: 349.00 # Цена за 1 месяц
+  base_price: 349.00
   currency: "RUB"
   description: "Для эффективного продвижения с помощью автоматизации ключевых действий."
   is_popular: true
-  periods: # Гибкая настройка периодов и скидок
+  periods:
+    - months: 1
+      label: "1 месяц"
     - months: 3
-      discount_percent: 10 # Скидка 10% за 3 месяца
+      label: "3 месяца"
+      discount_percent: 10
     - months: 6
+      label: "6 месяцев"
       discount_percent: 15
     - months: 12
-      discount_percent: 25 # Самая выгодная скидка
+      label: "1 год"
+      discount_percent: 25
   features:
     - "Все возможности Базового тарифа"
     - "Полный доступ к Центру Автоматизации"
-    - "Вечный онлайн"
-    - "Выбор скорости работы (Normal)"
-    - "Лимит 60 заявок в друзья / день"
-    - "Лимит 800 лайков / день"
+    - "Статус 'Вечный онлайн'"
+    - "Лимит: 60 заявок в друзья / день"
+    - "Лимит: 800 лайков / день"
     - "Полная история всех действий"
   limits:
     daily_likes_limit: 800
     daily_add_friends_limit: 60
+    daily_message_limit: 0
+    max_concurrent_tasks: 5
   available_features:
+    - "automations_center"
     - "like_feed"
     - "add_recommended"
     - "accept_friends"
@@ -72,22 +82,29 @@ PRO:
   description: "Максимум для SMM-специалистов и требовательных пользователей."
   is_popular: false
   periods:
+    - months: 1
+      label: "1 месяц"
     - months: 3
+      label: "3 месяца"
       discount_percent: 12
     - months: 6
+      label: "6 месяцев"
       discount_percent: 20
     - months: 12
+      label: "1 год"
       discount_percent: 30
   features:
     - "Все возможности тарифа Plus"
     - "Конструктор сложных Сценариев"
-    - "Массовая рассылка сообщений друзьям"
-    - "Аналитика роста профиля (лайки)"
+    - "Массовая рассылка сообщений"
+    - "Аналитика роста профиля"
     - "Управление прокси-серверами"
-    - "Выбор скорости работы (Fast/Slow)"
-    - "Лимит 100 заявок в друзья / день"
-    - "Лимит 1500 лайков / день"
+    - "Выбор скорости работы (Быстрый/Медленный)"
+    - "Лимит: 100 заявок в друзья / день"
+    - "Лимит: 1500 лайков / день"
+    - "Лимит: 50 сообщений / день"
   limits:
     daily_likes_limit: 1500
     daily_add_friends_limit: 100
-  available_features: "*" # Все доступно
+    daily_message_limit: 50
+  available_features: "*"

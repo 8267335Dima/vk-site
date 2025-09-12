@@ -1,7 +1,7 @@
 // frontend/src/pages/Dashboard/components/ActionModalFilters.js
 import React from 'react';
 import {
-    FormControlLabel, Switch, Select, MenuItem, InputLabel, FormControl, Grid, Typography, Box, Tooltip
+    FormControlLabel, Switch, Select, MenuItem, InputLabel, FormControl, Grid, Typography, Box, Tooltip, TextField
 } from '@mui/material';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { content } from 'content/content';
@@ -22,15 +22,13 @@ const LabelWithTooltip = ({ title, tooltipText }) => (
     </Box>
 );
 
-// --- ИЗМЕНЕНИЕ: Добавлен export для использования в других модулях ---
 export const CommonFiltersSettings = ({ filters, onChange, actionKey }) => {
     const showClosedProfilesFilter = ['accept_friends', 'add_recommended', 'mass_messaging'].includes(actionKey);
     const isAcceptFriends = actionKey === 'accept_friends';
 
     const handleChange = (e) => {
         const { name, value, type, checked } = e.target;
-        const val = type === 'checkbox' ? checked : value;
-        // Передаем чистое имя поля, родительский компонент сам обработает вложенность
+        const val = type === 'checkbox' ? checked : (type === 'number' ? (value ? parseInt(value, 10) : null) : value);
         onChange(name, val);
     };
 
@@ -70,29 +68,68 @@ export const CommonFiltersSettings = ({ filters, onChange, actionKey }) => {
                         </Select>
                     </FormControl>
                 </Grid>
+                <Grid item xs={12}>
+                    <TextField
+                        name="status_keyword"
+                        value={filters.status_keyword || ''}
+                        onChange={handleChange}
+                        label="Ключевое слово в статусе"
+                        size="small"
+                        fullWidth
+                        placeholder="Например: ищу работу, спб"
+                        helperText="Не применяется к закрытым профилям."
+                    />
+                </Grid>
                  {isAcceptFriends && (
                     <>
+                        {/* --- ИЗМЕНЕНИЕ: Замена Select на TextField для гибкости --- */}
                         <Grid item xs={6}>
-                             <FormControl fullWidth size="small">
-                                <InputLabel>Мин. друзей</InputLabel>
-                                <Select name="min_friends" value={filters.min_friends || 0} label="Мин. друзей" onChange={handleChange}>
-                                    <MenuItem value={0}>Любое</MenuItem>
-                                    <MenuItem value={50}>&gt; 50</MenuItem>
-                                    <MenuItem value={100}>&gt; 100</MenuItem>
-                                    <MenuItem value={500}>&gt; 500</MenuItem>
-                                </Select>
-                            </FormControl>
+                           <TextField
+                                name="min_friends"
+                                value={filters.min_friends || ''}
+                                onChange={handleChange}
+                                label="Мин. друзей"
+                                type="number"
+                                size="small"
+                                fullWidth
+                                placeholder="Любое"
+                           />
                         </Grid>
                          <Grid item xs={6}>
-                             <FormControl fullWidth size="small">
-                                <InputLabel>Мин. подписчиков</InputLabel>
-                                <Select name="min_followers" value={filters.min_followers || 0} label="Мин. подписчиков" onChange={handleChange}>
-                                    <MenuItem value={0}>Любое</MenuItem>
-                                    <MenuItem value={100}>&gt; 100</MenuItem>
-                                    <MenuItem value={500}>&gt; 500</MenuItem>
-                                    <MenuItem value={1000}>&gt; 1000</MenuItem>
-                                </Select>
-                            </FormControl>
+                           <TextField
+                                name="max_friends"
+                                value={filters.max_friends || ''}
+                                onChange={handleChange}
+                                label="Макс. друзей"
+                                type="number"
+                                size="small"
+                                fullWidth
+                                placeholder="Любое"
+                           />
+                        </Grid>
+                         <Grid item xs={6}>
+                           <TextField
+                                name="min_followers"
+                                value={filters.min_followers || ''}
+                                onChange={handleChange}
+                                label="Мин. подписчиков"
+                                type="number"
+                                size="small"
+                                fullWidth
+                                placeholder="Любое"
+                           />
+                        </Grid>
+                         <Grid item xs={6}>
+                            <TextField
+                                name="max_followers"
+                                value={filters.max_followers || ''}
+                                onChange={handleChange}
+                                label="Макс. подписчиков"
+                                type="number"
+                                size="small"
+                                fullWidth
+                                placeholder="Любое"
+                           />
                         </Grid>
                     </>
                 )}
@@ -101,12 +138,10 @@ export const CommonFiltersSettings = ({ filters, onChange, actionKey }) => {
     );
 };
 
-// --- ИЗМЕНЕНИЕ: Добавлен export для использования в других модулях ---
 export const RemoveFriendsFilters = ({ filters, onChange }) => {
     const handleChange = (e) => {
         const { name, value, type, checked } = e.target;
         const val = type === 'checkbox' ? checked : value;
-        // Передаем чистое имя поля, родительский компонент сам обработает вложенность
         onChange(name, val);
     };
     return (
@@ -146,7 +181,6 @@ export const RemoveFriendsFilters = ({ filters, onChange }) => {
     );
 };
 
-// Экспорт по умолчанию для ActionModalContent, который ожидает префикс "filters."
 export default function ActionModalFilters({ filters, onChange, actionKey }) {
     if (actionKey === 'remove_friends') {
         return <RemoveFriendsFilters filters={filters} onChange={(name, val) => onChange(`filters.${name}`, val)} />;

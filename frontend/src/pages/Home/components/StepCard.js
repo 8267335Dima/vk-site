@@ -31,12 +31,12 @@ const StepCard = ({ num, icon, title, desc }) => {
                     variant="h1" 
                     sx={{
                         position: 'absolute',
-                        top: '-30px',
-                        left: '0px',
+                        top: 0, // ИСПРАВЛЕНИЕ: Выравнивание
+                        right: 16, // ИСПРАВЛЕНИЕ: Выравнивание
                         fontWeight: 800,
-                        fontSize: '9rem',
+                        fontSize: '8rem', // Уменьшен для лучшего вида
                         lineHeight: 1,
-                        color: (theme) => alpha(theme.palette.text.primary, 0.04),
+                        color: (theme) => alpha(theme.palette.text.primary, 0.03), // Сделан еще прозрачнее
                         zIndex: 0,
                         userSelect: 'none'
                     }}

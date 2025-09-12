@@ -14,6 +14,7 @@ import { fetchScenarios, deleteScenario, updateScenario } from 'api';
 import { toast } from 'react-hot-toast';
 import cronstrue from 'cronstrue/i18n';
 import ScenarioEditorModal from './ScenarioEditorModal';
+import { content } from 'content/content';
 
 const ScenarioCard = ({ scenario, onEdit, onDelete, onToggle }) => {
     const toggleMutation = useMutation({
@@ -38,7 +39,7 @@ const ScenarioCard = ({ scenario, onEdit, onDelete, onToggle }) => {
                 </Typography>
                 <Stack direction="row" spacing={1} sx={{ mt: 1.5, flexWrap: 'wrap', gap: 1 }}>
                     {scenario.steps.slice(0, 5).map(step => (
-                        <Chip key={step.id} label={step.action_type} size="small" variant="outlined" />
+                        <Chip key={step.id} label={content.actions[step.action_type]?.title || step.action_type} size="small" variant="outlined" />
                     ))}
                     {scenario.steps.length > 5 && <Chip label={`+${scenario.steps.length - 5}`} size="small" />}
                 </Stack>
@@ -47,12 +48,8 @@ const ScenarioCard = ({ scenario, onEdit, onDelete, onToggle }) => {
                 <Tooltip title={scenario.is_active ? "Приостановить" : "Запустить"}>
                     <span>
                         <Switch
-                            checked={scenario.is_active}
-                            onChange={handleToggle}
-                            disabled={isMutating}
-                            icon={<PlayCircleOutlineIcon />}
-                            checkedIcon={<PauseCircleOutlineIcon />}
-                            color="success"
+                            checked={scenario.is_active} onChange={handleToggle} disabled={isMutating}
+                            icon={<PlayCircleOutlineIcon />} checkedIcon={<PauseCircleOutlineIcon />} color="success"
                         />
                     </span>
                 </Tooltip>
@@ -102,10 +99,8 @@ export default function ScenariosPage() {
                         Мои Сценарии
                     </Typography>
                     <Button
-                        variant="contained"
-                        startIcon={<AddCircleOutlineIcon />}
-                        onClick={() => handleOpenModal()}
-                    >
+                        variant="contained" startIcon={<AddCircleOutlineIcon />}
+                        onClick={() => handleOpenModal()}>
                         Создать сценарий
                     </Button>
                 </Box>
@@ -114,18 +109,17 @@ export default function ScenariosPage() {
                     <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}><CircularProgress /></Box>
                 ) : (
                     <Stack spacing={2}>
+                        {/* --- ИЗМЕНЕНИЕ: Добавлен блок "empty state" --- */}
                         {scenarios?.length === 0 ? (
-                             <Paper sx={{ p: 5, textAlign: 'center', backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.05) }}>
+                             <Paper sx={{ p: 5, textAlign: 'center', backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.05), borderStyle: 'dashed' }}>
                                 <Typography variant="h6" gutterBottom>У вас пока нет ни одного сценария</Typography>
                                 <Typography color="text.secondary">Сценарии позволяют автоматически выполнять цепочки действий по заданному расписанию. Нажмите "Создать", чтобы добавить первый.</Typography>
                             </Paper>
                         ) : (
                             scenarios?.map(scenario => (
                                 <ScenarioCard
-                                    key={scenario.id}
-                                    scenario={scenario}
-                                    onEdit={handleOpenModal}
-                                    onDelete={deleteMutation.mutate}
+                                    key={scenario.id} scenario={scenario}
+                                    onEdit={handleOpenModal} onDelete={deleteMutation.mutate}
                                     onToggle={{ onSuccess: onToggleSuccess, onError: (error) => toast.error(error.message) }}
                                 />
                             ))
@@ -134,8 +128,7 @@ export default function ScenariosPage() {
                 )}
             </Container>
             <ScenarioEditorModal
-                open={isModalOpen}
-                onClose={handleCloseModal}
+                open={isModalOpen} onClose={handleCloseModal}
                 scenario={editingScenario}
             />
         </>

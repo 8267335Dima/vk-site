@@ -26,6 +26,7 @@ class User(Base):
 
     daily_likes_limit = Column(Integer, nullable=False, server_default=text('0'))
     daily_add_friends_limit = Column(Integer, nullable=False, server_default=text('0'))
+    daily_message_limit = Column(Integer, nullable=False, server_default=text('0')) # <-- НОВОЕ ПОЛЕ
     
     delay_profile = Column(Enum(DelayProfile), nullable=False, server_default=DelayProfile.normal.name)
 
@@ -143,6 +144,7 @@ class ScenarioStep(Base):
     step_order = Column(Integer, nullable=False)
     action_type = Column(String, nullable=False)
     settings = Column(JSON, nullable=False)
+    batch_settings = Column(JSON, nullable=True) # <-- НОВОЕ ПОЛЕ
     scenario = relationship("Scenario", back_populates="steps")
 
 class Notification(Base):

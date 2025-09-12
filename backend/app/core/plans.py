@@ -12,9 +12,15 @@ def get_limits_for_plan(plan_name: str) -> dict:
 
 def get_all_feature_keys() -> list[str]:
     """Возвращает список всех возможных ключей фич из конфига."""
-    # Собираем ID из конфига автоматизаций и добавляем другие уникальные фичи
     automation_ids = [item.get('id') for item in AUTOMATIONS_CONFIG if item.get('id')]
-    other_features = ['proxy_management', 'scenarios', 'profile_growth_analytics', 'fast_slow_delay_profile']
+    # --- ИСПРАВЛЕНИЕ: Добавляем 'automations_center' в список всех фич ---
+    other_features = [
+        'proxy_management', 
+        'scenarios', 
+        'profile_growth_analytics', 
+        'fast_slow_delay_profile',
+        'automations_center'
+    ]
     return list(set(automation_ids + other_features))
 
 def is_feature_available_for_plan(plan_name: str, feature_id: str) -> bool:
@@ -27,7 +33,6 @@ def is_feature_available_for_plan(plan_name: str, feature_id: str) -> bool:
     
     return feature_id in available_features
 
-# --- НОВАЯ ФУНКЦИЯ, КОТОРУЮ НЕ МОГ НАЙТИ users.py ---
 def get_features_for_plan(plan_name: str) -> list[str]:
     """
     Возвращает полный список доступных ключей фич для тарифного плана.

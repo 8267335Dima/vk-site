@@ -1,4 +1,3 @@
-# docker-compose.yml
 services:
   postgres:
     image: postgres:16-alpine
@@ -36,8 +35,15 @@ services:
       dockerfile: Dockerfile
     container_name: social_pilot_backend_prod
     env_file: ./.env
-    # --- ИЗМЕНЕНИЕ: volumes УДАЛЕНЫ для production-сборки ---
-    # Это гарантирует, что используется код, собранный в Docker-образе.
+    ports: 
+      - "8000:8000"
+    # --- ИСПРАВЛЕНИЕ: Используем два тома ---
+    volumes:
+      # 1. Монтируем код для live-reload разработки
+      - ./backend:/app
+      # 2. Используем именованный том, чтобы сохранить .venv из образа
+      #    и не дать ему перезаписаться локальной папкой
+      - venv_data:/app/.venv
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -54,8 +60,16 @@ services:
   celery_worker:
     build:
       context: ./backend
-    # Убираем "-P gevent". Celery будет использовать стандартный, совместимый с asyncio пул воркеров.
-    command: poetry run celery -A app.celery_worker.celery_app worker --loglevel=info -c 10 -Q high_priority,default,low_priority
+      dockerfile: Dockerfile
+    container_name: social_pilot_celery_worker_prod
+    env_file: ./.env
+    depends_on:
+      - redis
+      - backend
+    # --- ИСПРАВЛЕНИЕ: Вызываем celery напрямую из venv ---
+    command: >
+      /app/.venv/bin/celery -A app.celery_worker.celery_app worker 
+      --loglevel=info -c 10 -Q high_priority,default,low_priority
     restart: always
 
   celery_beat:
@@ -64,7 +78,6 @@ services:
       dockerfile: Dockerfile
     container_name: social_pilot_celery_beat_prod
     env_file: ./.env
-    # --- ИЗМЕНЕНИЕ: volumes УДАЛЕНЫ ---
     depends_on:
       - redis
       - backend
@@ -128,7 +141,6 @@ services:
     ports:
       - "5555:5555"
     env_file: ./.env
-    # --- ИЗМЕНЕНИЕ: volumes УДАЛЕНЫ ---
     depends_on:
       - redis
     command: >
@@ -141,3 +153,4 @@ volumes:
   postgres_data_prod: {}
   redis_data_prod: {}
   grafana_data_prod: {}
+  venv_data: {}

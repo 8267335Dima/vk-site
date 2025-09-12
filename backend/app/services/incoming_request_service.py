@@ -11,20 +11,17 @@ class IncomingRequestService(BaseVKService):
         await self.emitter.send_log("Начинаем прием заявок в друзья...", "info")
         stats = await self._get_today_stats()
         
-        response = await self.vk_api.get_incoming_friend_requests(need_viewed=1)
+        response = await self.vk_api.get_incoming_friend_requests(extended=1)
         if not response or not response.get('items'):
             await self.emitter.send_log("Входящие заявки не найдены.", "info")
             return
         
-        user_ids = [item['user_id'] for item in response['items']]
-        if not user_ids:
-            await self.emitter.send_log("Нет ID пользователей в заявках.", "info")
-            return
-            
-        profiles = await self._get_user_profiles(user_ids)
-        filtered_profiles = await self._apply_filters_to_profiles(profiles, filters)
+        profiles = response['items']
+        await self.emitter.send_log(f"Найдено {len(profiles)} заявок. Начинаем фильтрацию...", "info")
+        
+        filtered_profiles = self._apply_filters_to_profiles(profiles, filters)
 
-        await self.emitter.send_log(f"Найдено {len(response['items'])} заявок. После фильтрации осталось: {len(filtered_profiles)}.", "info")
+        await self.emitter.send_log(f"После фильтрации осталось: {len(filtered_profiles)}.", "info")
         
         if not filtered_profiles:
             await self.emitter.send_log("Подходящих заявок для приема не найдено.", "success")
@@ -62,18 +59,7 @@ class IncomingRequestService(BaseVKService):
 
         await self.emitter.send_log(f"Завершено. Принято заявок: {processed_count}.", "success")
 
-    async def _get_user_profiles(self, user_ids: List[int]) -> List[Dict[str, Any]]:
-        if not user_ids: return []
-        user_profiles = []
-        fields = "sex,online,last_seen,is_closed,status,counters"
-        for i in range(0, len(user_ids), 1000):
-            chunk = user_ids[i:i + 1000]
-            ids_str = ",".join(map(str, chunk))
-            profiles = await self.vk_api.get_user_info(user_ids=ids_str, fields=fields)
-            if profiles: user_profiles.extend(profiles)
-        return user_profiles
-
-    async def _apply_filters_to_profiles(self, profiles: List[Dict[str, Any]], filters: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _apply_filters_to_profiles(self, profiles: List[Dict[str, Any]], filters: Dict[str, Any]) -> List[Dict[str, Any]]:
         import datetime
         filtered_profiles = []
         now_ts = datetime.datetime.now().timestamp()
@@ -89,23 +75,24 @@ class IncomingRequestService(BaseVKService):
                     continue
 
             counters = profile.get('counters', {})
-            friends_count = counters.get('friends')
-            followers_count = counters.get('followers')
+            friends_count = counters.get('friends', 0)
+            followers_count = counters.get('followers', 0)
 
+            # --- ИЗМЕНЕНИЕ: Добавлена логика для min/max ---
             min_friends = filters.get('min_friends')
-            if min_friends is not None and (friends_count is None or friends_count < min_friends):
+            if min_friends is not None and min_friends > 0 and friends_count < min_friends:
                 continue
             
             max_friends = filters.get('max_friends')
-            if max_friends is not None and (friends_count is None or friends_count > max_friends):
+            if max_friends is not None and max_friends > 0 and friends_count > max_friends:
                 continue
                 
             min_followers = filters.get('min_followers')
-            if min_followers is not None and (followers_count is None or followers_count < min_followers):
+            if min_followers is not None and min_followers > 0 and followers_count < min_followers:
                 continue
 
             max_followers = filters.get('max_followers')
-            if max_followers is not None and (followers_count is None or followers_count > max_followers):
+            if max_followers is not None and max_followers > 0 and followers_count > max_followers:
                 continue
             
             filtered_profiles.append(profile)

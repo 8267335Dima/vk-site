@@ -6,6 +6,7 @@ import { content } from 'content/content';
 import ActionModalFilters from './ActionModalFilters';
 import CountSlider from 'components/CountSlider';
 
+
 const { modal: modalContent } = content;
 
 const LikeAfterAdd = ({ enabled, onChange }) => (
@@ -72,14 +73,15 @@ const ActionModalContent = ({ actionKey, params, onParamChange, limit }) => {
     const actionConfig = content.actions[actionKey];
     if (!actionConfig) return null;
 
-    const needsCount = !!actionConfig.modalCountLabel;
+    const needsCount = !!actionConfig.modal_count_label;
     const hasFilters = !['view_stories'].includes(actionKey);
     
     return (
         <Stack spacing={3} py={1}>
+            {/* --- ИЗМЕНЕНИЕ: Замена TextField на CountSlider --- */}
             {needsCount && (
                 <CountSlider
-                    label={actionConfig.modalCountLabel}
+                    label={actionConfig.modal_count_label}
                     value={params.count || 0}
                     onChange={(val) => onParamChange('count', val)}
                     max={limit}

@@ -21,7 +21,6 @@ const CountSlider = ({ label, value, onChange, max, min = 1, step = 1, tooltip }
         }
     };
     
-    // Определяем цвет дорожки слайдера в зависимости от значения
     const progress = (value / max) * 100;
     const trackColor = progress > 85 ? 'error.main' : progress > 60 ? 'warning.main' : 'primary.main';
 
@@ -47,14 +46,11 @@ const CountSlider = ({ label, value, onChange, max, min = 1, step = 1, tooltip }
                         max={max}
                         step={step}
                         sx={{
-                            '& .MuiSlider-track': {
-                                background: trackColor,
-                                transition: 'background 0.3s ease',
-                            },
-                             '& .MuiSlider-thumb': {
-                                backgroundColor: trackColor,
-                                transition: 'background 0.3s ease',
-                             }
+                            color: trackColor,
+                            transition: 'color 0.3s ease',
+                            '& .MuiSlider-rail': {
+                                opacity: 0.3,
+                            }
                         }}
                     />
                 </Grid>

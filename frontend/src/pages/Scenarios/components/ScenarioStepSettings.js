@@ -1,14 +1,14 @@
 // frontend/src/pages/Scenarios/components/ScenarioStepSettings.js
 
 import React from 'react';
-import { Stack, Typography } from '@mui/material';
+import { Stack, Typography, FormControl, Select, MenuItem, InputLabel } from '@mui/material';
 // toast и useUserStore больше не нужны в этом файле после рефакторинга
 import ActionModalFilters from 'pages/Dashboard/components/ActionModalFilters'; // <--- ГЛАВНОЕ ИСПРАВЛЕНИЕ
 import { content } from 'content/content';
 import CountSlider from 'components/CountSlider';
 import { useUserStore } from 'store/userStore'; // useUserStore все-таки нужен для лимитов
 
-export const StepSettings = ({ step, onSettingsChange }) => {
+export const StepSettings = ({ step, onSettingsChange, onBatchChange }) => {
     const userInfo = useUserStore(state => state.userInfo);
 
     const handleFieldChange = (name, value) => {
@@ -40,7 +40,7 @@ export const StepSettings = ({ step, onSettingsChange }) => {
         // Для остальных задач ставим условный высокий лимит
         return 1000;
     };
-
+    const canBeBatched = ['add_recommended', 'like_feed', 'like_friends_feed', 'remove_friends'].includes(step.action_type);
     return (
         <Stack spacing={3} sx={{ mt: 2, p: 2, borderTop: '1px solid', borderColor: 'divider' }}>
             {actionConfig.modal_count_label && (
@@ -58,6 +58,22 @@ export const StepSettings = ({ step, onSettingsChange }) => {
                     onChange={handleFilterChange} 
                     actionKey={step.action_type} 
                 />
+            )}
+
+            {canBeBatched && (
+                <FormControl fullWidth size="small">
+                    <InputLabel>Разбить выполнение</InputLabel>
+                    <Select
+                        value={step.batch_settings?.parts || 1}
+                        label="Разбить выполнение"
+                        onChange={(e) => onBatchChange(step.localId, { parts: e.target.value })}
+                    >
+                        <MenuItem value={1}>Не разбивать (выполнить за раз)</MenuItem>
+                        <MenuItem value={2}>На 2 части</MenuItem>
+                        <MenuItem value={3}>На 3 части</MenuItem>
+                        <MenuItem value={4}>На 4 части</MenuItem>
+                    </Select>
+                </FormControl>
             )}
         </Stack>
     );

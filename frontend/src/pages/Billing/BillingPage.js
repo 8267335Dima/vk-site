@@ -11,12 +11,11 @@ import { useQuery } from '@tanstack/react-query';
 
 const PlanCard = ({ plan, isCurrent, onChoose, isLoading, isAnnual }) => {
     const periodMonths = isAnnual ? 12 : 1;
-    const periodInfo = plan.periods?.find(p => p.months === 12);
+    const periodInfo = plan.periods?.find(p => p.months === periodMonths);
     
-    // Расчет цены
     const finalPrice = useMemo(() => {
-        if (plan.price === 0) return 0; // <-- Замена
-        let price = plan.price * periodMonths; // <-- Замена
+        if (plan.price === 0) return 0;
+        let price = plan.price * periodMonths;
         if (isAnnual && periodInfo) {
             price *= (1 - periodInfo.discount_percent / 100);
         }
@@ -31,8 +30,7 @@ const PlanCard = ({ plan, isCurrent, onChoose, isLoading, isAnnual }) => {
             <motion.div
                 variants={{ hidden: { opacity: 0, y: 50 }, visible: { opacity: 1, y: 0 } }}
                 transition={{ duration: 0.5, ease: "easeOut" }}
-                style={{ height: '100%' }}
-            >
+                style={{ height: '100%' }}>
                 <Paper
                   sx={{
                     p: 4, display: 'flex', flexDirection: 'column', height: '100%',
@@ -41,12 +39,10 @@ const PlanCard = ({ plan, isCurrent, onChoose, isLoading, isAnnual }) => {
                     transform: plan.is_popular ? { xs: 'none', md: 'scale(1.05)' } : 'none',
                     zIndex: plan.is_popular ? 1 : 0, 
                     boxShadow: plan.is_popular ? (theme) => `0 16px 48px -16px ${alpha(theme.palette.primary.main, 0.3)}` : 'inherit',
-                  }}
-                >
+                  }}>
                     {plan.is_popular && <Chip icon={<StarIcon />} label="Рекомендуем" color="primary" size="small" sx={{ position: 'absolute', top: 16, right: 16 }} />}
                     <Typography variant="h5" component="h2" sx={{ fontWeight: 700 }}>{plan.display_name}</Typography>
                     <Typography variant="body2" color="text.secondary" sx={{ minHeight: '40px', mt: 1 }}>{plan.description}</Typography>
-                    
                     <Box sx={{ my: 3, display: 'flex', alignItems: 'flex-end', gap: 1 }}>
                         <Typography variant="h3" component="p" sx={{ fontWeight: 700, lineHeight: 1 }}>
                             {finalPrice > 0 ? finalPrice : "Бесплатно"}
@@ -54,9 +50,7 @@ const PlanCard = ({ plan, isCurrent, onChoose, isLoading, isAnnual }) => {
                          {finalPrice > 0 && <Typography variant="h6" component="span" color="text.secondary">₽ {periodLabel}</Typography>}
                     </Box>
                     {isAnnual && plan.price > 0 && <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>{pricePerMonth} ₽ / мес.</Typography>}
-
                     <Divider sx={{ my: 2 }} />
-
                     <Box sx={{ my: 2, flexGrow: 1 }}>
                         <List sx={{ p: 0 }}>
                             {plan.features?.map((feature, index) => (
@@ -69,12 +63,9 @@ const PlanCard = ({ plan, isCurrent, onChoose, isLoading, isAnnual }) => {
                     </Box>
                     <Button
                         variant={isCurrent ? 'outlined' : (plan.is_popular ? 'contained' : 'outlined')}
-                        size="large" fullWidth
-                        disabled={isCurrent || isLoading || plan.base_price === 0}
+                        size="large" fullWidth disabled={isCurrent || isLoading || plan.price === 0}
                         onClick={() => onChoose(plan.id, periodMonths)}
-                        sx={{ mt: 'auto', minHeight: 48 }}
-                        color={isCurrent ? 'success' : 'primary'}
-                    >
+                        sx={{ mt: 'auto', minHeight: 48 }} color={isCurrent ? 'success' : 'primary'}>
                         {isLoading ? <CircularProgress size={24} color="inherit" /> : (isCurrent ? "Ваш текущий план" : "Выбрать план")}
                     </Button>
                 </Paper>
@@ -110,7 +101,7 @@ export default function BillingPage() {
     return (
         <Container maxWidth="lg" sx={{ py: { xs: 4, md: 8 } }}>
             <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
-                <Typography variant="h3" component="h1" textAlign="center" gutterBottom sx={{fontWeight: 700}}>Гибкие тарифы для ваших амбиций</Typography>
+                <Typography variant="h3" component="h1" textAlign="center" gutterBottom sx={{fontWeight: 700}}>Выберите свой путь к успеху</Typography>
                 <Typography variant="h6" color="text.secondary" textAlign="center" sx={{ mb: 6, maxWidth: '700px', mx: 'auto' }}>Выберите план, который идеально подходит для ваших целей и откроет новые горизонты для вашего профиля.</Typography>
                  <Stack direction="row" spacing={2} alignItems="center" justifyContent="center" sx={{mb: 8}}>
                     <Typography fontWeight={isAnnual ? 400 : 600} color={isAnnual ? 'text.secondary' : 'text.primary'}>Ежемесячно</Typography>
@@ -129,11 +120,9 @@ export default function BillingPage() {
                     ) : (
                         plansData?.plans.map((plan) => (
                             <PlanCard
-                                key={plan.id}
-                                plan={plan}
+                                key={plan.id} plan={plan}
                                 isCurrent={plan.id === userInfo?.plan && userInfo?.is_plan_active}
-                                onChoose={handleChoosePlan}
-                                isLoading={loadingPlan === plan.id}
+                                onChoose={handleChoosePlan} isLoading={loadingPlan === plan.id}
                                 isAnnual={isAnnual}
                             />
                         ))

@@ -6,3 +6,5 @@
 запуск сразу:
 # Выполнять в терминале в папке frontend
 npm run dev
+
+миграция докер: docker-compose run --rm backend /app/.venv/bin/alembic revision --autogenerate -m "my_new_migration"

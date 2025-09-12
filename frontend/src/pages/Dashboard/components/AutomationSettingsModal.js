@@ -5,18 +5,30 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
 import { updateAutomation } from 'api';
 import { CommonFiltersSettings, RemoveFriendsFilters } from './ActionModalFilters';
+import CountSlider from 'components/CountSlider';
+import { useUserStore } from 'store/userStore';
+import { content } from 'content/content';
 
 const AutomationSettingsModal = ({ open, onClose, automation }) => {
     const queryClient = useQueryClient();
     const [settings, setSettings] = useState({});
+    const userInfo = useUserStore(state => state.userInfo);
 
     useEffect(() => {
         if (open && automation) {
             const defaults = {
                 count: 50,
-                filters: { sex: 0, is_online: false, allow_closed_profiles: false, remove_banned: true, last_seen_hours: 0, last_seen_days: 0, min_friends: 0, min_followers: 0 },
+                filters: { sex: 0, is_online: false, allow_closed_profiles: false, remove_banned: true, last_seen_hours: 0, last_seen_days: 0, min_friends: null, max_friends: null, min_followers: null, max_followers: null },
+                message_template_default: "С Днем Рождения, {name}! Желаю всего самого наилучшего, успехов и ярких моментов в жизни."
             };
-            setSettings({ ...defaults, ...automation.settings });
+            
+            const mergedSettings = { ...defaults, ...automation.settings };
+            
+            if (automation.settings?.message_template_default) {
+                mergedSettings.message_template_default = automation.settings.message_template_default;
+            }
+
+            setSettings(mergedSettings);
         }
     }, [open, automation]);
 
@@ -32,26 +44,16 @@ const AutomationSettingsModal = ({ open, onClose, automation }) => {
         onError: (error) => toast.error(error.response?.data?.detail || 'Ошибка сохранения'),
     });
 
-    const handleSettingsChange = (nameOrEvent, value) => {
-        let name, val;
-        if (typeof nameOrEvent === 'string') {
-            name = nameOrEvent;
-            val = value;
-        } else {
-            const { target } = nameOrEvent;
-            name = target.name;
-            val = target.type === 'checkbox' ? target.checked : target.value;
-        }
-
-        const filterKeys = ['sex', 'is_online', 'allow_closed_profiles', 'remove_banned', 'last_seen_hours', 'last_seen_days', 'min_friends', 'min_followers'];
+    const handleSettingsChange = (name, value) => {
+        const filterKeys = ['sex', 'is_online', 'allow_closed_profiles', 'remove_banned', 'last_seen_hours', 'last_seen_days', 'min_friends', 'max_friends', 'min_followers', 'max_followers'];
 
         if (filterKeys.includes(name)) {
-            setSettings(s => ({ ...s, filters: { ...s.filters, [name]: val } }));
+            setSettings(s => ({ ...s, filters: { ...s.filters, [name]: value } }));
         } else {
-            setSettings(s => ({ ...s, [name]: val }));
+            setSettings(s => ({ ...s, [name]: value }));
         }
     };
-
+    
     const handleSave = () => {
         mutation.mutate({
             automationType: automation.automation_type,
@@ -62,8 +64,15 @@ const AutomationSettingsModal = ({ open, onClose, automation }) => {
 
     if (!automation) return null;
 
-    const needsCount = ['like_feed', 'add_recommended', 'remove_friends', 'like_friends_feed'].includes(automation.automation_type);
+    const actionConfig = content.actions[automation.automation_type];
+    const needsCount = actionConfig && !!actionConfig.modal_count_label;
     const needsFilters = !['view_stories', 'birthday_congratulation', 'eternal_online'].includes(automation.automation_type);
+    
+    const getLimit = () => {
+        if (automation.automation_type.includes('add')) return userInfo?.daily_add_friends_limit || 100;
+        if (automation.automation_type.includes('like')) return userInfo?.daily_likes_limit || 1000;
+        return 1000;
+    };
 
     return (
         <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
@@ -76,24 +85,19 @@ const AutomationSettingsModal = ({ open, onClose, automation }) => {
                     
                     {automation.automation_type === 'birthday_congratulation' && (
                         <TextField
-                            multiline
-                            rows={4}
-                            label="Шаблон поздравления"
-                            name="message_template_default"
+                            multiline rows={4} label="Шаблон поздравления" name="message_template_default"
                             value={settings.message_template_default || ''}
-                            onChange={handleSettingsChange}
+                            onChange={(e) => handleSettingsChange(e.target.name, e.target.value)}
                             helperText="Используйте {name} для подстановки имени друга."
                         />
                     )}
 
                     {needsCount && (
-                        <TextField
-                            fullWidth
-                            type="number"
-                            label="Количество действий за один запуск"
-                            name="count"
-                            value={settings.count || ''}
-                            onChange={handleSettingsChange}
+                        <CountSlider
+                            label={actionConfig.modal_count_label}
+                            value={settings.count || 20}
+                            onChange={(val) => handleSettingsChange('count', val)}
+                            max={getLimit()}
                         />
                     )}
 
