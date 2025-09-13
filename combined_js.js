@@ -109,6 +109,7 @@ import Layout from './components/Layout.js';
 
 import ErrorBoundary from './components/ErrorBoundary.js';
 import { useFeatureFlag } from 'hooks/useFeatureFlag.js';
+import { useCurrentUser } from 'hooks/useCurrentUser.js';
 
 const HomePage = lazy(() => import('./pages/Home/HomePage.js'));
 const LoginPage = lazy(() => import('./pages/Login/LoginPage.js'));
@@ -118,6 +119,8 @@ const BillingPage = lazy(() => import('./pages/Billing/BillingPage.js'));
 const TeamPage = lazy(() => import('./pages/Team/TeamPage.js'));
 const ScenarioEditorPage = lazy(() => import('./pages/Scenarios/editor/ScenarioEditorPage.js'));
 const ForbiddenPage = lazy(() => import('./pages/Forbidden/ForbiddenPage.js'));
+const PostsPage = lazy(() => import('./pages/Posts/PostsPage.js'));
+
 
 const FullscreenLoader = () => (
     <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
@@ -127,7 +130,16 @@ const FullscreenLoader = () => (
 
 const PrivateRoutes = () => {
     const jwtToken = useUserStore(state => state.jwtToken);
-    const isLoading = useUserStore(state => state.isLoading);
+    // ИЗМЕНЕНИЕ: Теперь мы используем хук React Query для проверки статуса пользователя
+    const { isLoading, isError } = useCurrentUser();
+    const { logout } = useUserActions();
+
+    useEffect(() => {
+        if (isError) {
+            // Если запрос на получение пользователя вернул ошибку (например, 401), выходим из системы
+            logout();
+        }
+    }, [isError, logout]);
 
     if (isLoading) {
         return <FullscreenLoader />;
@@ -146,20 +158,15 @@ const ProtectedRoute = ({ feature, children }) => {
 
 function App() {
   const jwtToken = useUserStore(state => state.jwtToken);
-  const isLoading = useUserStore(state => state.isLoading);
-  const { loadUser, finishInitialLoad } = useUserActions();
+  const { finishInitialLoad } = useUserActions();
 
   useEffect(() => {
-    if (jwtToken) {
-      loadUser();
-    } else {
+    // ИЗМЕНЕНИЕ: Логика загрузки пользователя удалена.
+    // Zustand теперь отвечает только за определение, есть ли токен.
+    if (!jwtToken) {
       finishInitialLoad();
     }
-  }, [jwtToken, loadUser, finishInitialLoad]);
-
-  if (isLoading) {
-    return <FullscreenLoader />;
-  }
+  }, [jwtToken, finishInitialLoad]);
   
   return (
     <QueryClientProvider client={queryClient}>
@@ -184,16 +191,16 @@ function App() {
                             <ScenariosPage />
                         </ProtectedRoute>
                     } />
-                    <Route path="/scenarios/new" element={
-                        <ProtectedRoute feature="scenarios">
-                            <ScenarioEditorPage />
-                        </ProtectedRoute>
-                    } />
                     <Route path="/scenarios/:id" element={
                         <ProtectedRoute feature="scenarios">
                             <ScenarioEditorPage />
                         </ProtectedRoute>
                     } />
+                    <Route path="/posts" element={
+                        <ProtectedRoute feature="post_scheduler">
+                            <PostsPage />
+                        </ProtectedRoute>
+                    }/>
                     <Route path="/team" element={
                         <ProtectedRoute feature="agency_mode">
                             <TeamPage />
@@ -1203,39 +1210,85 @@ import GroupRemoveIcon from '@mui/icons-material/GroupRemove';
 import AddToPhotosIcon from '@mui/icons-material/AddToPhotos';
 import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 
+// ИЗМЕНЕНИЕ: Единый источник правды для всех задач и автоматизаций
+const tasks = {
+    'like_feed': { 
+        icon: <ThumbUpIcon />, 
+        name: "Лайки в ленте новостей", 
+        description: "Проставляет лайки на посты в ленте новостей.",
+        modalTitle: "Лайки в ленте новостей", 
+    },
+    'add_recommended': { 
+        icon: <RecommendIcon />, 
+        name: "Добавление друзей", 
+        description: "Отправляет заявки пользователям из списка рекомендаций.",
+        modalTitle: "Добавление друзей из рекомендаций",
+    },
+     'accept_friends': { 
+        icon: <GroupAddIcon />, 
+        name: "Прием заявок в друзья",
+        description: "Принимает входящие заявки в друзья по вашим фильтрам.",
+        modalTitle: "Прием входящих заявок",
+    },
+    'remove_friends': { 
+        icon: <PersonRemoveIcon />, 
+        name: "Очистка списка друзей",
+        description: "Удаляет неактивных и забаненных друзей.",
+        modalTitle: "Чистка списка друзей",
+    },
+    'view_stories': { 
+        icon: <HistoryIcon />, 
+        name: "Просмотр историй",
+        description: "Просматривает все доступные истории друзей.",
+        modalTitle: "Просмотр историй",
+    },
+    'mass_messaging': { 
+        icon: <SendIcon />, 
+        name: "Массовая рассылка",
+        description: "Отправляет сообщения друзьям по заданным критериям.",
+        modalTitle: "Массовая отправка сообщений друзьям",
+    },
+    'leave_groups': { 
+        icon: <GroupRemoveIcon />, 
+        name: "Отписка от сообществ",
+        description: "Отписывается от сообществ по ключевому слову.",
+        modalTitle: 'Отписка от сообществ',
+    },
+    'join_groups': { 
+        icon: <AddToPhotosIcon />, 
+        name: "Вступление в группы",
+        description: "Вступает в группы по ключевым словам.",
+        modalTitle: 'Вступление в группы',
+    },
+    'birthday_congratulation': { 
+        icon: <CakeIcon />, 
+        name: "Поздравления с ДР", 
+        description: "Поздравляет ваших друзей с Днем Рождения.",
+    },
+    'eternal_online': { 
+        icon: <OnlinePredictionIcon />, 
+        name: "Вечный онлайн", 
+        description: "Поддерживает статус 'онлайн' для вашего аккаунта.",
+    },
+    'post_scheduler': {
+        icon: <CalendarMonthIcon />,
+        name: "Планировщик постов",
+        description: "Создавайте и планируйте публикации наперед."
+    }
+};
+
 export const content = {
     appName: "Zenith",
     nav: {
         dashboard: "Кабинет",
         scenarios: "Сценарии",
         posts: "Планировщик",
+        team: "Команда",
         billing: "Тарифы",
         login: "Войти",
         logout: "Выйти",
     },
-    actions: {
-        'accept_friends': { icon: <GroupAddIcon />, title: 'Прием заявок', modalTitle: "Прием входящих заявок" },
-        'like_feed': { icon: <ThumbUpIcon />, title: 'Лайкинг ленты', modalTitle: "Лайки в ленте новостей", modal_count_label: "Количество лайков" },
-        'add_recommended': { icon: <RecommendIcon />, title: 'Добавление друзей', modalTitle: "Добавление друзей из рекомендаций", modal_count_label: "Количество заявок" },
-        'view_stories': { icon: <HistoryIcon />, title: 'Просмотр историй', modalTitle: "Просмотр историй" },
-        'remove_friends': { icon: <PersonRemoveIcon />, title: 'Чистка друзей', modalTitle: "Чистка списка друзей", modal_count_label: "Максимум удалений" },
-        'mass_messaging': { icon: <SendIcon />, title: 'Отправка сообщений', modalTitle: "Массовая отправка сообщений друзьям", modal_count_label: "Количество сообщений" },
-        'leave_groups': { icon: <GroupRemoveIcon />, title: 'Отписка от сообществ', modalTitle: 'Отписка от сообществ', modal_count_label: "Максимум отписок" },
-        'join_groups': { icon: <AddToPhotosIcon />, title: 'Вступление в группы', modalTitle: 'Вступление в группы', modal_count_label: "Максимум вступлений" },
-    },
-    automations: [
-        { id: "like_feed", icon: <ThumbUpIcon />, name: "Лайкинг ленты", description: "Проставляет лайки на посты в ленте новостей.", has_filters: true, group: 'standard' },
-        { id: "add_recommended", icon: <RecommendIcon />, name: "Добавление друзей", description: "Отправляет заявки пользователям из списка рекомендаций.", has_filters: true, group: 'standard' },
-        { id: "birthday_congratulation", icon: <CakeIcon />, name: "Поздравления с ДР", description: "Поздравляет ваших друзей с Днем Рождения.", has_filters: false, group: 'standard' },
-        { id: "accept_friends", icon: <GroupAddIcon />, name: "Прием заявок", description: "Принимает входящие заявки в друзья по вашим фильтрам.", has_filters: true, group: 'standard' },
-        { id: "remove_friends", icon: <PersonRemoveIcon />, name: "Чистка друзей", description: "Удаляет неактивных и забаненных друзей.", has_filters: true, group: 'standard' },
-        { id: "leave_groups", icon: <GroupRemoveIcon />, name: "Отписка от сообществ", description: "Отписывается от сообществ по ключевому слову.", has_filters: true, group: 'standard' },
-        { id: "join_groups", icon: <AddToPhotosIcon />, name: "Вступление в группы", description: "Вступает в группы по ключевым словам.", has_filters: true, group: 'standard' },
-        { id: "view_stories", icon: <HistoryIcon />, name: "Просмотр историй", description: "Просматривает все доступные истории друзей.", has_filters: false, group: 'standard' },
-        { id: "mass_messaging", icon: <SendIcon />, name: "Отправка сообщений", description: "Отправляет сообщения друзьям по заданным критериям.", has_filters: true, group: 'standard' },
-        { id: "post_scheduler", icon: <CalendarMonthIcon />, name: "Планировщик постов", description: "Создавайте и планируйте публикации наперед.", has_filters: false, group: 'content' },
-        { id: "eternal_online", icon: <OnlinePredictionIcon />, name: "Вечный онлайн", description: "Поддерживает статус 'онлайн' для вашего аккаунта.", has_filters: false, group: 'online' },
-    ],
+    tasks: tasks,
     loginPage: {
         title: "Добро пожаловать в Zenith",
         subtitle: "Ваш интеллектуальный ассистент для ВКонтакте",
@@ -1272,7 +1325,6 @@ export const content = {
         }
     }
 };
-
 
 // --- frontend/src\hooks\useActionModalState.js ---
 
@@ -1347,6 +1399,36 @@ export const useActionModalState = (open, actionKey, title) => {
     }, [actionKey, daily_add_friends_limit, daily_likes_limit, taskInfo]);
 
     return { params, getModalTitle, handleParamChange, getActionLimit };
+};
+
+// --- frontend/src\hooks\useCurrentUser.js ---
+
+// frontend/src/hooks/useCurrentUser.js
+import { useQuery } from '@tanstack/react-query';
+import { fetchUserInfo } from 'api';
+import { useUserStore } from 'store/userStore';
+
+export const useCurrentUser = () => {
+    const jwtToken = useUserStore(state => state.jwtToken);
+    
+    return useQuery({
+        // Ключ запроса включает ID профиля, чтобы данные автоматически перезагружались при смене профиля
+        queryKey: ['currentUser', useUserStore.getState().activeProfileId],
+        queryFn: fetchUserInfo,
+        // Запрос активен только если есть токен
+        enabled: !!jwtToken,
+        // Данные о пользователе (имя, тариф) не меняются очень часто,
+        // поэтому можно установить большое время "свежести" данных.
+        // React Query все равно может обновить их в фоне при необходимости.
+        staleTime: 1000 * 60 * 15, // 15 минут
+        // Данные не удаляются из кэша сразу, даже если компонент размонтирован.
+        gcTime: 1000 * 60 * 30, // 30 минут
+        // Выбираем только сам объект с данными для удобства
+        select: (response) => response.data,
+        // Не повторять запрос при ошибке, так как это скорее всего 401,
+        // и обработка выхода из системы произойдет в PrivateRoutes.
+        retry: false,
+    });
 };
 
 // --- frontend/src\hooks\useDashboardManager.js ---
@@ -1655,32 +1737,23 @@ export default PlanCard;
 // --- frontend/src\pages\Dashboard\DashboardPage.js ---
 
 // --- frontend/src/pages/Dashboard/DashboardPage.js ---
-import React, { Suspense, useState, lazy, memo, useEffect } from 'react';
-import { Box, Paper, Link, Chip, Stack, Typography, Avatar, Grid, Button, Tooltip, Select, MenuItem, useTheme } from '@mui/material';
-import { motion } from 'framer-motion';
+import React, { Suspense, useState, lazy, useEffect } from 'react';
+import { Box, Grid, Typography, motion, Stack } from '@mui/material'; // ИЗМЕНЕНИЕ: Оставлены только используемые компоненты
 import Joyride, { STATUS } from 'react-joyride';
 
-import { useUserStore, useUserActions } from 'store/userStore';
+import { useUserStore } from 'store/userStore';
+import { useCurrentUser } from 'hooks/useCurrentUser';
 import { useDashboardManager } from 'hooks/useDashboardManager';
 import { useFeatureFlag } from 'hooks/useFeatureFlag';
-import { useMutation } from '@tanstack/react-query';
-
-import { updateUserDelayProfile } from 'api';
-import { toast } from 'react-hot-toast';
 
 import LazyLoader from 'components/LazyLoader';
 import ActionModal from 'pages/Dashboard/components/ActionModal';
 import TaskLogWidget from 'pages/Dashboard/components/TaskLogWidget';
 import ProfileSummaryWidget from 'pages/Dashboard/components/ProfileSummaryWidget';
 import UnifiedActionPanel from 'pages/Dashboard/components/UnifiedActionPanel';
+import { UserProfileCard } from './components/UserProfileCard'; // Компонент теперь импортируется отсюда
 
-import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
-import VpnKeyIcon from '@mui/icons-material/VpnKey';
-import SpeedIcon from '@mui/icons-material/Speed';
-import ShutterSpeedIcon from '@mui/icons-material/ShutterSpeed';
-import SlowMotionVideoIcon from '@mui/icons-material/SlowMotionVideo';
-import WifiIcon from '@mui/icons-material/Wifi';
-import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
+// ИЗМЕНЕНИЕ: Все неиспользуемые импорты иконок и утилит удалены
 
 const ActivityChartWidget = lazy(() => import('pages/Dashboard/components/ActivityChartWidget'));
 const AudienceAnalyticsWidget = lazy(() => import('pages/Dashboard/components/AudienceAnalyticsWidget'));
@@ -1695,84 +1768,8 @@ const motionVariants = {
     animate: (i) => ({ opacity: 1, y: 0, transition: { delay: i * 0.1, duration: 0.5, ease: "easeOut" } }),
 };
 
-const UserProfileCard = memo(({ userInfo, connectionStatus, onProxyManagerOpen }) => {
-    const theme = useTheme();
-    const { isFeatureAvailable } = useFeatureFlag();
-    const { setUserInfo } = useUserActions();
-    const canUseProxyManager = isFeatureAvailable('proxy_management');
-    const canChangeSpeed = isFeatureAvailable('fast_slow_delay_profile');
-
-    const mutation = useMutation({
-        mutationFn: updateUserDelayProfile,
-        onSuccess: (response) => {
-            setUserInfo(response.data);
-            toast.success(`Скорость работы изменена!`);
-        },
-        onError: () => toast.error("Не удалось изменить скорость.")
-    });
-
-    const handleSpeedChange = (event) => {
-        mutation.mutate({ delay_profile: event.target.value });
-    };
-
-    const isConnected = connectionStatus === 'На связи';
-
-    return (
-        <Paper id="profile-card" sx={{ p: 3, display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: 'center', gap: 3, height: '100%' }}>
-            <Avatar src={userInfo.photo_200} sx={{ width: 100, height: 100, flexShrink: 0, border: '4px solid', borderColor: theme.palette.background.default, boxShadow: 3 }} />
-            <Box flexGrow={1} width="100%">
-                 <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1} sx={{mb: 1.5}}>
-                     <Link href={`https://vk.com/id${userInfo.vk_id}`} target="_blank" color="text.primary" sx={{ textDecoration: 'none' }}>
-                        <Typography variant="h5" sx={{ fontWeight: 700, '&:hover': { color: 'primary.main' } }}>{userInfo.first_name} {userInfo.last_name}</Typography>
-                    </Link>
-                    <Chip 
-                        label={connectionStatus} 
-                        icon={isConnected ? <WifiIcon/> : <PowerSettingsNewIcon/>} 
-                        color={isConnected ? 'success' : 'warning'} 
-                        size="small" 
-                        sx={{ flexShrink: 0, mt: 0.5 }} 
-                    />
-                </Stack>
-                <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" sx={{ mb: 2 }}>
-                    <Chip icon={<WorkspacePremiumIcon />} label={userInfo.plan} color="primary" variant="filled" size="small"/>
-                    {userInfo.plan_expires_at && <Typography variant="caption" color="text.secondary">До {new Date(userInfo.plan_expires_at).toLocaleDateString('ru-RU')}</Typography>}
-                </Stack>
-                <Grid container spacing={1} alignItems="center">
-                    <Grid item xs={12} sm={6} md={4}>
-                         <Tooltip title={canUseProxyManager ? "Управление прокси" : "Доступно на PRO-тарифе"}>
-                            <span>
-                                <Button fullWidth size="small" startIcon={<VpnKeyIcon />} onClick={onProxyManagerOpen} disabled={!canUseProxyManager} variant="outlined" sx={{color: 'text.secondary'}}>Прокси</Button>
-                            </span>
-                        </Tooltip>
-                    </Grid>
-                    <Grid item xs={12} sm={6} md={8}>
-                        <Tooltip title={!canChangeSpeed ? "Смена скорости доступна на PRO-тарифе" : ""}>
-                            <Select
-                                fullWidth size="small" value={userInfo.delay_profile} onChange={handleSpeedChange} disabled={mutation.isLoading || !canChangeSpeed}
-                                renderValue={(value) => (
-                                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                        {value === 'fast' && <ShutterSpeedIcon fontSize="small" />}
-                                        {value === 'normal' && <SpeedIcon fontSize="small" />}
-                                        {value === 'slow' && <SlowMotionVideoIcon fontSize="small" />}
-                                        {value === 'fast' && 'Быстрый'}
-                                        {value === 'normal' && 'Стандарт'}
-                                        {value === 'slow' && 'Медленный'}
-                                    </Box>
-                                )}>
-                                <MenuItem value="slow"><SlowMotionVideoIcon sx={{mr: 1}}/> Медленный (Макс. безопасность)</MenuItem>
-                                <MenuItem value="normal"><SpeedIcon sx={{mr: 1}}/> Стандарт (Баланс)</MenuItem>
-                                <MenuItem value="fast"><ShutterSpeedIcon sx={{mr: 1}}/> Быстрый (Макс. скорость)</MenuItem>
-                            </Select>
-                        </Tooltip>
-                    </Grid>
-                </Grid>
-            </Box>
-        </Paper>
-    );
-});
-
 export default function DashboardPage() {
-    const userInfo = useUserStore(state => state.userInfo);
+    const { data: userInfo, isLoading: isUserLoading } = useCurrentUser();
     const connectionStatus = useUserStore(state => state.connectionStatus);
     const { isFeatureAvailable } = useFeatureFlag();
     const { modalState, openModal, closeModal, onActionSubmit } = useDashboardManager();
@@ -1813,7 +1810,7 @@ export default function DashboardPage() {
         }
     };
 
-    if (!userInfo) {
+    if (isUserLoading || !userInfo) {
         return <LazyLoader />;
     }
 
@@ -1906,7 +1903,6 @@ export default function DashboardPage() {
         </Box>
     );
 }
-
 
 // --- frontend/src\pages\Dashboard\components\ActionModal.js ---
 
@@ -3801,7 +3797,7 @@ export default function UnifiedActionPanel({ onRun, onSettings }) {
 // frontend/src/pages/Dashboard/components/UserProfileCard.js
 import React from 'react';
 import { Box, Paper, Link, Chip, Stack, Typography, Avatar, Grid, Button, Tooltip, Select, MenuItem, keyframes } from '@mui/material';
-import { useUserActions } from 'store/userStore';
+import { useQueryClient } from '@tanstack/react-query';
 import { useFeatureFlag } from 'hooks/useFeatureFlag';
 import { useMutation } from '@tanstack/react-query';
 import { updateUserDelayProfile } from 'api';
@@ -3813,14 +3809,12 @@ import SpeedIcon from '@mui/icons-material/Speed';
 import ShutterSpeedIcon from '@mui/icons-material/ShutterSpeed';
 import SlowMotionVideoIcon from '@mui/icons-material/SlowMotionVideo';
 
-// --- ИЗМЕНЕНИЕ: Анимация для онлайн статуса ---
 const pulseAnimation = keyframes`
   0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(50, 215, 75, 0.7); }
   70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(50, 215, 75, 0); }
   100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(50, 215, 75, 0); }
 `;
 
-// --- ИЗМЕНЕНИЕ: Новый, стильный компонент статуса в стиле Discord ---
 const ConnectionStatusIndicator = ({ status }) => {
     
     const statusConfig = {
@@ -3851,16 +3845,20 @@ const ConnectionStatusIndicator = ({ status }) => {
     );
 };
 
-
+// ИЗМЕНЕНИЕ: Компонент обернут в React.memo для оптимизации
 export const UserProfileCard = React.memo(({ userInfo, connectionStatus, onProxyManagerOpen }) => {
+    const queryClient = useQueryClient();
     const { isFeatureAvailable } = useFeatureFlag();
-    const { setUserInfo } = useUserActions();
     const canUseProxyManager = isFeatureAvailable('proxy_management');
     const canChangeSpeed = isFeatureAvailable('fast_slow_delay_profile');
 
     const mutation = useMutation({
         mutationFn: updateUserDelayProfile,
-        onSuccess: (response) => { setUserInfo(response.data); toast.success(`Скорость работы изменена!`); },
+        onSuccess: (response) => { 
+            // ИЗМЕНЕНИЕ: Обновляем данные в кэше React Query вместо вызова setUserInfo
+            queryClient.setQueryData(['currentUser', userInfo.id], response);
+            toast.success(`Скорость работы изменена!`); 
+        },
         onError: () => toast.error("Не удалось изменить скорость.")
     });
 
@@ -3874,7 +3872,6 @@ export const UserProfileCard = React.memo(({ userInfo, connectionStatus, onProxy
                      <Link href={`https://vk.com/id${userInfo.vk_id}`} target="_blank" color="text.primary" sx={{ textDecoration: 'none' }}>
                         <Typography variant="h5" sx={{ fontWeight: 700, '&:hover': { color: 'primary.main' } }}>{userInfo.first_name} {userInfo.last_name}</Typography>
                     </Link>
-                    {/* --- ИЗМЕНЕНИЕ: Используем новый компонент статуса --- */}
                     <ConnectionStatusIndicator status={connectionStatus} />
                 </Stack>
                 <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" sx={{ mb: 2 }}>
@@ -3953,7 +3950,7 @@ export default ForbiddenPage;
 
 // --- frontend/src\pages\Home\HomePage.js ---
 
-// --- frontend/src/pages/Home/HomePage.js ---
+// frontend/src/pages/Home/HomePage.js
 import React from 'react';
 import { Box, alpha, Container } from '@mui/material';
 import HeroSection from './components/HeroSection';
@@ -4015,7 +4012,6 @@ export default function HomePage() {
     </Box>
   );
 }
-
 
 // --- frontend/src\pages\Home\components\AdvantageSection.js ---
 
@@ -6157,55 +6153,57 @@ export default TeamPage;
 // --- frontend/src/store/authSlice.js ---
 import { disconnectWebSocket } from '../websocket';
 import { jwtDecode } from 'jwt-decode';
-import { apiClient } from 'api';
+import { switchProfile } from 'api';
 import { toast } from 'react-hot-toast';
+import { queryClient } from 'queryClient';
 
 export const createAuthSlice = (set, get) => ({
   jwtToken: localStorage.getItem('jwtToken') || null,
   isLoading: true,
+  // ИЗМЕНЕНИЕ: ID теперь хранятся в сторе, чтобы быть доступными сразу после логина
   activeProfileId: null,
   managerId: null,
 
   actions: {
     login: (token) => {
       localStorage.setItem('jwtToken', token);
-      const decoded = jwtDecode(token);
-      set({ 
-        jwtToken: token, 
-        managerId: decoded.sub, 
-        activeProfileId: decoded.profile_id || decoded.sub 
-      });
+      set({ jwtToken: token });
+      get().actions.decodeAndSetIds(); // Сразу декодируем и устанавливаем ID
     },
     logout: () => {
       localStorage.removeItem('jwtToken');
       disconnectWebSocket();
       get().actions.resetUserSlice(); 
+      queryClient.clear(); // Очищаем весь кэш React Query при выходе
       set({ jwtToken: null, isLoading: false, activeProfileId: null, managerId: null });
     },
     setActiveProfile: async (profileId) => {
       if (profileId === get().activeProfileId) return;
 
+      const toastId = toast.loading("Переключение профиля...");
       try {
-        const response = await apiClient.post('/api/v1/auth/switch-profile', { profile_id: profileId });
-        const { access_token } = response.data;
+        const { access_token } = await switchProfile(profileId);
         get().actions.login(access_token);
-        window.location.reload();
+        toast.success("Профиль успешно изменен!", { id: toastId });
+        await queryClient.resetQueries();
+        window.location.hash = '/dashboard'; // Можно просто перенаправить
       } catch (error) {
-        toast.error("Не удалось переключить профиль.");
+        toast.error("Не удалось переключить профиль.", { id: toastId });
         console.error("Profile switch failed:", error);
       }
     },
     finishInitialLoad: () => {
       set({ isLoading: false });
     },
+    // НОВАЯ ФУНКЦИЯ: Декодирует токен и сохраняет ID в стор
     decodeAndSetIds: () => {
       const token = get().jwtToken;
       if (token) {
         try {
           const decoded = jwtDecode(token);
           set({
-            managerId: decoded.sub,
-            activeProfileId: decoded.profile_id || decoded.sub
+            managerId: parseInt(decoded.sub, 10),
+            activeProfileId: parseInt(decoded.profile_id || decoded.sub, 10)
           });
         } catch (e) {
           console.error("Invalid token:", e);
@@ -6219,59 +6217,19 @@ export const createAuthSlice = (set, get) => ({
 // --- frontend/src\store\userSlice.js ---
 
 // frontend/src/store/userSlice.js
-import { fetchUserInfo, fetchUserLimits } from 'api';
-
 const initialState = {
-    userInfo: null,
-    availableFeatures: [], 
-    dailyLimits: {
-        likes_limit: 0,
-        likes_today: 0,
-        friends_add_limit: 0,
-        friends_add_today: 0,
-    }
+    // В будущем здесь может быть состояние, не связанное с сервером,
+    // например, тема оформления (light/dark), состояние открытых панелей и т.д.
 };
 
-export const createUserSlice = (set, get) => ({
+export const createUserSlice = (set) => ({
     ...initialState,
 
     actions: {
-        loadUser: async () => {
-            if (!get().jwtToken) {
-                return get().actions.finishInitialLoad();
-            }
-            
-            try {
-                const [userResponse, limitsResponse] = await Promise.all([
-                    fetchUserInfo(),
-                    fetchUserLimits()
-                ]);
+        // Эта функция теперь не нужна, так как загрузка данных
+        // происходит через хуки useQuery в компонентах.
+        // loadUser: async () => { ... } // УДАЛЕНО
 
-                set({
-                    userInfo: userResponse.data,
-                    availableFeatures: userResponse.data.available_features || [],
-                    dailyLimits: limitsResponse.data,
-                });
-            } catch (error) {
-                console.error("Failed to load user data, logging out.", error);
-                get().actions.logout(); 
-            } finally {
-                get().actions.finishInitialLoad();
-            }
-        },
-        
-        setUserInfo: (newUserInfo) => {
-            set(state => ({
-                userInfo: { ...state.userInfo, ...newUserInfo }
-            }));
-        },
-
-        setDailyLimits: (newLimits) => {
-             set(state => ({
-                dailyLimits: { ...state.dailyLimits, ...newLimits }
-            }));
-        },
-        
         resetUserSlice: () => set(initialState),
     }
 });
@@ -6316,8 +6274,11 @@ export const useUserActions = () => useUserStore(state => state.actions);
 
 useUserStore.subscribe(
     (state, prevState) => {
+        // Логика подключения/отключения WebSocket остается прежней
         if (state.jwtToken && !prevState.jwtToken) {
             connectWebSocket(state.jwtToken);
+            // ИЗМЕНЕНИЕ: После логина мы сразу декодируем токен для установки ID
+            state.actions.decodeAndSetIds();
         } else if (!state.jwtToken && prevState.jwtToken) {
             disconnectWebSocket();
         }
@@ -6326,5 +6287,7 @@ useUserStore.subscribe(
 
 const initialToken = useUserStore.getState().jwtToken;
 if (initialToken) {
+    // ИЗМЕНЕНИЕ: При первоначальной загрузке также декодируем токен
+    useUserStore.getState().actions.decodeAndSetIds();
     connectWebSocket(initialToken);
 }

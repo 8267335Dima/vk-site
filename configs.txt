@@ -50,52 +50,82 @@ ALLOWED_ORIGINS=http://localhost,http://localhost:3000,http://127.0.0.1:3000
   name: "Лайки в ленте новостей"
   description: "Анализирует вашу ленту новостей и проставляет лайки на посты, соответствующие фильтрам."
   has_filters: true
+  has_count_slider: true
+  modal_count_label: "Количество лайков"
+  default_count: 50
 
 - id: "add_recommended"
   name: "Добавление друзей"
   description: "Отправляет заявки в друзья пользователям из списка 'Возможные друзья', повышая охваты."
   has_filters: true
+  has_count_slider: true
+  modal_count_label: "Количество заявок"
+  default_count: 20
 
 - id: "accept_friends"
   name: "Прием заявок в друзья"
   description: "Автоматически принимает входящие заявки в друзья на основе заданных критериев."
   has_filters: true
+  has_count_slider: false
 
 - id: "remove_friends"
   name: "Очистка списка друзей"
   description: "Удаляет друзей по критериям: 'собачки', неактивность, пол. Поддерживает актуальность списка контактов."
   has_filters: true
+  has_count_slider: true
+  modal_count_label: "Максимум удалений"
+  default_count: 100
 
 - id: "like_friends_feed"
   name: "Лайки на посты друзей"
   description: "Проявляет активность, проставляя лайки на последние посты на стенах ваших друзей."
   has_filters: true
+  has_count_slider: true
+  modal_count_label: "Количество лайков"
+  default_count: 30
 
 - id: "view_stories"
   name: "Просмотр историй"
   description: "Автоматически просматривает все доступные истории, сигнализируя об активности вашего аккаунта."
   has_filters: false
+  has_count_slider: false
 
 - id: "birthday_congratulation"
   name: "Поздравления с Днем Рождения"
   description: "Автоматически отправляет персональные поздравления вашим друзьям в их день рождения."
   has_filters: false
+  has_count_slider: false
 
 - id: "mass_messaging"
   name: "Массовая рассылка"
   description: "Отправляет заданное сообщение вашим друзьям по гибким фильтрам. Идеально для информирования."
   has_filters: true
+  has_count_slider: true
+  modal_count_label: "Количество сообщений"
+  default_count: 50
 
 - id: "eternal_online"
   name: "Статус 'Онлайн'"
   description: "Поддерживает статус 'онлайн' для вашего аккаунта 24/7, повышая видимость в поиске."
   has_filters: false
+  has_count_slider: false
 
 - id: "leave_groups" 
   name: "Отписка от сообществ"
   description: "Автоматически покидает сообщества по заданным критериям (ключевые слова в названии)."
-  modal_count_label: "Максимум отписок"
   has_filters: true
+  has_count_slider: true
+  modal_count_label: "Максимум отписок"
+  default_count: 50
+  
+- id: "join_groups"
+  name: "Вступление в группы"
+  description: "Вступает в группы по ключевым словам для повышения информированности."
+  has_filters: true
+  has_count_slider: true
+  modal_count_label: "Максимум вступлений"
+  default_count: 20
+
 
 # --- backend/app\core\configs\plans.yml ---
 

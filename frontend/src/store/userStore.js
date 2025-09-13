@@ -36,8 +36,11 @@ export const useUserActions = () => useUserStore(state => state.actions);
 
 useUserStore.subscribe(
     (state, prevState) => {
+        // Логика подключения/отключения WebSocket остается прежней
         if (state.jwtToken && !prevState.jwtToken) {
             connectWebSocket(state.jwtToken);
+            // ИЗМЕНЕНИЕ: После логина мы сразу декодируем токен для установки ID
+            state.actions.decodeAndSetIds();
         } else if (!state.jwtToken && prevState.jwtToken) {
             disconnectWebSocket();
         }
@@ -46,5 +49,7 @@ useUserStore.subscribe(
 
 const initialToken = useUserStore.getState().jwtToken;
 if (initialToken) {
+    // ИЗМЕНЕНИЕ: При первоначальной загрузке также декодируем токен
+    useUserStore.getState().actions.decodeAndSetIds();
     connectWebSocket(initialToken);
 }

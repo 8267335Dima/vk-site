@@ -1,4 +1,4 @@
-// --- frontend/src/pages/Home/HomePage.js ---
+// frontend/src/pages/Home/HomePage.js
 import React from 'react';
 import { Box, alpha, Container } from '@mui/material';
 import HeroSection from './components/HeroSection';

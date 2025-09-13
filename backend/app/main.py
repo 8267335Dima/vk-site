@@ -30,7 +30,17 @@ from app.services.websocket_manager import redis_listener
 configure_logging()
 log = structlog.get_logger(__name__)
 
+# ИЗМЕНЕНИЕ: Улучшенная идентификация клиента для Rate Limiter
 async def get_request_identifier(request: Request) -> str:
+    """
+    Получает реальный IP-адрес клиента, даже если приложение за прокси.
+    Важно: Убедитесь, что ваш прокси (Nginx, Traefik) устанавливает заголовок 'X-Forwarded-For'.
+    """
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        # Самый левый IP в списке - это исходный IP клиента
+        return forwarded_for.split(',')[0].strip()
+    # Fallback на прямое подключение
     return request.client.host if request.client else "unknown"
 
 # Зависимости Rate Limiter

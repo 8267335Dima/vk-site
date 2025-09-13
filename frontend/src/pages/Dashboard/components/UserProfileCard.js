@@ -1,7 +1,7 @@
 // frontend/src/pages/Dashboard/components/UserProfileCard.js
 import React from 'react';
 import { Box, Paper, Link, Chip, Stack, Typography, Avatar, Grid, Button, Tooltip, Select, MenuItem, keyframes } from '@mui/material';
-import { useUserActions } from 'store/userStore';
+import { useQueryClient } from '@tanstack/react-query';
 import { useFeatureFlag } from 'hooks/useFeatureFlag';
 import { useMutation } from '@tanstack/react-query';
 import { updateUserDelayProfile } from 'api';
@@ -13,14 +13,12 @@ import SpeedIcon from '@mui/icons-material/Speed';
 import ShutterSpeedIcon from '@mui/icons-material/ShutterSpeed';
 import SlowMotionVideoIcon from '@mui/icons-material/SlowMotionVideo';
 
-// --- ИЗМЕНЕНИЕ: Анимация для онлайн статуса ---
 const pulseAnimation = keyframes`
   0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(50, 215, 75, 0.7); }
   70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(50, 215, 75, 0); }
   100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(50, 215, 75, 0); }
 `;
 
-// --- ИЗМЕНЕНИЕ: Новый, стильный компонент статуса в стиле Discord ---
 const ConnectionStatusIndicator = ({ status }) => {
     
     const statusConfig = {
@@ -51,16 +49,20 @@ const ConnectionStatusIndicator = ({ status }) => {
     );
 };
 
-
+// ИЗМЕНЕНИЕ: Компонент обернут в React.memo для оптимизации
 export const UserProfileCard = React.memo(({ userInfo, connectionStatus, onProxyManagerOpen }) => {
+    const queryClient = useQueryClient();
     const { isFeatureAvailable } = useFeatureFlag();
-    const { setUserInfo } = useUserActions();
     const canUseProxyManager = isFeatureAvailable('proxy_management');
     const canChangeSpeed = isFeatureAvailable('fast_slow_delay_profile');
 
     const mutation = useMutation({
         mutationFn: updateUserDelayProfile,
-        onSuccess: (response) => { setUserInfo(response.data); toast.success(`Скорость работы изменена!`); },
+        onSuccess: (response) => { 
+            // ИЗМЕНЕНИЕ: Обновляем данные в кэше React Query вместо вызова setUserInfo
+            queryClient.setQueryData(['currentUser', userInfo.id], response);
+            toast.success(`Скорость работы изменена!`); 
+        },
         onError: () => toast.error("Не удалось изменить скорость.")
     });
 
@@ -74,7 +76,6 @@ export const UserProfileCard = React.memo(({ userInfo, connectionStatus, onProxy
                      <Link href={`https://vk.com/id${userInfo.vk_id}`} target="_blank" color="text.primary" sx={{ textDecoration: 'none' }}>
                         <Typography variant="h5" sx={{ fontWeight: 700, '&:hover': { color: 'primary.main' } }}>{userInfo.first_name} {userInfo.last_name}</Typography>
                     </Link>
-                    {/* --- ИЗМЕНЕНИЕ: Используем новый компонент статуса --- */}
                     <ConnectionStatusIndicator status={connectionStatus} />
                 </Stack>
                 <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" sx={{ mb: 2 }}>

@@ -11,6 +11,7 @@ import Layout from './components/Layout.js';
 
 import ErrorBoundary from './components/ErrorBoundary.js';
 import { useFeatureFlag } from 'hooks/useFeatureFlag.js';
+import { useCurrentUser } from 'hooks/useCurrentUser.js';
 
 const HomePage = lazy(() => import('./pages/Home/HomePage.js'));
 const LoginPage = lazy(() => import('./pages/Login/LoginPage.js'));
@@ -20,6 +21,8 @@ const BillingPage = lazy(() => import('./pages/Billing/BillingPage.js'));
 const TeamPage = lazy(() => import('./pages/Team/TeamPage.js'));
 const ScenarioEditorPage = lazy(() => import('./pages/Scenarios/editor/ScenarioEditorPage.js'));
 const ForbiddenPage = lazy(() => import('./pages/Forbidden/ForbiddenPage.js'));
+const PostsPage = lazy(() => import('./pages/Posts/PostsPage.js'));
+
 
 const FullscreenLoader = () => (
     <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
@@ -29,7 +32,16 @@ const FullscreenLoader = () => (
 
 const PrivateRoutes = () => {
     const jwtToken = useUserStore(state => state.jwtToken);
-    const isLoading = useUserStore(state => state.isLoading);
+    // ИЗМЕНЕНИЕ: Теперь мы используем хук React Query для проверки статуса пользователя
+    const { isLoading, isError } = useCurrentUser();
+    const { logout } = useUserActions();
+
+    useEffect(() => {
+        if (isError) {
+            // Если запрос на получение пользователя вернул ошибку (например, 401), выходим из системы
+            logout();
+        }
+    }, [isError, logout]);
 
     if (isLoading) {
         return <FullscreenLoader />;
@@ -48,20 +60,15 @@ const ProtectedRoute = ({ feature, children }) => {
 
 function App() {
   const jwtToken = useUserStore(state => state.jwtToken);
-  const isLoading = useUserStore(state => state.isLoading);
-  const { loadUser, finishInitialLoad } = useUserActions();
+  const { finishInitialLoad } = useUserActions();
 
   useEffect(() => {
-    if (jwtToken) {
-      loadUser();
-    } else {
+    // ИЗМЕНЕНИЕ: Логика загрузки пользователя удалена.
+    // Zustand теперь отвечает только за определение, есть ли токен.
+    if (!jwtToken) {
       finishInitialLoad();
     }
-  }, [jwtToken, loadUser, finishInitialLoad]);
-
-  if (isLoading) {
-    return <FullscreenLoader />;
-  }
+  }, [jwtToken, finishInitialLoad]);
   
   return (
     <QueryClientProvider client={queryClient}>
@@ -86,16 +93,16 @@ function App() {
                             <ScenariosPage />
                         </ProtectedRoute>
                     } />
-                    <Route path="/scenarios/new" element={
-                        <ProtectedRoute feature="scenarios">
-                            <ScenarioEditorPage />
-                        </ProtectedRoute>
-                    } />
                     <Route path="/scenarios/:id" element={
                         <ProtectedRoute feature="scenarios">
                             <ScenarioEditorPage />
                         </ProtectedRoute>
                     } />
+                    <Route path="/posts" element={
+                        <ProtectedRoute feature="post_scheduler">
+                            <PostsPage />
+                        </ProtectedRoute>
+                    }/>
                     <Route path="/team" element={
                         <ProtectedRoute feature="agency_mode">
                             <TeamPage />

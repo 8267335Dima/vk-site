@@ -20,7 +20,7 @@ from app.core.exceptions import UserActionException
 from app.services.vk_api import VKAPI, VKAuthError, VKRateLimitError, VKAPIError
 from app.core.security import decrypt_data
 from app.core.constants import TaskKey
-from app.tasks.base_task import AppBaseTask, AsyncSessionFactory_Celery
+from app.db.session import AsyncSessionFactory
 import structlog
 from app.tasks.utils import run_async_from_sync
 from app.services.scenario_service import ScenarioExecutionService
@@ -40,81 +40,140 @@ TASK_SERVICE_MAP = {
     TaskKey.JOIN_GROUPS: (GroupManagementService, "join_groups_by_criteria"),
 }
 
-# --- ИЗМЕНЕНИЕ 1: Добавляем `self: Task` как первый аргумент ---
-async def _execute_task_logic(self: Task, task_history_id: int, task_name_key: str, **kwargs):
-    redis_client = AsyncRedis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/1", decode_responses=True)
-    emitter = RedisEventEmitter(redis_client)
-    user = None # Инициализируем user
-    task_history = None # Инициализируем task_history
+# --- ИЗМЕНЕНИЕ: Полностью переработанный базовый класс для задач Celery ---
+class BaseTaskWithContext(Task):
+    """
+    Улучшенный базовый класс для задач Celery, который инкапсулирует
+    управление сессией, контекстом пользователя и обработку ошибок.
+    """
+    acks_late = True
     
-    async with AsyncSessionFactory_Celery() as session:
+    def __init__(self):
+        self.session = None
+        self.redis = None
+        self.emitter = None
+        self.user = None
+        self.task_history = None
+
+    async def _setup_context(self, task_history_id):
+        self.session = AsyncSessionFactory()
+        self.redis = AsyncRedis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/1", decode_responses=True)
+        self.emitter = RedisEventEmitter(self.redis)
+        
+        stmt = select(TaskHistory).where(TaskHistory.id == task_history_id).options(
+            selectinload(TaskHistory.user).selectinload(User.proxies)
+        )
+        self.task_history = (await self.session.execute(stmt)).scalar_one_or_none()
+
+        if not self.task_history:
+            log.error("task_runner.history_not_found", id=task_history_id)
+            return False
+            
+        self.user = self.task_history.user
+        if not self.user:
+            log.error("task_runner.user_not_found", user_id=self.task_history.user_id)
+            return False
+            
+        self.emitter.set_context(self.user.id, self.task_history.id)
+        return True
+
+    async def _teardown_context(self):
+        if self.redis: await self.redis.close()
+        if self.session: await self.session.close()
+
+    async def _run_task(self, task_history_id: int, task_name_key: str, **kwargs):
+        if not await self._setup_context(task_history_id): return
+        
         try:
-            task_history_stmt = select(TaskHistory).where(TaskHistory.id == task_history_id).options(
-                selectinload(TaskHistory.user).selectinload(User.proxies)
-            )
-            task_history = (await session.execute(task_history_stmt)).scalar_one_or_none()
-
-            if not task_history:
-                log.error("task_runner.history_not_found", id=task_history_id)
-                return
-
-            user = task_history.user
-            if not user:
-                raise RuntimeError(f"User {task_history.user_id} not found")
-                
-            emitter.set_context(user.id, task_history.id)
-            task_history.status = "STARTED"
-            await session.commit()
-            await emitter.send_task_status_update(status="STARTED", task_name=task_history.task_name, created_at=task_history.created_at)
+            self.task_history.status = "STARTED"
+            await self.session.commit()
+            await self.emitter.send_task_status_update(status="STARTED", task_name=self.task_history.task_name, created_at=self.task_history.created_at)
 
             ServiceClass, method_name = TASK_SERVICE_MAP[TaskKey(task_name_key)]
-            service_instance = ServiceClass(db=session, user=user, emitter=emitter)
+            service_instance = ServiceClass(db=self.session, user=self.user, emitter=self.emitter)
             await getattr(service_instance, method_name)(**kwargs)
+            
+            self.task_history.status = "SUCCESS"
+            self.task_history.result = "Задача успешно выполнена."
 
         except VKAuthError as e:
-            if user:
-                log.error("task_runner.auth_error", user_id=user.id, error=str(e))
-                await emitter.send_system_notification(
-                    session, "Ошибка авторизации VK. Ваш токен недействителен. Все автоматизации остановлены. Пожалуйста, войдите в систему заново.", "error"
-                )
-                deactivate_stmt = update(Automation).where(Automation.user_id == user.id).values(is_active=False)
-                await session.execute(deactivate_stmt)
-                await session.commit()
-            raise e
-        
+            # ИЗМЕНЕНИЕ: Механизм "мягкой" деактивации для защиты от временных сбоев API
+            redis_lock_client = AsyncRedis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/2")
+            auth_error_key = f"auth_error_count:{self.user.id}"
+            error_count = await redis_lock_client.incr(auth_error_key)
+            await redis_lock_client.expire(auth_error_key, 3600) # Сбрасываем счетчик через час
+            
+            if error_count >= 3:
+                log.error("task_runner.auth_error_persistent", user_id=self.user.id, error=str(e))
+                await self.emitter.send_system_notification(self.session, "Критическая ошибка авторизации VK. Ваш токен недействителен. Все автоматизации остановлены. Пожалуйста, войдите в систему заново.", "error")
+                deactivate_stmt = update(Automation).where(Automation.user_id == self.user.id).values(is_active=False)
+                await self.session.execute(deactivate_stmt)
+            else:
+                 log.warn("task_runner.auth_error_transient", user_id=self.user.id, error=str(e), attempt=error_count)
+                 await self.emitter.send_system_notification(self.session, "Произошла ошибка авторизации VK. Если ошибка повторится несколько раз, автоматизации будут остановлены.", "warning")
+
+            await redis_lock_client.close()
+            raise e # Передаем ошибку в on_failure
+
         except (VKRateLimitError, VKAPIError) as e:
-            if task_history:
-                await emitter.send_task_status_update(status="RETRY", result=f"Ошибка VK API, задача будет повторена: {e.message}", task_name=task_history.task_name, created_at=task_history.created_at)
-            # --- ИЗМЕНЕНИЕ 2: Теперь `self` доступен и эта строка корректна ---
-            raise self.retry(exc=e)
+            retry_delay = 60 * (self.request.retries + 1) # Экспоненциальная задержка: 1, 2, 3... минуты
+            log.warn("task_runner.api_error_retrying", id=task_history_id, error=str(e), next_try_in_sec=retry_delay)
+            self.task_history.status = "RETRY"
+            self.task_history.result = f"Ошибка VK API, повтор через {retry_delay // 60} мин: {e.message}"
+            raise self.retry(exc=e, countdown=retry_delay)
         
         except UserActionException as e:
-            await emitter.send_system_notification(session, str(e), "error")
+            await self.emitter.send_system_notification(self.session, str(e), "error")
             raise e
         
         except Exception as e:
             log.exception("task_runner.unhandled_exception", id=task_history_id, error=str(e))
-            if task_history:
-                await emitter.send_system_notification(session, f"Произошла внутренняя ошибка при выполнении задачи '{task_history.task_name}'.", "error")
+            await self.emitter.send_system_notification(self.session, f"Произошла внутренняя ошибка при выполнении задачи '{self.task_history.task_name}'.", "error")
             raise
+        
         finally:
-            await redis_client.close()
+            if self.task_history and self.session: await self.session.commit()
+            await self._teardown_context()
 
-def _create_task(name: TaskKey, **kwargs):
-    task_kwargs = {
-        'max_retries': 3,
-        'default_retry_delay': 300,
-        'soft_time_limit': 900,
-        'time_limit': 1200,
-        **kwargs
+    def on_failure(self, exc, task_id, args, kwargs, einfo):
+        async def _async_on_failure():
+            task_history_id = kwargs.get('task_history_id')
+            if not await self._setup_context(task_history_id): return
+            
+            self.task_history.status = "FAILURE"
+            self.task_history.result = f"Задача провалена: {exc!r}"
+            await self.session.commit()
+            await self.emitter.send_task_status_update(status="FAILURE", result=self.task_history.result, task_name=self.task_history.task_name, created_at=self.task_history.created_at)
+            await self._teardown_context()
+        
+        run_async_from_sync(_async_on_failure())
+
+    def on_success(self, retval, task_id, args, kwargs):
+        async def _async_on_success():
+            task_history_id = kwargs.get('task_history_id')
+            if not await self._setup_context(task_history_id): return
+            
+            await self.emitter.send_task_status_update(status="SUCCESS", result=self.task_history.result, task_name=self.task_history.task_name, created_at=self.task_history.created_at)
+            await self._teardown_context()
+        
+        run_async_from_sync(_async_on_success())
+        
+    def __call__(self, *args, **kwargs):
+        return run_async_from_sync(self.run(*args, **kwargs))
+
+def _create_task(name: TaskKey, **celery_options):
+    task_config = {
+        'max_retries': 3, 'default_retry_delay': 300,
+        'soft_time_limit': 900, 'time_limit': 1200,
+        **celery_options
     }
     
-    @celery_app.task(name=f"app.tasks.runner.{name.value}", bind=True, base=AppBaseTask, **task_kwargs)
-    def task_wrapper(self: Task, task_history_id: int, **kwargs):
-        # --- ИЗМЕНЕНИЕ 3: Передаем `self` в асинхронную функцию ---
-        return run_async_from_sync(_execute_task_logic(self, task_history_id, name.value, **kwargs))
+    @celery_app.task(name=f"app.tasks.runner.{name.value}", bind=True, base=BaseTaskWithContext, **task_config)
+    def task_wrapper(self: BaseTaskWithContext, task_history_id: int, **kwargs):
+        return run_async_from_sync(self._run_task(task_history_id, name.value, **kwargs))
     return task_wrapper
 
+# --- Определение всех задач ---
 like_feed = _create_task(TaskKey.LIKE_FEED)
 add_recommended_friends = _create_task(TaskKey.ADD_RECOMMENDED)
 accept_friend_requests = _create_task(TaskKey.ACCEPT_FRIENDS)
@@ -127,7 +186,7 @@ leave_groups_by_criteria = _create_task(TaskKey.LEAVE_GROUPS)
 join_groups_by_criteria = _create_task(TaskKey.JOIN_GROUPS)
 
 
-@celery_app.task(bind=True, base=AppBaseTask, name="app.tasks.runner.run_scenario_from_scheduler")
+@celery_app.task(bind=True, base=BaseTaskWithContext, name="app.tasks.runner.run_scenario_from_scheduler")
 def run_scenario_from_scheduler(self: Task, scenario_id: int, user_id: int):
     async def _run_scenario_logic():
         log.info("scenario.runner.start", scenario_id=scenario_id, user_id=user_id)
@@ -140,7 +199,7 @@ def run_scenario_from_scheduler(self: Task, scenario_id: int, user_id: int):
             return
 
         try:
-            async with AsyncSessionFactory_Celery() as session:
+            async with AsyncSessionFactory() as session:
                 executor = ScenarioExecutionService(session, scenario_id, user_id)
                 await executor.run()
         except Exception as e:
@@ -153,10 +212,10 @@ def run_scenario_from_scheduler(self: Task, scenario_id: int, user_id: int):
     return run_async_from_sync(_run_scenario_logic())
 
 
-@celery_app.task(bind=True, base=AppBaseTask, name="app.tasks.runner.publish_scheduled_post", soft_time_limit=300, time_limit=400)
+@celery_app.task(bind=True, base=BaseTaskWithContext, name="app.tasks.runner.publish_scheduled_post", soft_time_limit=300, time_limit=400)
 def publish_scheduled_post(self: Task, post_id: int):
     async def _publish_logic():
-        async with AsyncSessionFactory_Celery() as session:
+        async with AsyncSessionFactory() as session:
             post = await session.get(ScheduledPost, post_id)
             if not post or post.status != ScheduledPostStatus.scheduled:
                 return

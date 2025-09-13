@@ -4,16 +4,16 @@ from fastapi import Depends, HTTPException, status, Query
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload, joinedload
+from sqlalchemy.orm import selectinload, joinedload, aliased
 
 from app.core.config import settings
 from app.db.models import User, ManagedProfile, TeamMember, TeamProfileAccess
 from app.db.session import get_db, AsyncSessionFactory
 from app.repositories.user import UserRepository
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/vk")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/vk")
 
 credentials_exception = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -43,56 +43,58 @@ async def get_current_manager_user(
         raise credentials_exception
     return manager
 
+# ИЗМЕНЕНИЕ: Полностью переписанная "умная" зависимость для максимальной производительности
 async def get_current_active_profile(
     payload: Dict[str, Any] = Depends(get_payload_from_token),
     db: AsyncSession = Depends(get_db)
 ) -> User:
     """
-    Новая, "умная" зависимость. Проверяет все возможные сценарии доступа.
+    Новая, "умная" зависимость, оптимизированная для выполнения одного запроса к БД.
+    Проверяет все возможные сценарии доступа:
+    1. Пользователь работает со своим профилем.
+    2. Менеджер работает с управляемым профилем.
+    3. Участник команды работает с профилем, к которому ему дали доступ.
     """
     logged_in_user_id = int(payload.get("sub"))
     active_profile_id = int(payload.get("profile_id") or logged_in_user_id)
 
-    # Сценарий 1: Пользователь работает со своим собственным профилем
-    if logged_in_user_id == active_profile_id:
-        profile = await db.get(User, active_profile_id)
-        if profile is None: raise credentials_exception
-        return profile
+    # Создаем алиас для TeamMember, чтобы избежать конфликтов в JOIN
+    tm_alias = aliased(TeamMember)
 
-    # Сценарий 2: Менеджер работает с одним из своих подключенных профилей
-    # Проверяем, является ли logged_in_user менеджером для active_profile_id
-    manager_check = await db.execute(
-        select(ManagedProfile).where(
+    # Единый запрос, который проверяет все условия доступа
+    stmt = (
+        select(User)
+        .outerjoin(ManagedProfile, and_(
             ManagedProfile.manager_user_id == logged_in_user_id,
-            ManagedProfile.profile_user_id == active_profile_id
-        )
-    )
-    if manager_check.scalar_one_or_none():
-        profile = await db.get(User, active_profile_id)
-        if profile is None: raise credentials_exception
-        return profile
-
-    # Сценарий 3: Сотрудник команды работает с профилем, к которому ему дали доступ
-    member_check_stmt = (
-        select(TeamMember)
-        .join(TeamProfileAccess)
+            ManagedProfile.profile_user_id == User.id
+        ))
+        .outerjoin(tm_alias, tm_alias.user_id == logged_in_user_id)
+        .outerjoin(TeamProfileAccess, and_(
+            TeamProfileAccess.team_member_id == tm_alias.id,
+            TeamProfileAccess.profile_user_id == User.id
+        ))
         .where(
-            TeamMember.user_id == logged_in_user_id,
-            TeamProfileAccess.profile_user_id == active_profile_id
+            User.id == active_profile_id,
+            (User.id == logged_in_user_id) | # Сценарий 1
+            (ManagedProfile.id != None) |     # Сценарий 2
+            (TeamProfileAccess.id != None)    # Сценарий 3
         )
     )
-    member_access = await db.execute(member_check_stmt)
-    if member_access.scalar_one_or_none():
-        profile = await db.get(User, active_profile_id)
-        if profile is None: raise credentials_exception
+    
+    result = await db.execute(stmt)
+    profile = result.scalar_one_or_none()
+
+    if profile:
         return profile
     
     # Если ни одно из условий не выполнено - доступ запрещен
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступ к этому профилю запрещен.")
 
+
 async def get_current_user_from_ws(token: str = Query(...)) -> User:
     async with AsyncSessionFactory() as session:
         payload = await get_payload_from_token(token)
+        # На WS нам нужен только активный профиль, полная проверка прав излишня
         profile_id = int(payload.get("profile_id") or payload.get("sub"))
         user = await session.get(User, profile_id)
         if not user:

@@ -228,7 +228,17 @@ from app.services.websocket_manager import redis_listener
 configure_logging()
 log = structlog.get_logger(__name__)
 
+# ИЗМЕНЕНИЕ: Улучшенная идентификация клиента для Rate Limiter
 async def get_request_identifier(request: Request) -> str:
+    """
+    Получает реальный IP-адрес клиента, даже если приложение за прокси.
+    Важно: Убедитесь, что ваш прокси (Nginx, Traefik) устанавливает заголовок 'X-Forwarded-For'.
+    """
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        # Самый левый IP в списке - это исходный IP клиента
+        return forwarded_for.split(',')[0].strip()
+    # Fallback на прямое подключение
     return request.client.host if request.client else "unknown"
 
 # Зависимости Rate Limiter
@@ -332,16 +342,16 @@ from fastapi import Depends, HTTPException, status, Query
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload, joinedload
+from sqlalchemy.orm import selectinload, joinedload, aliased
 
 from app.core.config import settings
 from app.db.models import User, ManagedProfile, TeamMember, TeamProfileAccess
 from app.db.session import get_db, AsyncSessionFactory
 from app.repositories.user import UserRepository
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/vk")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/vk")
 
 credentials_exception = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -371,56 +381,58 @@ async def get_current_manager_user(
         raise credentials_exception
     return manager
 
+# ИЗМЕНЕНИЕ: Полностью переписанная "умная" зависимость для максимальной производительности
 async def get_current_active_profile(
     payload: Dict[str, Any] = Depends(get_payload_from_token),
     db: AsyncSession = Depends(get_db)
 ) -> User:
     """
-    Новая, "умная" зависимость. Проверяет все возможные сценарии доступа.
+    Новая, "умная" зависимость, оптимизированная для выполнения одного запроса к БД.
+    Проверяет все возможные сценарии доступа:
+    1. Пользователь работает со своим профилем.
+    2. Менеджер работает с управляемым профилем.
+    3. Участник команды работает с профилем, к которому ему дали доступ.
     """
     logged_in_user_id = int(payload.get("sub"))
     active_profile_id = int(payload.get("profile_id") or logged_in_user_id)
 
-    # Сценарий 1: Пользователь работает со своим собственным профилем
-    if logged_in_user_id == active_profile_id:
-        profile = await db.get(User, active_profile_id)
-        if profile is None: raise credentials_exception
-        return profile
+    # Создаем алиас для TeamMember, чтобы избежать конфликтов в JOIN
+    tm_alias = aliased(TeamMember)
 
-    # Сценарий 2: Менеджер работает с одним из своих подключенных профилей
-    # Проверяем, является ли logged_in_user менеджером для active_profile_id
-    manager_check = await db.execute(
-        select(ManagedProfile).where(
+    # Единый запрос, который проверяет все условия доступа
+    stmt = (
+        select(User)
+        .outerjoin(ManagedProfile, and_(
             ManagedProfile.manager_user_id == logged_in_user_id,
-            ManagedProfile.profile_user_id == active_profile_id
-        )
-    )
-    if manager_check.scalar_one_or_none():
-        profile = await db.get(User, active_profile_id)
-        if profile is None: raise credentials_exception
-        return profile
-
-    # Сценарий 3: Сотрудник команды работает с профилем, к которому ему дали доступ
-    member_check_stmt = (
-        select(TeamMember)
-        .join(TeamProfileAccess)
+            ManagedProfile.profile_user_id == User.id
+        ))
+        .outerjoin(tm_alias, tm_alias.user_id == logged_in_user_id)
+        .outerjoin(TeamProfileAccess, and_(
+            TeamProfileAccess.team_member_id == tm_alias.id,
+            TeamProfileAccess.profile_user_id == User.id
+        ))
         .where(
-            TeamMember.user_id == logged_in_user_id,
-            TeamProfileAccess.profile_user_id == active_profile_id
+            User.id == active_profile_id,
+            (User.id == logged_in_user_id) | # Сценарий 1
+            (ManagedProfile.id != None) |     # Сценарий 2
+            (TeamProfileAccess.id != None)    # Сценарий 3
         )
     )
-    member_access = await db.execute(member_check_stmt)
-    if member_access.scalar_one_or_none():
-        profile = await db.get(User, active_profile_id)
-        if profile is None: raise credentials_exception
+    
+    result = await db.execute(stmt)
+    profile = result.scalar_one_or_none()
+
+    if profile:
         return profile
     
     # Если ни одно из условий не выполнено - доступ запрещен
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступ к этому профилю запрещен.")
 
+
 async def get_current_user_from_ws(token: str = Query(...)) -> User:
     async with AsyncSessionFactory() as session:
         payload = await get_payload_from_token(token)
+        # На WS нам нужен только активный профиль, полная проверка прав излишня
         profile_id = int(payload.get("profile_id") or payload.get("sub"))
         user = await session.get(User, profile_id)
         if not user:
@@ -1574,7 +1586,8 @@ from app.db.session import get_db
 from app.celery_app import celery_app
 from app.api.schemas.actions import (
     AcceptFriendsRequest, LikeFeedRequest, AddFriendsRequest, EmptyRequest,
-    RemoveFriendsRequest, MassMessagingRequest, JoinGroupsRequest, LeaveGroupsRequest
+    RemoveFriendsRequest, MassMessagingRequest, JoinGroupsRequest, LeaveGroupsRequest,
+    TaskConfigResponse, TaskField
 )
 from app.api.schemas.tasks import ActionResponse, PaginatedTasksResponse
 from app.tasks.runner import (
@@ -1655,6 +1668,42 @@ async def _enqueue_task(
         message=f"Задача '{task_display_name}' успешно добавлена в очередь.",
         task_id=task_result.id
     )
+
+# НОВЫЙ ЭНДПОИНТ: Отдает конфигурацию для модального окна на фронтенде
+@router.get("/{task_key}/config", response_model=TaskConfigResponse, summary="Получить конфигурацию для задачи")
+async def get_task_config(task_key: TaskKey, current_user: User = Depends(get_current_active_profile)):
+    """
+    Возвращает структуру для динамического рендеринга модального окна
+    настройки и запуска задачи, учитывая лимиты пользователя.
+    """
+    task_config = next((item for item in AUTOMATIONS_CONFIG if item.get('id') == task_key.value), None)
+    if not task_config:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Конфигурация для задачи не найдена.")
+
+    user_limits = get_plan_config(current_user.plan).get("limits", {})
+    fields = []
+    
+    if task_config.get("has_count_slider", False):
+        max_val = 1000
+        if task_key == TaskKey.ADD_RECOMMENDED:
+            max_val = user_limits.get("daily_add_friends_limit", 40)
+        elif task_key == TaskKey.LIKE_FEED:
+            max_val = user_limits.get("daily_likes_limit", 1000)
+        
+        fields.append(TaskField(
+            name="count",
+            type="slider",
+            label=task_config.get("modal_count_label", "Количество"),
+            default_value=task_config.get("default_count", 20),
+            max_value=max_val
+        ))
+
+    return TaskConfigResponse(
+        display_name=task_config.get("name"),
+        has_filters=task_config.get("has_filters", False),
+        fields=fields
+    )
+
 
 @router.post("/run/{task_key}", response_model=ActionResponse)
 async def run_any_task(
@@ -2260,7 +2309,7 @@ from .users import router as users_router
 
 # --- backend/app/api/schemas/actions.py ---
 from pydantic import BaseModel, Field
-from typing import Optional, Literal, List
+from typing import Optional, Literal, List, Any
 
 class ActionFilters(BaseModel):
     sex: Optional[Literal[0, 1, 2]] = 0 
@@ -2315,6 +2364,20 @@ class JoinGroupsRequest(BaseCountRequest):
 
 class EmptyRequest(BaseModel):
     pass
+
+# --- НОВЫЕ СХЕМЫ для динамической конфигурации UI ---
+class TaskField(BaseModel):
+    name: str
+    type: Literal["slider", "switch", "text"]
+    label: str
+    default_value: Any
+    max_value: Optional[int] = None
+    tooltip: Optional[str] = None
+
+class TaskConfigResponse(BaseModel):
+    display_name: str
+    has_filters: bool
+    fields: List[TaskField]
 
 # --- backend/app\api\schemas\analytics.py ---
 
@@ -2878,9 +2941,12 @@ def configure_logging():
 # --- backend/app\core\plans.py ---
 
 # backend/app/core/plans.py
+from functools import lru_cache
 from app.core.config_loader import PLAN_CONFIG, AUTOMATIONS_CONFIG
 from app.core.constants import PlanName, FeatureKey, TaskKey
 
+# ИЗМЕНЕНИЕ: Добавлено кэширование для предотвращения повторных вычислений
+@lru_cache(maxsize=16)
 def get_plan_config(plan_name: str) -> dict:
     """Безопасно получает конфигурацию плана, возвращая 'Expired' если план не найден."""
     return PLAN_CONFIG.get(plan_name, PLAN_CONFIG.get(PlanName.EXPIRED, {}))
@@ -2890,6 +2956,7 @@ def get_limits_for_plan(plan_name: str) -> dict:
     plan_data = get_plan_config(plan_name)
     return plan_data.get("limits", {}).copy()
 
+@lru_cache(maxsize=1)
 def get_all_feature_keys() -> list[str]:
     """Возвращает список всех возможных ключей фич из конфига."""
     automation_ids = [item.get('id') for item in AUTOMATIONS_CONFIG if item.get('id')]
@@ -2905,6 +2972,8 @@ def get_all_feature_keys() -> list[str]:
     ]
     return list(set(automation_ids + [f.value for f in other_features]))
 
+# ИЗМЕНЕНИЕ: Добавлено кэширование для предотвращения повторных вычислений
+@lru_cache(maxsize=256)
 def is_feature_available_for_plan(plan_name: str, feature_id: str) -> bool:
     """Проверяет, доступна ли указанная фича для данного тарифного плана."""
     plan_data = get_plan_config(plan_name)
@@ -3432,14 +3501,15 @@ __all__ = [
 from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import NullPool # <-- НОВЫЙ ИМПОРТ
 
 from app.core.config import settings
 
+# ИЗМЕНЕНИЕ: Убран NullPool для использования стандартного асинхронного пула соединений,
+# который более эффективен для приложений с постоянной нагрузкой.
+# NullPool оправдан только для serverless-окружений или при работе с PgBouncer.
 engine = create_async_engine(
     settings.database_url, 
-    pool_pre_ping=True, 
-    poolclass=NullPool
+    pool_pre_ping=True
 )
 
 # Создаем фабрику асинхронных сессий
@@ -4934,59 +5004,6 @@ async def redis_listener(redis_client: Redis):
 
 
 
-# --- backend/app\tasks\base_task.py ---
-
-import asyncio
-from celery import Task
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.ext.asyncio import AsyncSession
-from app.db.session import engine
-from app.db.models import TaskHistory
-from app.core.config import settings
-from app.tasks.utils import run_async_from_sync
-
-AsyncSessionFactory_Celery = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-
-sync_engine = create_engine(settings.database_url.replace("+asyncpg", ""))
-SyncSessionFactory_Celery = sessionmaker(autocommit=False, autoflush=False, bind=sync_engine)
-
-
-class AppBaseTask(Task):
-    acks_late = True
-
-    # --- ИЗМЕНЕНИЕ: Добавлена обертка для асинхронных вызовов ---
-    def _run_async_from_sync(self, coro):
-        return run_async_from_sync(coro)
-
-    def _update_task_history_sync(self, task_history_id: int, status: str, result: str):
-        if not task_history_id:
-            return
-        
-        session = SyncSessionFactory_Celery()
-        try:
-            task_history = session.get(TaskHistory, task_history_id)
-            if task_history:
-                task_history.status = status
-                task_history.result = result
-                session.commit()
-        except Exception as e:
-            print(f"CRITICAL: Failed to update task history {task_history_id}: {e}")
-            session.rollback()
-        finally:
-            session.close()
-
-
-    def on_failure(self, exc, task_id, args, kwargs, einfo):
-        task_history_id = kwargs.get('task_history_id') or (args[0] if args else None)
-        error_message = f"Задача провалена: {exc!r}"
-        self._update_task_history_sync(task_history_id, "FAILURE", error_message)
-
-    def on_success(self, retval, task_id, args, kwargs):
-        task_history_id = kwargs.get('task_history_id') or (args[0] if args else None)
-        success_message = "Задача успешно выполнена."
-        self._update_task_history_sync(task_history_id, "SUCCESS", success_message)
-
 # --- backend/app\tasks\cron.py ---
 
 # --- backend/app/tasks/cron.py ---
@@ -5419,7 +5436,7 @@ from app.core.exceptions import UserActionException
 from app.services.vk_api import VKAPI, VKAuthError, VKRateLimitError, VKAPIError
 from app.core.security import decrypt_data
 from app.core.constants import TaskKey
-from app.tasks.base_task import AppBaseTask, AsyncSessionFactory_Celery
+from app.db.session import AsyncSessionFactory
 import structlog
 from app.tasks.utils import run_async_from_sync
 from app.services.scenario_service import ScenarioExecutionService
@@ -5439,81 +5456,140 @@ TASK_SERVICE_MAP = {
     TaskKey.JOIN_GROUPS: (GroupManagementService, "join_groups_by_criteria"),
 }
 
-# --- ИЗМЕНЕНИЕ 1: Добавляем `self: Task` как первый аргумент ---
-async def _execute_task_logic(self: Task, task_history_id: int, task_name_key: str, **kwargs):
-    redis_client = AsyncRedis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/1", decode_responses=True)
-    emitter = RedisEventEmitter(redis_client)
-    user = None # Инициализируем user
-    task_history = None # Инициализируем task_history
+# --- ИЗМЕНЕНИЕ: Полностью переработанный базовый класс для задач Celery ---
+class BaseTaskWithContext(Task):
+    """
+    Улучшенный базовый класс для задач Celery, который инкапсулирует
+    управление сессией, контекстом пользователя и обработку ошибок.
+    """
+    acks_late = True
     
-    async with AsyncSessionFactory_Celery() as session:
+    def __init__(self):
+        self.session = None
+        self.redis = None
+        self.emitter = None
+        self.user = None
+        self.task_history = None
+
+    async def _setup_context(self, task_history_id):
+        self.session = AsyncSessionFactory()
+        self.redis = AsyncRedis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/1", decode_responses=True)
+        self.emitter = RedisEventEmitter(self.redis)
+        
+        stmt = select(TaskHistory).where(TaskHistory.id == task_history_id).options(
+            selectinload(TaskHistory.user).selectinload(User.proxies)
+        )
+        self.task_history = (await self.session.execute(stmt)).scalar_one_or_none()
+
+        if not self.task_history:
+            log.error("task_runner.history_not_found", id=task_history_id)
+            return False
+            
+        self.user = self.task_history.user
+        if not self.user:
+            log.error("task_runner.user_not_found", user_id=self.task_history.user_id)
+            return False
+            
+        self.emitter.set_context(self.user.id, self.task_history.id)
+        return True
+
+    async def _teardown_context(self):
+        if self.redis: await self.redis.close()
+        if self.session: await self.session.close()
+
+    async def _run_task(self, task_history_id: int, task_name_key: str, **kwargs):
+        if not await self._setup_context(task_history_id): return
+        
         try:
-            task_history_stmt = select(TaskHistory).where(TaskHistory.id == task_history_id).options(
-                selectinload(TaskHistory.user).selectinload(User.proxies)
-            )
-            task_history = (await session.execute(task_history_stmt)).scalar_one_or_none()
-
-            if not task_history:
-                log.error("task_runner.history_not_found", id=task_history_id)
-                return
-
-            user = task_history.user
-            if not user:
-                raise RuntimeError(f"User {task_history.user_id} not found")
-                
-            emitter.set_context(user.id, task_history.id)
-            task_history.status = "STARTED"
-            await session.commit()
-            await emitter.send_task_status_update(status="STARTED", task_name=task_history.task_name, created_at=task_history.created_at)
+            self.task_history.status = "STARTED"
+            await self.session.commit()
+            await self.emitter.send_task_status_update(status="STARTED", task_name=self.task_history.task_name, created_at=self.task_history.created_at)
 
             ServiceClass, method_name = TASK_SERVICE_MAP[TaskKey(task_name_key)]
-            service_instance = ServiceClass(db=session, user=user, emitter=emitter)
+            service_instance = ServiceClass(db=self.session, user=self.user, emitter=self.emitter)
             await getattr(service_instance, method_name)(**kwargs)
+            
+            self.task_history.status = "SUCCESS"
+            self.task_history.result = "Задача успешно выполнена."
 
         except VKAuthError as e:
-            if user:
-                log.error("task_runner.auth_error", user_id=user.id, error=str(e))
-                await emitter.send_system_notification(
-                    session, "Ошибка авторизации VK. Ваш токен недействителен. Все автоматизации остановлены. Пожалуйста, войдите в систему заново.", "error"
-                )
-                deactivate_stmt = update(Automation).where(Automation.user_id == user.id).values(is_active=False)
-                await session.execute(deactivate_stmt)
-                await session.commit()
-            raise e
-        
+            # ИЗМЕНЕНИЕ: Механизм "мягкой" деактивации для защиты от временных сбоев API
+            redis_lock_client = AsyncRedis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/2")
+            auth_error_key = f"auth_error_count:{self.user.id}"
+            error_count = await redis_lock_client.incr(auth_error_key)
+            await redis_lock_client.expire(auth_error_key, 3600) # Сбрасываем счетчик через час
+            
+            if error_count >= 3:
+                log.error("task_runner.auth_error_persistent", user_id=self.user.id, error=str(e))
+                await self.emitter.send_system_notification(self.session, "Критическая ошибка авторизации VK. Ваш токен недействителен. Все автоматизации остановлены. Пожалуйста, войдите в систему заново.", "error")
+                deactivate_stmt = update(Automation).where(Automation.user_id == self.user.id).values(is_active=False)
+                await self.session.execute(deactivate_stmt)
+            else:
+                 log.warn("task_runner.auth_error_transient", user_id=self.user.id, error=str(e), attempt=error_count)
+                 await self.emitter.send_system_notification(self.session, "Произошла ошибка авторизации VK. Если ошибка повторится несколько раз, автоматизации будут остановлены.", "warning")
+
+            await redis_lock_client.close()
+            raise e # Передаем ошибку в on_failure
+
         except (VKRateLimitError, VKAPIError) as e:
-            if task_history:
-                await emitter.send_task_status_update(status="RETRY", result=f"Ошибка VK API, задача будет повторена: {e.message}", task_name=task_history.task_name, created_at=task_history.created_at)
-            # --- ИЗМЕНЕНИЕ 2: Теперь `self` доступен и эта строка корректна ---
-            raise self.retry(exc=e)
+            retry_delay = 60 * (self.request.retries + 1) # Экспоненциальная задержка: 1, 2, 3... минуты
+            log.warn("task_runner.api_error_retrying", id=task_history_id, error=str(e), next_try_in_sec=retry_delay)
+            self.task_history.status = "RETRY"
+            self.task_history.result = f"Ошибка VK API, повтор через {retry_delay // 60} мин: {e.message}"
+            raise self.retry(exc=e, countdown=retry_delay)
         
         except UserActionException as e:
-            await emitter.send_system_notification(session, str(e), "error")
+            await self.emitter.send_system_notification(self.session, str(e), "error")
             raise e
         
         except Exception as e:
             log.exception("task_runner.unhandled_exception", id=task_history_id, error=str(e))
-            if task_history:
-                await emitter.send_system_notification(session, f"Произошла внутренняя ошибка при выполнении задачи '{task_history.task_name}'.", "error")
+            await self.emitter.send_system_notification(self.session, f"Произошла внутренняя ошибка при выполнении задачи '{self.task_history.task_name}'.", "error")
             raise
+        
         finally:
-            await redis_client.close()
+            if self.task_history and self.session: await self.session.commit()
+            await self._teardown_context()
 
-def _create_task(name: TaskKey, **kwargs):
-    task_kwargs = {
-        'max_retries': 3,
-        'default_retry_delay': 300,
-        'soft_time_limit': 900,
-        'time_limit': 1200,
-        **kwargs
+    def on_failure(self, exc, task_id, args, kwargs, einfo):
+        async def _async_on_failure():
+            task_history_id = kwargs.get('task_history_id')
+            if not await self._setup_context(task_history_id): return
+            
+            self.task_history.status = "FAILURE"
+            self.task_history.result = f"Задача провалена: {exc!r}"
+            await self.session.commit()
+            await self.emitter.send_task_status_update(status="FAILURE", result=self.task_history.result, task_name=self.task_history.task_name, created_at=self.task_history.created_at)
+            await self._teardown_context()
+        
+        run_async_from_sync(_async_on_failure())
+
+    def on_success(self, retval, task_id, args, kwargs):
+        async def _async_on_success():
+            task_history_id = kwargs.get('task_history_id')
+            if not await self._setup_context(task_history_id): return
+            
+            await self.emitter.send_task_status_update(status="SUCCESS", result=self.task_history.result, task_name=self.task_history.task_name, created_at=self.task_history.created_at)
+            await self._teardown_context()
+        
+        run_async_from_sync(_async_on_success())
+        
+    def __call__(self, *args, **kwargs):
+        return run_async_from_sync(self.run(*args, **kwargs))
+
+def _create_task(name: TaskKey, **celery_options):
+    task_config = {
+        'max_retries': 3, 'default_retry_delay': 300,
+        'soft_time_limit': 900, 'time_limit': 1200,
+        **celery_options
     }
     
-    @celery_app.task(name=f"app.tasks.runner.{name.value}", bind=True, base=AppBaseTask, **task_kwargs)
-    def task_wrapper(self: Task, task_history_id: int, **kwargs):
-        # --- ИЗМЕНЕНИЕ 3: Передаем `self` в асинхронную функцию ---
-        return run_async_from_sync(_execute_task_logic(self, task_history_id, name.value, **kwargs))
+    @celery_app.task(name=f"app.tasks.runner.{name.value}", bind=True, base=BaseTaskWithContext, **task_config)
+    def task_wrapper(self: BaseTaskWithContext, task_history_id: int, **kwargs):
+        return run_async_from_sync(self._run_task(task_history_id, name.value, **kwargs))
     return task_wrapper
 
+# --- Определение всех задач ---
 like_feed = _create_task(TaskKey.LIKE_FEED)
 add_recommended_friends = _create_task(TaskKey.ADD_RECOMMENDED)
 accept_friend_requests = _create_task(TaskKey.ACCEPT_FRIENDS)
@@ -5526,7 +5602,7 @@ leave_groups_by_criteria = _create_task(TaskKey.LEAVE_GROUPS)
 join_groups_by_criteria = _create_task(TaskKey.JOIN_GROUPS)
 
 
-@celery_app.task(bind=True, base=AppBaseTask, name="app.tasks.runner.run_scenario_from_scheduler")
+@celery_app.task(bind=True, base=BaseTaskWithContext, name="app.tasks.runner.run_scenario_from_scheduler")
 def run_scenario_from_scheduler(self: Task, scenario_id: int, user_id: int):
     async def _run_scenario_logic():
         log.info("scenario.runner.start", scenario_id=scenario_id, user_id=user_id)
@@ -5539,7 +5615,7 @@ def run_scenario_from_scheduler(self: Task, scenario_id: int, user_id: int):
             return
 
         try:
-            async with AsyncSessionFactory_Celery() as session:
+            async with AsyncSessionFactory() as session:
                 executor = ScenarioExecutionService(session, scenario_id, user_id)
                 await executor.run()
         except Exception as e:
@@ -5552,10 +5628,10 @@ def run_scenario_from_scheduler(self: Task, scenario_id: int, user_id: int):
     return run_async_from_sync(_run_scenario_logic())
 
 
-@celery_app.task(bind=True, base=AppBaseTask, name="app.tasks.runner.publish_scheduled_post", soft_time_limit=300, time_limit=400)
+@celery_app.task(bind=True, base=BaseTaskWithContext, name="app.tasks.runner.publish_scheduled_post", soft_time_limit=300, time_limit=400)
 def publish_scheduled_post(self: Task, post_id: int):
     async def _publish_logic():
-        async with AsyncSessionFactory_Celery() as session:
+        async with AsyncSessionFactory() as session:
             post = await session.get(ScheduledPost, post_id)
             if not post or post.status != ScheduledPostStatus.scheduled:
                 return

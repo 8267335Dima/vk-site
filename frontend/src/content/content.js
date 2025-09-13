@@ -12,39 +12,85 @@ import GroupRemoveIcon from '@mui/icons-material/GroupRemove';
 import AddToPhotosIcon from '@mui/icons-material/AddToPhotos';
 import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 
+// ИЗМЕНЕНИЕ: Единый источник правды для всех задач и автоматизаций
+const tasks = {
+    'like_feed': { 
+        icon: <ThumbUpIcon />, 
+        name: "Лайки в ленте новостей", 
+        description: "Проставляет лайки на посты в ленте новостей.",
+        modalTitle: "Лайки в ленте новостей", 
+    },
+    'add_recommended': { 
+        icon: <RecommendIcon />, 
+        name: "Добавление друзей", 
+        description: "Отправляет заявки пользователям из списка рекомендаций.",
+        modalTitle: "Добавление друзей из рекомендаций",
+    },
+     'accept_friends': { 
+        icon: <GroupAddIcon />, 
+        name: "Прием заявок в друзья",
+        description: "Принимает входящие заявки в друзья по вашим фильтрам.",
+        modalTitle: "Прием входящих заявок",
+    },
+    'remove_friends': { 
+        icon: <PersonRemoveIcon />, 
+        name: "Очистка списка друзей",
+        description: "Удаляет неактивных и забаненных друзей.",
+        modalTitle: "Чистка списка друзей",
+    },
+    'view_stories': { 
+        icon: <HistoryIcon />, 
+        name: "Просмотр историй",
+        description: "Просматривает все доступные истории друзей.",
+        modalTitle: "Просмотр историй",
+    },
+    'mass_messaging': { 
+        icon: <SendIcon />, 
+        name: "Массовая рассылка",
+        description: "Отправляет сообщения друзьям по заданным критериям.",
+        modalTitle: "Массовая отправка сообщений друзьям",
+    },
+    'leave_groups': { 
+        icon: <GroupRemoveIcon />, 
+        name: "Отписка от сообществ",
+        description: "Отписывается от сообществ по ключевому слову.",
+        modalTitle: 'Отписка от сообществ',
+    },
+    'join_groups': { 
+        icon: <AddToPhotosIcon />, 
+        name: "Вступление в группы",
+        description: "Вступает в группы по ключевым словам.",
+        modalTitle: 'Вступление в группы',
+    },
+    'birthday_congratulation': { 
+        icon: <CakeIcon />, 
+        name: "Поздравления с ДР", 
+        description: "Поздравляет ваших друзей с Днем Рождения.",
+    },
+    'eternal_online': { 
+        icon: <OnlinePredictionIcon />, 
+        name: "Вечный онлайн", 
+        description: "Поддерживает статус 'онлайн' для вашего аккаунта.",
+    },
+    'post_scheduler': {
+        icon: <CalendarMonthIcon />,
+        name: "Планировщик постов",
+        description: "Создавайте и планируйте публикации наперед."
+    }
+};
+
 export const content = {
     appName: "Zenith",
     nav: {
         dashboard: "Кабинет",
         scenarios: "Сценарии",
         posts: "Планировщик",
+        team: "Команда",
         billing: "Тарифы",
         login: "Войти",
         logout: "Выйти",
     },
-    actions: {
-        'accept_friends': { icon: <GroupAddIcon />, title: 'Прием заявок', modalTitle: "Прием входящих заявок" },
-        'like_feed': { icon: <ThumbUpIcon />, title: 'Лайкинг ленты', modalTitle: "Лайки в ленте новостей", modal_count_label: "Количество лайков" },
-        'add_recommended': { icon: <RecommendIcon />, title: 'Добавление друзей', modalTitle: "Добавление друзей из рекомендаций", modal_count_label: "Количество заявок" },
-        'view_stories': { icon: <HistoryIcon />, title: 'Просмотр историй', modalTitle: "Просмотр историй" },
-        'remove_friends': { icon: <PersonRemoveIcon />, title: 'Чистка друзей', modalTitle: "Чистка списка друзей", modal_count_label: "Максимум удалений" },
-        'mass_messaging': { icon: <SendIcon />, title: 'Отправка сообщений', modalTitle: "Массовая отправка сообщений друзьям", modal_count_label: "Количество сообщений" },
-        'leave_groups': { icon: <GroupRemoveIcon />, title: 'Отписка от сообществ', modalTitle: 'Отписка от сообществ', modal_count_label: "Максимум отписок" },
-        'join_groups': { icon: <AddToPhotosIcon />, title: 'Вступление в группы', modalTitle: 'Вступление в группы', modal_count_label: "Максимум вступлений" },
-    },
-    automations: [
-        { id: "like_feed", icon: <ThumbUpIcon />, name: "Лайкинг ленты", description: "Проставляет лайки на посты в ленте новостей.", has_filters: true, group: 'standard' },
-        { id: "add_recommended", icon: <RecommendIcon />, name: "Добавление друзей", description: "Отправляет заявки пользователям из списка рекомендаций.", has_filters: true, group: 'standard' },
-        { id: "birthday_congratulation", icon: <CakeIcon />, name: "Поздравления с ДР", description: "Поздравляет ваших друзей с Днем Рождения.", has_filters: false, group: 'standard' },
-        { id: "accept_friends", icon: <GroupAddIcon />, name: "Прием заявок", description: "Принимает входящие заявки в друзья по вашим фильтрам.", has_filters: true, group: 'standard' },
-        { id: "remove_friends", icon: <PersonRemoveIcon />, name: "Чистка друзей", description: "Удаляет неактивных и забаненных друзей.", has_filters: true, group: 'standard' },
-        { id: "leave_groups", icon: <GroupRemoveIcon />, name: "Отписка от сообществ", description: "Отписывается от сообществ по ключевому слову.", has_filters: true, group: 'standard' },
-        { id: "join_groups", icon: <AddToPhotosIcon />, name: "Вступление в группы", description: "Вступает в группы по ключевым словам.", has_filters: true, group: 'standard' },
-        { id: "view_stories", icon: <HistoryIcon />, name: "Просмотр историй", description: "Просматривает все доступные истории друзей.", has_filters: false, group: 'standard' },
-        { id: "mass_messaging", icon: <SendIcon />, name: "Отправка сообщений", description: "Отправляет сообщения друзьям по заданным критериям.", has_filters: true, group: 'standard' },
-        { id: "post_scheduler", icon: <CalendarMonthIcon />, name: "Планировщик постов", description: "Создавайте и планируйте публикации наперед.", has_filters: false, group: 'content' },
-        { id: "eternal_online", icon: <OnlinePredictionIcon />, name: "Вечный онлайн", description: "Поддерживает статус 'онлайн' для вашего аккаунта.", has_filters: false, group: 'online' },
-    ],
+    tasks: tasks,
     loginPage: {
         title: "Добро пожаловать в Zenith",
         subtitle: "Ваш интеллектуальный ассистент для ВКонтакте",

@@ -11,7 +11,8 @@ from app.db.session import get_db
 from app.celery_app import celery_app
 from app.api.schemas.actions import (
     AcceptFriendsRequest, LikeFeedRequest, AddFriendsRequest, EmptyRequest,
-    RemoveFriendsRequest, MassMessagingRequest, JoinGroupsRequest, LeaveGroupsRequest
+    RemoveFriendsRequest, MassMessagingRequest, JoinGroupsRequest, LeaveGroupsRequest,
+    TaskConfigResponse, TaskField
 )
 from app.api.schemas.tasks import ActionResponse, PaginatedTasksResponse
 from app.tasks.runner import (
@@ -92,6 +93,42 @@ async def _enqueue_task(
         message=f"Задача '{task_display_name}' успешно добавлена в очередь.",
         task_id=task_result.id
     )
+
+# НОВЫЙ ЭНДПОИНТ: Отдает конфигурацию для модального окна на фронтенде
+@router.get("/{task_key}/config", response_model=TaskConfigResponse, summary="Получить конфигурацию для задачи")
+async def get_task_config(task_key: TaskKey, current_user: User = Depends(get_current_active_profile)):
+    """
+    Возвращает структуру для динамического рендеринга модального окна
+    настройки и запуска задачи, учитывая лимиты пользователя.
+    """
+    task_config = next((item for item in AUTOMATIONS_CONFIG if item.get('id') == task_key.value), None)
+    if not task_config:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Конфигурация для задачи не найдена.")
+
+    user_limits = get_plan_config(current_user.plan).get("limits", {})
+    fields = []
+    
+    if task_config.get("has_count_slider", False):
+        max_val = 1000
+        if task_key == TaskKey.ADD_RECOMMENDED:
+            max_val = user_limits.get("daily_add_friends_limit", 40)
+        elif task_key == TaskKey.LIKE_FEED:
+            max_val = user_limits.get("daily_likes_limit", 1000)
+        
+        fields.append(TaskField(
+            name="count",
+            type="slider",
+            label=task_config.get("modal_count_label", "Количество"),
+            default_value=task_config.get("default_count", 20),
+            max_value=max_val
+        ))
+
+    return TaskConfigResponse(
+        display_name=task_config.get("name"),
+        has_filters=task_config.get("has_filters", False),
+        fields=fields
+    )
+
 
 @router.post("/run/{task_key}", response_model=ActionResponse)
 async def run_any_task(

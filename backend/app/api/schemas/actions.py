@@ -1,6 +1,6 @@
 # --- backend/app/api/schemas/actions.py ---
 from pydantic import BaseModel, Field
-from typing import Optional, Literal, List
+from typing import Optional, Literal, List, Any
 
 class ActionFilters(BaseModel):
     sex: Optional[Literal[0, 1, 2]] = 0 
@@ -55,3 +55,17 @@ class JoinGroupsRequest(BaseCountRequest):
 
 class EmptyRequest(BaseModel):
     pass
+
+# --- НОВЫЕ СХЕМЫ для динамической конфигурации UI ---
+class TaskField(BaseModel):
+    name: str
+    type: Literal["slider", "switch", "text"]
+    label: str
+    default_value: Any
+    max_value: Optional[int] = None
+    tooltip: Optional[str] = None
+
+class TaskConfigResponse(BaseModel):
+    display_name: str
+    has_filters: bool
+    fields: List[TaskField]
