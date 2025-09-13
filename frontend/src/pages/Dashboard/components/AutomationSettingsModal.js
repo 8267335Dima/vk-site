@@ -1,6 +1,6 @@
 // frontend/src/pages/Dashboard/components/AutomationSettingsModal.js
 import React, { useState, useEffect } from 'react';
-import { Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, CircularProgress, Stack, Divider, Typography } from '@mui/material';
+import { Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, CircularProgress, Stack, Divider, Typography, ToggleButtonGroup, ToggleButton, RadioGroup, FormControlLabel, Radio } from '@mui/material';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
 import { updateAutomation } from 'api';
@@ -8,6 +8,64 @@ import { CommonFiltersSettings, RemoveFriendsFilters } from './ActionModalFilter
 import CountSlider from 'components/CountSlider';
 import { useUserStore } from 'store/userStore';
 import { content } from 'content/content';
+
+const EternalOnlineSettings = ({ settings, onChange }) => {
+    const days = [
+        { key: 0, label: 'Пн' }, { key: 1, label: 'Вт' }, { key: 2, label: 'Ср' },
+        { key: 3, label: 'Чт' }, { key: 4, label: 'Пт' }, { key: 5, label: 'Сб' }, { key: 6, label: 'Вс' },
+    ];
+
+    const handleDaysChange = (event, newDays) => {
+        onChange('days_of_week', newDays);
+    };
+
+    return (
+        <Stack spacing={2}>
+            <Typography variant="subtitle1" fontWeight={600}>Режим работы</Typography>
+            <RadioGroup
+                row
+                value={settings.schedule_type || 'always'}
+                onChange={(e) => onChange('schedule_type', e.target.value)}
+            >
+                <FormControlLabel value="always" control={<Radio />} label="Круглосуточно" />
+                <FormControlLabel value="custom" control={<Radio />} label="По расписанию" />
+            </RadioGroup>
+
+            {settings.schedule_type === 'custom' && (
+                <Stack spacing={2} p={2} borderRadius={2} border="1px solid" borderColor="divider">
+                     <Typography variant="body2" color="text.secondary">Выберите дни и время (по МСК), когда статус "онлайн" будет активен.</Typography>
+                     <ToggleButtonGroup
+                        value={settings.days_of_week || []}
+                        onChange={handleDaysChange}
+                        aria-label="дни недели"
+                        fullWidth
+                    >
+                        {days.map(day => <ToggleButton key={day.key} value={day.key} sx={{flexGrow: 1}}>{day.label}</ToggleButton>)}
+                    </ToggleButtonGroup>
+                    <Stack direction="row" spacing={2}>
+                        <TextField
+                            label="Начало"
+                            type="time"
+                            value={settings.start_time || '09:00'}
+                            onChange={(e) => onChange('start_time', e.target.value)}
+                            fullWidth
+                            InputLabelProps={{ shrink: true }}
+                        />
+                         <TextField
+                            label="Конец"
+                            type="time"
+                            value={settings.end_time || '21:00'}
+                            onChange={(e) => onChange('end_time', e.target.value)}
+                            fullWidth
+                            InputLabelProps={{ shrink: true }}
+                        />
+                    </Stack>
+                </Stack>
+            )}
+        </Stack>
+    );
+};
+
 
 const AutomationSettingsModal = ({ open, onClose, automation }) => {
     const queryClient = useQueryClient();
@@ -19,16 +77,13 @@ const AutomationSettingsModal = ({ open, onClose, automation }) => {
             const defaults = {
                 count: 50,
                 filters: { sex: 0, is_online: false, allow_closed_profiles: false, remove_banned: true, last_seen_hours: 0, last_seen_days: 0, min_friends: null, max_friends: null, min_followers: null, max_followers: null },
-                message_template_default: "С Днем Рождения, {name}! Желаю всего самого наилучшего, успехов и ярких моментов в жизни."
+                message_template_default: "С Днем Рождения, {name}! Желаю всего самого наилучшего, успехов и ярких моментов в жизни.",
+                schedule_type: 'always',
+                start_time: '09:00',
+                end_time: '21:00',
+                days_of_week: [0, 1, 2, 3, 4],
             };
-            
-            const mergedSettings = { ...defaults, ...automation.settings };
-            
-            if (automation.settings?.message_template_default) {
-                mergedSettings.message_template_default = automation.settings.message_template_default;
-            }
-
-            setSettings(mergedSettings);
+            setSettings({ ...defaults, ...(automation.settings || {}) });
         }
     }, [open, automation]);
 
@@ -45,7 +100,7 @@ const AutomationSettingsModal = ({ open, onClose, automation }) => {
     });
 
     const handleSettingsChange = (name, value) => {
-        const filterKeys = ['sex', 'is_online', 'allow_closed_profiles', 'remove_banned', 'last_seen_hours', 'last_seen_days', 'min_friends', 'max_friends', 'min_followers', 'max_followers'];
+        const filterKeys = ['sex', 'is_online', 'allow_closed_profiles', 'remove_banned', 'last_seen_hours', 'last_seen_days', 'min_friends', 'max_friends', 'min_followers', 'max_followers', 'status_keyword'];
 
         if (filterKeys.includes(name)) {
             setSettings(s => ({ ...s, filters: { ...s.filters, [name]: value } }));
@@ -65,8 +120,9 @@ const AutomationSettingsModal = ({ open, onClose, automation }) => {
     if (!automation) return null;
 
     const actionConfig = content.actions[automation.automation_type];
+    const automationConfig = content.automations.find(a => a.id === automation.automation_type);
     const needsCount = actionConfig && !!actionConfig.modal_count_label;
-    const needsFilters = !['view_stories', 'birthday_congratulation', 'eternal_online'].includes(automation.automation_type);
+    const needsFilters = automationConfig && automationConfig.has_filters;
     
     const getLimit = () => {
         if (automation.automation_type.includes('add')) return userInfo?.daily_add_friends_limit || 100;
@@ -90,6 +146,10 @@ const AutomationSettingsModal = ({ open, onClose, automation }) => {
                             onChange={(e) => handleSettingsChange(e.target.name, e.target.value)}
                             helperText="Используйте {name} для подстановки имени друга."
                         />
+                    )}
+
+                    {automation.automation_type === 'eternal_online' && (
+                        <EternalOnlineSettings settings={settings} onChange={handleSettingsChange} />
                     )}
 
                     {needsCount && (

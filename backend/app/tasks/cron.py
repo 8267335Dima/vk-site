@@ -8,8 +8,6 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import selectinload
 
 from app.celery_app import celery_app
-from celery import Task
-
 from app.core.config import settings
 from app.db.session import AsyncSessionFactory
 from app.db.models import (
@@ -22,12 +20,10 @@ from app.tasks.runner import (
 )
 from app.core.config_loader import PLAN_CONFIG
 from app.core.plans import get_limits_for_plan
-from app.services.analytics_service import AnalyticsService
-from app.services.vk_api import VKAuthError
 from app.tasks.utils import run_async_from_sync
+import pytz
 
 log = structlog.get_logger(__name__)
-# <-- ИЗМЕНЕНИЕ: Глобальный клиент redis_client удален отсюда.
 
 TASK_FUNC_MAP = {
     "like_feed": like_feed,
@@ -102,9 +98,14 @@ async def _aggregate_daily_stats_async():
         log.info("aggregate_daily_stats.success", users_count=len(daily_sums), date=yesterday.isoformat())
 
 async def _run_daily_automations_async(automation_group: str):
+    """
+    Основная логика для запуска периодических автоматизаций.
+    Безопасно для многопроцессной среды Celery.
+    """
     redis_client = Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, db=2, decode_responses=True)
     lock_key = f"lock:task:run_automations:{automation_group}"
     
+    # Пытаемся установить блокировку на 4 минуты. Если не удалось - значит, задача уже выполняется.
     if not await redis_client.set(lock_key, "1", ex=240, nx=True):
         log.warn("run_daily_automations.already_running", group=automation_group)
         await redis_client.close()
@@ -112,7 +113,10 @@ async def _run_daily_automations_async(automation_group: str):
     
     try:
         async with AsyncSessionFactory() as session:
-            now = datetime.datetime.utcnow()
+            now_utc = datetime.datetime.utcnow()
+            # Устанавливаем часовой пояс Москвы для проверки кастомного расписания
+            moscow_tz = pytz.timezone("Europe/Moscow")
+            now_moscow = now_utc.astimezone(moscow_tz)
 
             automation_ids_in_group = []
             if automation_group == 'standard':
@@ -136,7 +140,7 @@ async def _run_daily_automations_async(automation_group: str):
                     Automation.is_active == True,
                     Automation.automation_type.in_(automation_ids_in_group),
                     User.plan.in_(available_plans),
-                    or_(User.plan_expires_at.is_(None), User.plan_expires_at > now)
+                    or_(User.plan_expires_at.is_(None), User.plan_expires_at > now_utc)
                 )
                 .options(selectinload(Automation.user))
             )
@@ -150,18 +154,48 @@ async def _run_daily_automations_async(automation_group: str):
             log.info("run_daily_automations.start", count=len(active_automations), group=automation_group)
             
             for automation in active_automations:
-                automation.last_run_at = now
+                # Специальная логика для "Вечного онлайна" с кастомным расписанием
+                if automation.automation_type == "eternal_online":
+                    settings = automation.settings or {}
+                    if settings.get("schedule_type") == "custom":
+                        days_of_week = settings.get("days_of_week", [])
+                        start_time_str = settings.get("start_time")
+                        end_time_str = settings.get("end_time")
+                        
+                        # Проверяем день недели (0=Понедельник, ..., 6=Воскресенье в Python)
+                        if now_moscow.weekday() not in days_of_week:
+                            continue # Пропускаем, если сегодня не рабочий день
+                        
+                        # Проверяем время
+                        if start_time_str and end_time_str:
+                            try:
+                                start_time = datetime.datetime.strptime(start_time_str, "%H:%M").time()
+                                end_time = datetime.datetime.strptime(end_time_str, "%H:%M").time()
+                                
+                                # Корректная обработка интервала через полночь (например, 22:00 - 02:00)
+                                if start_time <= end_time:
+                                    if not (start_time <= now_moscow.time() <= end_time):
+                                        continue # Пропускаем, если не попадаем в интервал
+                                else: # Интервал проходит через полночь
+                                    if not (now_moscow.time() >= start_time or now_moscow.time() <= end_time):
+                                        continue
+                            except ValueError:
+                                log.warn("run_daily_automations.invalid_time_format", user_id=automation.user_id)
+                                continue # Пропускаем при неверном формате времени
+                
+                automation.last_run_at = now_utc
                 await _create_and_run_task(session, user_id=automation.user_id, task_name=automation.automation_type, settings=automation.settings)
             
             await session.commit()
     finally:
+        # Гарантированно освобождаем блокировку и закрываем соединение
         await redis_client.delete(lock_key)
-        await redis_client.close() 
+        await redis_client.close()
 
 async def _check_expired_plans_async():
     async with AsyncSessionFactory() as session:
         now = datetime.datetime.utcnow()
-        # <-- ИСПРАВЛЕНИЕ: Упрощенная логика для поиска истекших планов
+        # <-- ИЗМЕНЕНИЕ: Упрощенная и более эффективная логика для поиска истекших планов
         stmt = select(User).where(
             User.plan != 'Expired',
             User.plan_expires_at != None,
@@ -186,7 +220,6 @@ async def _check_expired_plans_async():
         deactivate_automations_stmt = update(Automation).where(Automation.user_id.in_(user_ids_to_deactivate)).values(is_active=False)
         await session.execute(deactivate_automations_stmt)
 
-        # <-- ИСПРАВЛЕНИЕ: Меняем план на 'Expired'
         deactivate_users_stmt = update(User).where(User.id.in_(user_ids_to_deactivate)).values(
             plan="Expired",
             daily_likes_limit=expired_plan_limits["daily_likes_limit"],
@@ -197,31 +230,6 @@ async def _check_expired_plans_async():
         await session.commit()
         log.info("plans.expired_processed_and_deactivated", count=len(user_ids_to_deactivate))
 
-async def _snapshot_all_users_friends_count_async():
-    async with AsyncSessionFactory() as session:
-        now = datetime.datetime.utcnow()
-        stmt = select(User).where(or_(User.plan_expires_at.is_(None), User.plan_expires_at > now))
-        result = await session.execute(stmt)
-        active_users = result.scalars().all()
-
-        if not active_users:
-            log.info("snapshot_friends.no_active_users")
-            return
-
-        log.info("snapshot_friends.start", count=len(active_users))
-        processed_count = 0
-        for user in active_users:
-            async with AsyncSessionFactory() as user_session:
-                try:
-                    service = AnalyticsService(db=user_session, user=user, emitter=None)
-                    await service.snapshot_friends_count()
-                    processed_count += 1
-                except VKAuthError:
-                    log.warn("snapshot_friends.auth_error", user_id=user.id)
-                except Exception as e:
-                    log.error("snapshot_friends.user_error", user_id=user.id, error=str(e))
-        
-        log.info("snapshot_friends.success", processed=processed_count)
 
 @celery_app.task(name="app.tasks.cron.aggregate_daily_stats")
 def aggregate_daily_stats():
@@ -234,7 +242,3 @@ def run_daily_automations(automation_group: str):
 @celery_app.task(name="app.tasks.cron.check_expired_plans")
 def check_expired_plans():
     run_async_from_sync(_check_expired_plans_async())
-
-@celery_app.task(name="app.tasks.cron.snapshot_all_users_friends_count")
-def snapshot_all_users_friends_count():
-    run_async_from_sync(_snapshot_all_users_friends_count_async())

@@ -6,6 +6,9 @@ import FeaturesSection from './components/FeaturesSection';
 import AdvantageSection from './components/AdvantageSection';
 import StepsSection from './components/StepsSection';
 import CtaSection from './components/CtaSection';
+import CaseStudiesSection from './components/CaseStudiesSection';
+import PrinciplesSection from './components/PrinciplesSection';
+import FaqSection from './components/FaqSection';
 
 export const SectionWrapper = ({ children, background = 'transparent', py = { xs: 8, md: 12 } }) => (
     <Box sx={{ py, backgroundColor: background, overflow: 'hidden' }}>
@@ -31,7 +34,19 @@ export default function HomePage() {
       </SectionWrapper>
       
       <SectionWrapper background={(theme) => alpha(theme.palette.background.paper, 0.5)}>
+        <CaseStudiesSection />
+      </SectionWrapper>
+      
+      <SectionWrapper>
         <StepsSection />
+      </SectionWrapper>
+      
+      <SectionWrapper background={(theme) => alpha(theme.palette.background.paper, 0.5)}>
+        <PrinciplesSection />
+      </SectionWrapper>
+      
+      <SectionWrapper>
+        <FaqSection />
       </SectionWrapper>
       
       <SectionWrapper>

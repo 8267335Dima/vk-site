@@ -5,9 +5,10 @@ import { Paper, Stack, Box, Chip, FormControl, Select, MenuItem, IconButton, Typ
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import DeleteIcon from '@mui/icons-material/Delete';
 import { actionOptions } from './constants';
-import { StepSettings } from './ScenarioStepSettings';
+import { StepSettings } from './ScenarioStepSettings'; // <-- Корректный импорт настроек
 
-const ScenarioStep = ({ step, index, onRemove, onChange }) => (
+// --- ИСПРАВЛЕНИЕ: Этот компонент был случайно удален и заменен другим. Теперь он восстановлен. ---
+const ScenarioStep = ({ step, index, onRemove, onChange, onBatchChange }) => (
     <Paper sx={{ p: 2, mb: 2, '&:hover': { boxShadow: 3 } }}>
         <Stack direction="row" spacing={2} alignItems="center">
             <Box sx={{ cursor: 'grab' }}><DragIndicatorIcon color="disabled" /></Box>
@@ -22,11 +23,13 @@ const ScenarioStep = ({ step, index, onRemove, onChange }) => (
         <StepSettings 
             step={step} 
             onSettingsChange={(newSettings) => onChange(step.localId, 'settings', newSettings)} 
+            onBatchChange={onBatchChange}
         />
     </Paper>
 );
 
-export const ScenarioStepList = ({ steps, setSteps, onStepChange, onStepRemove }) => {
+// --- ИСПРАВЛЕНИЕ: Экспорт компонента ScenarioStepList восстановлен. ---
+export const ScenarioStepList = ({ steps, setSteps, onStepChange, onStepRemove, onBatchChange }) => {
     const onDragEnd = (result) => {
         if (!result.destination) return;
         const items = Array.from(steps);
@@ -50,6 +53,7 @@ export const ScenarioStepList = ({ steps, setSteps, onStepChange, onStepRemove }
                                             index={index}
                                             onRemove={onStepRemove}
                                             onChange={onStepChange}
+                                            onBatchChange={onBatchChange}
                                         />
                                     </div>
                                 )}

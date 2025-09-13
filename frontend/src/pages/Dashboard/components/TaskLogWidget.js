@@ -14,7 +14,18 @@ import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { AnimatePresence, motion } from 'framer-motion';
 import { toast } from 'react-hot-toast';
-import TaskParametersViewer from './TaskParametersViewer'; // <-- УЛУЧШЕННЫЙ КОМПОНЕНТ
+import TaskParametersViewer from './TaskParametersViewer';
+
+// Иконки для каждого типа задач
+import GroupAddIcon from '@mui/icons-material/GroupAdd';
+import ThumbUpIcon from '@mui/icons-material/ThumbUp';
+import RecommendIcon from '@mui/icons-material/Recommend';
+import HistoryIcon from '@mui/icons-material/History';
+import PersonRemoveIcon from '@mui/icons-material/PersonRemove';
+import FavoriteIcon from '@mui/icons-material/Favorite';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
+import SendIcon from '@mui/icons-material/Send';
+import GroupRemoveIcon from '@mui/icons-material/GroupRemove';
 
 const statusMap = {
     SUCCESS: { label: 'Успешно', color: 'success' },
@@ -23,6 +34,17 @@ const statusMap = {
     STARTED: { label: 'Выполняется', color: 'warning' },
     RETRY: { label: 'Повтор', color: 'secondary' },
     CANCELLED: { label: 'Отменена', color: 'default' },
+};
+
+const taskIconMap = {
+    'Прием заявок': <GroupAddIcon fontSize="small" />,
+    'Лайки в ленте': <ThumbUpIcon fontSize="small" />,
+    'Добавить друзей': <RecommendIcon fontSize="small" />,
+    'Просмотр историй': <HistoryIcon fontSize="small" />,
+    'Чистка друзей': <PersonRemoveIcon fontSize="small" />,
+    'Лайки друзьям': <FavoriteIcon fontSize="small" />,
+    'Массовая рассылка': <SendIcon fontSize="small" />,
+    'Отписка от сообществ': <GroupRemoveIcon fontSize="small" />
 };
 
 const TaskEntry = React.memo(({ task }) => {
@@ -48,23 +70,28 @@ const TaskEntry = React.memo(({ task }) => {
         onError: (err) => toast.error(err.response?.data?.detail || "Ошибка повтора"),
     });
     
-    // Определяем, есть ли что-то для отображения в деталях
     const hasDetails = task.parameters && Object.keys(task.parameters).length > 0;
+    const TaskIcon = Object.entries(taskIconMap).find(([key]) => task.task_name.includes(key))?.[1] || <HelpOutlineIcon fontSize="small" />;
 
     return (
         <motion.div
             layout initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, transition: { duration: 0.1 } }}
             transition={{ type: 'spring', stiffness: 300, damping: 30 }}>
-            <Paper variant="outlined" sx={{ mb: 1.5, bgcolor: 'background.default', transition: 'box-shadow 0.2s', '&:hover': { boxShadow: 3 } }}>
+            <Paper variant="outlined" sx={{ mb: 1.5, bgcolor: 'background.default', transition: 'box-shadow 0.2s', '&:hover': { boxShadow: 3, borderColor: 'primary.main' } }}>
                 <Box sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 2, cursor: hasDetails ? 'pointer' : 'default' }} onClick={() => hasDetails && setOpen(!open)}>
-                    <Box sx={{ width: 40, flexShrink: 0 }}>
-                        {hasDetails && <IconButton size="small">{open ? <KeyboardArrowUpIcon /> : <KeyboardArrowDownIcon />}</IconButton>}
+                    <Box sx={{ width: 40, flexShrink: 0, display: 'flex', justifyContent: 'center' }}>
+                        {hasDetails ? <IconButton size="small">{open ? <KeyboardArrowUpIcon /> : <KeyboardArrowDownIcon />}</IconButton> : <Box sx={{width: 28}}/>}
                     </Box>
                     <Typography variant="body2" sx={{ width: 160, flexShrink: 0, color: 'text.secondary' }}>
                         {format(new Date(task.created_at), 'd MMM yyyy, HH:mm', { locale: ru })}
                     </Typography>
-                    <Typography sx={{ flexGrow: 1, fontWeight: 500 }}>{task.task_name}</Typography>
+                    <Stack direction="row" alignItems="center" spacing={1.5} sx={{ flexGrow: 1, overflow: 'hidden' }}>
+                        <Tooltip title={task.task_name} placement="top-start">
+                           <Box sx={{ color: 'primary.main', display: 'flex' }}>{TaskIcon}</Box>
+                        </Tooltip>
+                        <Typography sx={{ fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{task.task_name}</Typography>
+                    </Stack>
                     <Stack direction="row" alignItems="center" spacing={1}>
                         <Chip label={statusInfo.label} color={statusInfo.color} size="small" variant="outlined" />
                         {task.status === 'FAILURE' && (

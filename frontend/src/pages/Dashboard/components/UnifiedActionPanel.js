@@ -3,7 +3,6 @@ import React from 'react';
 import { Paper, Typography, Stack, Switch, Tooltip, Box, CircularProgress, Skeleton, IconButton, alpha } from '@mui/material';
 import SettingsIcon from '@mui/icons-material/Settings';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
-import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchAutomations, updateAutomation } from 'api.js';
 import { toast } from 'react-hot-toast';
@@ -17,8 +16,9 @@ const ActionRow = ({ action, automation, onRun, onSettings, onToggle, isToggling
     
     const handleToggle = (event) => {
         const newIsActive = event.target.checked;
+        // --- ИЗМЕНЕНИЕ: Проверяем доступность функции ПЕРЕД отправкой мутации ---
         if (newIsActive && !isAvailable) {
-            toast.error(`Эта функция недоступна на вашем тарифе.`);
+            toast.error(`Автоматизация недоступна на вашем тарифе.`);
             return;
         }
         onToggle.mutate({ automationType: action.id, isActive: newIsActive, settings: automation?.settings || {} });
@@ -30,34 +30,34 @@ const ActionRow = ({ action, automation, onRun, onSettings, onToggle, isToggling
                 variant="outlined"
                 sx={{
                     p: 2, display: 'flex', alignItems: 'center', gap: 2,
-                    opacity: isAvailable ? 1 : 0.6,
+                    // --- ИЗМЕНЕНИЕ: Делаем недоступные функции полупрозрачными ---
+                    opacity: automation?.is_available ? 1 : 0.6,
                     transition: 'all 0.3s ease',
-                    '&:hover': {
+                    '&:hover': isAvailable ? {
                         boxShadow: 3,
                         borderColor: 'primary.main',
                         bgcolor: (theme) => alpha(theme.palette.primary.main, 0.05),
-                    },
+                    } : {},
                 }}
             >
-                <Box sx={{ color: 'primary.main', fontSize: '2rem' }}>
-                    {content.actions[action.id]?.icon || <InfoOutlinedIcon/>}
-                </Box>
+                <Box sx={{ color: 'primary.main', fontSize: '2rem' }}>{action.icon}</Box>
                 <Box sx={{ flexGrow: 1 }}>
                      <Typography component="div" variant="body1" sx={{ fontWeight: 600 }}>{action.name}</Typography>
                      <Typography variant="caption" color="text.secondary">{action.description}</Typography>
                 </Box>
                 <Stack direction="row" spacing={0.5} alignItems="center">
+                    {/* --- ИЗМЕНЕНИЕ: Новая логика кнопок --- */}
                     <Tooltip title="Настроить и запустить вручную">
-                        <span><IconButton onClick={() => onRun(action.id, action.name)}><PlayArrowIcon /></IconButton></span>
+                        <IconButton onClick={() => onRun(action.id, action.name)}><PlayArrowIcon /></IconButton>
                     </Tooltip>
-                    <Tooltip title="Настроить автоматизацию">
+                    <Tooltip title={isAvailable ? "Настроить автоматизацию" : "Недоступно на вашем тарифе"}>
                          <span>
                              <IconButton onClick={() => onSettings(automation)} disabled={!isAvailable}>
                                  <SettingsIcon fontSize="small" />
                              </IconButton>
                          </span>
                     </Tooltip>
-                    <Tooltip title={!isAvailable ? "Перейдите на PRO-тариф для доступа" : (isActive ? "Выключить автоматизацию" : "Включить автоматизацию")}>
+                    <Tooltip title={!isAvailable ? "Функция автоматизации недоступна на вашем тарифе" : (isActive ? "Выключить автоматизацию" : "Включить автоматизацию")}>
                         <Box sx={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 24 }}>
                             {isMutatingThisRow && <CircularProgress size={24} sx={{ position: 'absolute' }} />}
                             <Switch
@@ -104,14 +104,14 @@ export default function UnifiedActionPanel({ onRun, onSettings }) {
     return (
         <Paper sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column' }}>
             <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mb: 2 }}>Панель действий</Typography>
-            <Stack spacing={2} sx={{ flexGrow: 1 }}>
+            <Stack spacing={2} sx={{ flexGrow: 1, overflowY: 'auto', pr: 1 }}>
                 {isLoading ? (
                     Array.from(new Array(5)).map((_, index) => <Skeleton key={index} variant="rounded" height={72} />)
                 ) : (
                     content.automations.map(action => (
-                        <ActionRow
+                         <ActionRow
                             key={action.id}
-                            action={action} // Передаем весь объект
+                            action={action}
                             automation={automationsMap?.[action.id]}
                             onRun={onRun}
                             onSettings={onSettings}

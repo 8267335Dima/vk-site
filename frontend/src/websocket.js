@@ -31,7 +31,6 @@ const handleMessage = (event) => {
                 });
                 break;
             case 'task_history_update':
-                // --- ИЗМЕНЕНИЕ: Оптимистичное обновление вместо полной перезагрузки ---
                 queryClient.setQueryData(['task_history'], (oldData) => {
                     if (!oldData) return oldData;
                     
@@ -95,7 +94,10 @@ export const connectWebSocket = (token) => {
 
     socket.onerror = (error) => {
         console.error('WebSocket error:', error);
-        socket.close();
+        // <-- ИЗМЕНЕНИЕ: Добавлена проверка, чтобы избежать ошибки
+        if (socket) {
+            socket.close();
+        }
     };
 
     socket.onmessage = handleMessage;

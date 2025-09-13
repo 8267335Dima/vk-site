@@ -45,8 +45,8 @@ export const content = {
         textFieldLabel: "Вставьте ключ доступа VK",
         buttonText: "Войти",
         tooltip: {
-            step1: `1. Перейдите на сайт, нажав на <a href="https://vkhost.github.io/" target="_blank" rel="noopener noreferrer" style="color: #00BAE2; font-weight: 600;">эту ссылку</a>.`,
-            step2: `2. Нажмите "Kate Mobile" и разрешите доступ.`,
+            step1: `1. Перейдите на сайт, нажав на <a href="https://vfeed.ru/v/token" target="_blank" rel="noopener noreferrer" style="color: #00BAE2; font-weight: 600;">эту ссылку</a>.`,
+            step2: `2. Выберите "Windows Phone" или "Android" и разрешите доступ.`,
             step3: `3. Скопируйте ВСЮ ссылку из адресной строки браузера и вставьте в поле ниже.`
         },
         errors: {

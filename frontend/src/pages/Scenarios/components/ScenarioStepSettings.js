@@ -1,18 +1,16 @@
 // frontend/src/pages/Scenarios/components/ScenarioStepSettings.js
-
 import React from 'react';
 import { Stack, Typography, FormControl, Select, MenuItem, InputLabel } from '@mui/material';
-// toast и useUserStore больше не нужны в этом файле после рефакторинга
-import ActionModalFilters from 'pages/Dashboard/components/ActionModalFilters'; // <--- ГЛАВНОЕ ИСПРАВЛЕНИЕ
+import ActionModalFilters from 'pages/Dashboard/components/ActionModalFilters';
 import { content } from 'content/content';
 import CountSlider from 'components/CountSlider';
-import { useUserStore } from 'store/userStore'; // useUserStore все-таки нужен для лимитов
+import { useUserStore } from 'store/userStore';
 
+// --- ИСПРАВЛЕНИЕ: Этот код был по ошибке перемещен в другой файл. Теперь он на своем месте. ---
 export const StepSettings = ({ step, onSettingsChange, onBatchChange }) => {
     const userInfo = useUserStore(state => state.userInfo);
 
     const handleFieldChange = (name, value) => {
-        // Обновляем настройки, сохраняя предыдущие значения
         const newSettings = { ...step.settings, [name]: value };
         onSettingsChange(newSettings);
     };
@@ -24,7 +22,8 @@ export const StepSettings = ({ step, onSettingsChange, onBatchChange }) => {
     };
 
     const actionConfig = content.actions[step.action_type];
-    const automationConfig = content.automations[step.action_type];
+    // --- ИСПРАВЛЕНИЕ: Правильный поиск конфига автоматизации в массиве ---
+    const automationConfig = content.automations.find(a => a.id === step.action_type);
 
     if (!actionConfig || !automationConfig) return null;
 
@@ -37,10 +36,11 @@ export const StepSettings = ({ step, onSettingsChange, onBatchChange }) => {
     const getLimit = () => {
         if (step.action_type.includes('add')) return userInfo?.daily_add_friends_limit || 100;
         if (step.action_type.includes('like')) return userInfo?.daily_likes_limit || 1000;
-        // Для остальных задач ставим условный высокий лимит
         return 1000;
     };
+    
     const canBeBatched = ['add_recommended', 'like_feed', 'like_friends_feed', 'remove_friends'].includes(step.action_type);
+
     return (
         <Stack spacing={3} sx={{ mt: 2, p: 2, borderTop: '1px solid', borderColor: 'divider' }}>
             {actionConfig.modal_count_label && (

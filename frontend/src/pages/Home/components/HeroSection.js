@@ -1,6 +1,6 @@
 // frontend/src/pages/Home/components/HeroSection.js
 import React from 'react';
-import { Container, Typography, Button, Box, Stack } from '@mui/material';
+import { Container, Typography, Button, Stack } from '@mui/material';
 import { Link as RouterLink } from 'react-router-dom';
 import { motion } from 'framer-motion';
 
@@ -17,7 +17,7 @@ const HeroSection = () => {
       >
         <motion.div variants={{ hidden: { opacity: 0, y: -20 }, visible: { opacity: 1, y: 0, transition: { duration: 0.7 } } }}>
           <Typography 
-            variant="h2" // <-- ИЗМЕНЕНИЕ: Уменьшен размер для лучшей читаемости
+            variant="h2"
             component="h1" 
             sx={{
               fontWeight: 800,
@@ -28,11 +28,13 @@ const HeroSection = () => {
               WebkitTextFillColor: 'transparent',
             }}
           >
+            {/* --- ИЗМЕНЕНИЕ: Текст стал более профессиональным --- */}
             Интеллектуальная платформа для продвижения ВКонтакте
           </Typography>
         </motion.div>
         <motion.div variants={{ hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0, transition: { duration: 0.7, delay: 0.2 } } }}>
           <Typography variant="h6" color="text.secondary" paragraph sx={{ mt: 3, mb: 4, maxWidth: '750px', mx: 'auto' }}>
+            {/* --- ИЗМЕНЕНИЕ: Описание стало более конкретным --- */}
             Zenith — это ваш надежный партнер для органического роста, повышения охватов и комплексной автоматизации рутинных SMM-задач. Сосредоточьтесь на контенте, а мы позаботимся о его продвижении.
           </Typography>
         </motion.div>
@@ -41,8 +43,9 @@ const HeroSection = () => {
               <Button variant="contained" size="large" component={RouterLink} to="/login" sx={{py: 1.5, px: 5, fontSize: '1.1rem'}}>
                   Начать бесплатно (14 дней)
               </Button>
-              <Button variant="outlined" size="large" sx={{py: 1.5, px: 5, fontSize: '1.1rem'}}>
-                  Узнать больше
+              {/* --- ИЗМЕНЕНИЕ: Кнопка теперь ведет на страницу тарифов --- */}
+              <Button variant="outlined" size="large" component={RouterLink} to="/billing" sx={{py: 1.5, px: 5, fontSize: '1.1rem'}}>
+                  Смотреть тарифы
               </Button>
           </Stack>
         </motion.div>

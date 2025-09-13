@@ -63,13 +63,15 @@ app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 init_admin(app, engine)
 
 if settings.ALLOWED_ORIGINS:
+    # Разделяем строку по запятым и убираем лишние пробелы
     allowed_origins_list = [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(',')]
 else:
+    # Запасной вариант для разработки, если переменная не задана
     allowed_origins_list = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins_list,
+    allow_origins=allowed_origins_list, # <-- Используем наш список
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

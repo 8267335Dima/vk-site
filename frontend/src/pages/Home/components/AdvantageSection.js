@@ -1,6 +1,6 @@
 // frontend/src/pages/Home/components/AdvantageSection.js
 import React from 'react';
-import { Typography, Stack, Paper, alpha, useTheme, Box, Grid } from '@mui/material';
+import { Typography, Stack, Paper, alpha, useTheme, Grid } from '@mui/material';
 import { motion } from 'framer-motion';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
@@ -25,6 +25,7 @@ const staggerContainer = {
     animate: { transition: { staggerChildren: 0.15 } }
 };
 
+// --- ИЗМЕНЕНИЕ: Улучшенная всплывающая подсказка для графика ---
 const CustomTooltip = ({ active, payload, label }) => {
     if (active && payload && payload.length) {
         return (

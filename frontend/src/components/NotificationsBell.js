@@ -104,10 +104,20 @@ export default function NotificationsBell() {
                 open={open}
                 anchorEl={anchorEl}
                 onClose={handleClose}
-                disableScrollLock={true} // <-- ИЗМЕНЕНИЕ: Разрешаем скролл страницы
+                // --- ИЗМЕНЕНИЕ: Позиционирование ближе к краю и стилизация ---
                 anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
                 transformOrigin={{ vertical: 'top', horizontal: 'right' }}
-                slotProps={{ paper: { sx: { width: 380, maxHeight: 500, display: 'flex', flexDirection: 'column', borderRadius: 3, mt: 1.5 } } }}
+                slotProps={{ paper: { sx: { 
+                    width: 380, 
+                    maxHeight: 500, 
+                    display: 'flex', 
+                    flexDirection: 'column', 
+                    borderRadius: 3, 
+                    mt: 1.5,
+                    // --- ИЗМЕНЕНИЕ: Добавляем полупрозрачность и размытие фона ---
+                    backgroundColor: 'rgba(22, 22, 24, 0.8)',
+                    backdropFilter: 'blur(10px)',
+                } } }}
             >
                 <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
                     <Typography variant="h6" component="div">Уведомления</Typography>

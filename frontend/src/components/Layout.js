@@ -5,19 +5,20 @@ import {
     useTheme, useMediaQuery, IconButton, Drawer, List, ListItem, ListItemButton
 } from '@mui/material';
 import { Link as RouterLink, useLocation, Outlet } from 'react-router-dom';
-import { useUserStore, useUserActions } from 'store/userStore'; // Импортируем useUserActions
-import TrackChangesIcon from '@mui/icons-material/TrackChanges';
+import { useUserStore, useUserActions } from 'store/userStore';
+// --- ИЗМЕНЕНИЕ: Иконка заменена на более стильную и подходящую ---
+import HubIcon from '@mui/icons-material/Hub';
 import MenuIcon from '@mui/icons-material/Menu';
 import { content } from 'content/content';
 import NotificationsBell from './NotificationsBell';
 import Footer from './Footer';
+// --- ИЗМЕНЕНИЕ: Импортируем хук для проверки тарифа ---
+import { useFeatureFlag } from 'hooks/useFeatureFlag';
 
-// --- ИСПРАВЛЕНИЕ: Выносим массив navItems за пределы компонента ---
-// Теперь это стабильная константа, которая не будет пересоздаваться при каждом рендере.
 const navItems = [
-    { label: content.nav.dashboard, to: "/dashboard" },
-    { label: content.nav.scenarios, to: "/scenarios" },
-    { label: content.nav.billing, to: "/billing" },
+    { label: content.nav.dashboard, to: "/dashboard", feature: null }, // Доступно всем
+    { label: content.nav.scenarios, to: "/scenarios", feature: "scenarios" }, // Доступно по фиче
+    { label: content.nav.billing, to: "/billing", feature: null }, // Доступно всем
 ];
 
 const NavButton = ({ to, children }) => {
@@ -55,11 +56,11 @@ const NavButton = ({ to, children }) => {
     );
 };
 
-const MobileDrawer = ({ open, onClose, onLogout }) => (
+const MobileDrawer = ({ open, onClose, onLogout, visibleNavItems }) => (
     <Drawer anchor="right" open={open} onClose={onClose} PaperProps={{ sx: { backgroundColor: 'background.default' }}}>
         <Box sx={{ width: 250, p: 2, height: '100%' }} role="presentation">
             <List>
-                {navItems.map((item) => (
+                {visibleNavItems.map((item) => (
                     <ListItem key={item.label} disablePadding>
                         <ListItemButton component={RouterLink} to={item.to} onClick={onClose} sx={{ borderRadius: 2, mb: 1 }}>
                              <Typography variant="body1" fontWeight={600}>{item.label}</Typography>
@@ -76,13 +77,17 @@ const MobileDrawer = ({ open, onClose, onLogout }) => (
 
 
 export default function Layout() {
-    // --- ИСПРАВЛЕНИЕ: Получаем каждое значение из стора по отдельности для оптимизации ---
     const jwtToken = useUserStore(state => state.jwtToken);
-    const { logout } = useUserActions(); // Используем хук для стабильного получения действия
+    const { logout } = useUserActions();
+    // --- ИЗМЕНЕНИЕ: Получаем функцию проверки фич ---
+    const { isFeatureAvailable } = useFeatureFlag();
     
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
     const [drawerOpen, setDrawerOpen] = React.useState(false);
+
+    // --- ИЗМЕНЕНИЕ: Фильтруем навигацию на основе тарифа пользователя ---
+    const visibleNavItems = navItems.filter(item => !item.feature || isFeatureAvailable(item.feature));
     
     return (
         <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
@@ -90,7 +95,7 @@ export default function Layout() {
                 <Container maxWidth="xl">
                     <Toolbar sx={{ py: 1 }}>
                         <Stack direction="row" alignItems="center" spacing={1.5} component={RouterLink} to="/" sx={{textDecoration: 'none'}}>
-                           <TrackChangesIcon color="primary" sx={{ fontSize: '2.5rem' }} />
+                           <HubIcon color="primary" sx={{ fontSize: '2.5rem' }} />
                            <Typography variant="h5" sx={{ color: 'text.primary', fontWeight: 700, display: { xs: 'none', sm: 'block' } }}>
                                 {content.appName}
                            </Typography>
@@ -111,7 +116,8 @@ export default function Layout() {
                              </>
                         ) : (
                             <Stack direction="row" spacing={1} alignItems="center">
-                                {jwtToken && navItems.map(item => <NavButton key={item.to} to={item.to}>{item.label}</NavButton>)}
+                                {/* --- ИЗМЕНЕНИЕ: Отображаем только доступные пункты меню --- */}
+                                {jwtToken && visibleNavItems.map(item => <NavButton key={item.to} to={item.to}>{item.label}</NavButton>)}
                                 {jwtToken ? (
                                     <>
                                         <NotificationsBell />
@@ -128,7 +134,7 @@ export default function Layout() {
                 </Container>
             </AppBar>
             
-            {isMobile && jwtToken && <MobileDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} onLogout={() => { setDrawerOpen(false); logout(); }} />}
+            {isMobile && jwtToken && <MobileDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} onLogout={() => { setDrawerOpen(false); logout(); }} visibleNavItems={visibleNavItems} />}
 
             <Box component="main" sx={{ flexGrow: 1 }}>
                  <Outlet />

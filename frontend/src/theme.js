@@ -1,17 +1,18 @@
 // frontend/src/theme.js
 import { createTheme, responsiveFontSizes } from '@mui/material/styles';
 
+// --- ИЗМЕНЕНИЕ: Обновленная, более глубокая и стильная палитра ---
 const palette = {
   primary: '#5E5CE6',
   secondary: '#00BAE2',
-  backgroundDefault: '#0D0E12',
-  backgroundPaper: '#17181D',
-  textPrimary: '#FFFFFF',
+  backgroundDefault: '#0A0A0B', // Более глубокий черный
+  backgroundPaper: '#161618',  // Более контрастный серый
+  textPrimary: '#F5F5F7',      // Слегка смягченный белый
   textSecondary: '#A0A3BD',
-  success: '#34C759',
-  warning: '#FF9500',
-  error: '#FF3B30',
-  info: '#007AFF',
+  success: '#32D74B',          // Более яркий зеленый
+  warning: '#FF9F0A',          // Более яркий оранжевый
+  error: '#FF453A',            // Более яркий красный
+  info: '#0A84FF',
   divider: 'rgba(160, 163, 189, 0.15)',
 };
 
@@ -114,6 +115,7 @@ export { theme };
 export const globalStyles = `
   body {
     background-color: ${palette.backgroundDefault};
+    color: ${palette.textPrimary};
   }
   
   ::-webkit-scrollbar { width: 8px; }

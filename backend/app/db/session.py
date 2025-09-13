@@ -3,11 +3,15 @@
 from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool # <-- НОВЫЙ ИМПОРТ
 
 from app.core.config import settings
 
-# Создаем асинхронный "движок" для SQLAlchemy
-engine = create_async_engine(settings.database_url, pool_pre_ping=True, echo=True)
+engine = create_async_engine(
+    settings.database_url, 
+    pool_pre_ping=True, 
+    poolclass=NullPool
+)
 
 # Создаем фабрику асинхронных сессий
 AsyncSessionFactory = sessionmaker(

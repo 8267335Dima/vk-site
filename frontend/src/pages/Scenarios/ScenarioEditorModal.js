@@ -44,6 +44,15 @@ const ScenarioEditorModal = ({ open, onClose, scenario }) => {
     const handleRemoveStep = (localId) => setSteps(steps.filter(s => s.localId !== localId));
     const handleStepChange = (localId, field, value) => setSteps(steps.map(s => s.localId === localId ? { ...s, [field]: value } : s));
     
+    // --- ИЗМЕНЕНИЕ: Новая функция для обновления настроек разбиения ---
+    const handleBatchChange = (localId, newBatchSettings) => {
+        setSteps(steps.map(s => 
+            s.localId === localId 
+                ? { ...s, batch_settings: { ...(s.batch_settings || {}), ...newBatchSettings } } 
+                : s
+        ));
+    };
+    
     const handleSave = () => {
         if (!name.trim()) {
             toast.error("Название сценария не может быть пустым.");
@@ -76,6 +85,7 @@ const ScenarioEditorModal = ({ open, onClose, scenario }) => {
                         setSteps={setSteps}
                         onStepChange={handleStepChange}
                         onStepRemove={handleRemoveStep}
+                        onBatchChange={handleBatchChange}
                     />
                     <Button startIcon={<AddIcon />} onClick={handleAddStep} sx={{ alignSelf: 'flex-start' }}>Добавить шаг</Button>
                 </Stack>
