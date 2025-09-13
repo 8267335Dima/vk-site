@@ -4652,7 +4652,7 @@ from redis.asyncio import Redis
 from app.db.models import Scenario, ScenarioStep, User
 from app.services.vk_api import VKAPI
 from app.core.security import decrypt_data
-from app.tasks.runner import TASK_SERVICE_MAP
+from app.tasks.service_maps import TASK_SERVICE_MAP  # ИЗМЕНЕНИЕ: Импорт из нового файла
 from app.services.event_emitter import RedisEventEmitter
 from app.core.config import settings
 
@@ -4687,22 +4687,39 @@ class ScenarioExecutionService:
         return True
 
     async def _evaluate_condition(self, step: ScenarioStep) -> bool:
-        details = step.details
+        details = step.details['data']
         metric = details.get("metric")
         operator = details.get("operator")
         value = details.get("value")
 
+        if not all([metric, operator, value]):
+             log.warn("scenario.condition.invalid_params", step_id=step.id, details=details)
+             return False
+        
+        try:
+            # Преобразуем значение в число, если это возможно
+            numeric_value = float(value)
+        except (ValueError, TypeError):
+            numeric_value = value
+
+
         if metric == "friends_count":
-            user_info_list = await self.vk_api.get_user_info(fields="counters")
+            user_info_list = await self.vk_api.get_user_info(user_ids=str(self.user.vk_id), fields="counters")
             current_value = user_info_list[0].get("counters", {}).get("friends", 0) if user_info_list else 0
         elif metric == "day_of_week":
+            # isoweekday() Понедельник = 1 ... Воскресенье = 7
             current_value = datetime.datetime.utcnow().isoweekday()
         else:
             return False
 
-        if operator == ">": return current_value > value
-        if operator == "<": return current_value < value
-        if operator == "==": return current_value == value
+        # Сравнение
+        if operator == ">": return current_value > numeric_value
+        if operator == "<": return current_value < numeric_value
+        if operator == ">=": return current_value >= numeric_value
+        if operator == "<=": return current_value <= numeric_value
+        if operator == "==": return str(current_value) == str(value) # Сравниваем как строки для универсальности
+        if operator == "!=": return str(current_value) != str(value)
+        
         return False
 
     async def run(self):
@@ -4718,27 +4735,50 @@ class ScenarioExecutionService:
             if not current_step:
                 log.error("scenario.executor.step_not_found", step_id=current_step_id)
                 break
+            
+            log.info("scenario.executor.processing_step", scenario_id=self.scenario_id, user_id=self.user_id, step_id=current_step.id, step_type=current_step.step_type.value)
 
-            if current_step.step_type == 'action':
-                action_type = current_step.details.get("action_type")
-                ServiceClass, method_name = TASK_SERVICE_MAP.get(action_type)
+            if current_step.step_type.value == 'action':
+                action_type = current_step.details.get('data', {}).get("action_type")
+                if not action_type or action_type == 'start':
+                    current_step_id = current_step.next_step_id
+                    continue
+                
+                task_info = TASK_SERVICE_MAP.get(action_type)
+                if not task_info:
+                    log.error("scenario.executor.unknown_action", action=action_type)
+                    break
+                
+                ServiceClass, method_name = task_info
                 
                 redis_client = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/1", decode_responses=True)
                 emitter = RedisEventEmitter(redis_client)
                 emitter.set_context(self.user.id)
                 
                 service_instance = ServiceClass(db=self.db, user=self.user, emitter=emitter)
-                await getattr(service_instance, method_name)(**current_step.details.get("settings", {}))
                 
+                # ИСПОЛЬЗУЕМ Pydantic-модель для валидации и передачи параметров
+                ParamsModel = next((m for k, (_,_,m) in TASK_CONFIG_MAP.items() if k.value == action_type), None)
+                if ParamsModel:
+                    params = ParamsModel(**current_step.details.get('data', {}).get("settings", {}))
+                    await getattr(service_instance, method_name)(params)
+                else:
+                    log.error("scenario.executor.params_model_not_found", action=action_type)
+
                 await redis_client.close()
                 current_step_id = current_step.next_step_id
 
-            elif current_step.step_type == 'condition':
+            elif current_step.step_type.value == 'condition':
                 result = await self._evaluate_condition(current_step)
+                log.info("scenario.executor.condition_result", scenario_id=self.scenario_id, result=result)
                 if result:
                     current_step_id = current_step.on_success_next_step_id
                 else:
                     current_step_id = current_step.on_failure_next_step_id
+            
+            else:
+                 log.error("scenario.executor.unknown_step_type", type=current_step.step_type)
+                 break
 
 # --- backend/app\services\story_service.py ---
 
@@ -5455,7 +5495,8 @@ def snapshot_all_users_metrics():
 # backend/app/tasks/runner.py
 from app.celery_app import celery_app
 from celery import Task
-from redis.asyncio import Redis as AsyncRedis, Lock
+from redis.asyncio import Redis as AsyncRedis
+from redis.asyncio.lock import Lock
 from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 
@@ -5704,6 +5745,35 @@ def publish_scheduled_post(self: Task, post_id: int):
             await session.commit()
     
     return run_async_from_sync(_publish_logic())
+
+# --- backend/app\tasks\service_maps.py ---
+
+# backend/app/tasks/service_maps.py
+# Этот файл разрывает циклическую зависимость между runner.py и scenario_service.py
+
+from app.services.feed_service import FeedService
+from app.services.incoming_request_service import IncomingRequestService
+from app.services.outgoing_request_service import OutgoingRequestService
+from app.services.friend_management_service import FriendManagementService
+from app.services.story_service import StoryService
+from app.services.automation_service import AutomationService
+from app.services.message_service import MessageService
+from app.services.group_management_service import GroupManagementService
+from app.core.constants import TaskKey
+
+# Эта карта специально предназначена для исполнителя сценариев, которому не нужна Pydantic-модель.
+TASK_SERVICE_MAP = {
+    TaskKey.LIKE_FEED: (FeedService, "like_newsfeed"),
+    TaskKey.ADD_RECOMMENDED: (OutgoingRequestService, "add_recommended_friends"),
+    TaskKey.ACCEPT_FRIENDS: (IncomingRequestService, "accept_friend_requests"),
+    TaskKey.REMOVE_FRIENDS: (FriendManagementService, "remove_friends_by_criteria"),
+    TaskKey.VIEW_STORIES: (StoryService, "view_stories"),
+    TaskKey.BIRTHDAY_CONGRATULATION: (AutomationService, "congratulate_friends_with_birthday"),
+    TaskKey.MASS_MESSAGING: (MessageService, "send_mass_message"),
+    TaskKey.ETERNAL_ONLINE: (AutomationService, "set_online_status"),
+    TaskKey.LEAVE_GROUPS: (GroupManagementService, "leave_groups_by_criteria"),
+    TaskKey.JOIN_GROUPS: (GroupManagementService, "join_groups_by_criteria"),
+}
 
 # --- backend/app\tasks\utils.py ---
 

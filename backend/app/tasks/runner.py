@@ -1,7 +1,8 @@
 # backend/app/tasks/runner.py
 from app.celery_app import celery_app
 from celery import Task
-from redis.asyncio import Redis as AsyncRedis, Lock
+from redis.asyncio import Redis as AsyncRedis
+from redis.asyncio.lock import Lock
 from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 

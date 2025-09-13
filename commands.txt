@@ -11,3 +11,4 @@ docker-compose up -d
 npm run dev
 npm start
 миграция докер: docker-compose run --rm backend /app/.venv/bin/alembic revision --autogenerate -m "my_new_migration"
+

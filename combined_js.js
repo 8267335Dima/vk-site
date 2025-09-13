@@ -96,6 +96,17 @@ export const inviteTeamMember = (vkId) => apiClient.post('/api/v1/teams/my-team/
 export const removeTeamMember = (memberId) => apiClient.delete(`/api/v1/teams/my-team/members/${memberId}`);
 export const updateMemberAccess = (memberId, accesses) => apiClient.put(`/api/v1/teams/my-team/members/${memberId}/access`, accesses);
 
+// Posts
+export const fetchPosts = () => apiClient.get('/api/v1/posts').then(res => res.data);
+export const createPost = (data) => apiClient.post('/api/v1/posts', data).then(res => res.data);
+export const updatePost = (id, data) => apiClient.put(`/api/v1/posts/${id}`, data).then(res => res.data);
+export const deletePost = (id) => apiClient.delete(`/api/v1/posts/${id}`);
+export const uploadImageForPost = (formData) => apiClient.post('/api/v1/posts/upload-image', formData, {
+  headers: {
+    'Content-Type': 'multipart/form-data',
+  }
+}).then(res => res.data);
+
 // --- frontend/src\App.js ---
 
 // frontend/src/App.js
@@ -1212,72 +1223,121 @@ import GroupRemoveIcon from '@mui/icons-material/GroupRemove';
 import AddToPhotosIcon from '@mui/icons-material/AddToPhotos';
 import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 
-// ИЗМЕНЕНИЕ: Единый источник правды для всех задач и автоматизаций
-const tasks = {
+// Единый источник правды для всех задач и автоматизаций,
+// с полной конфигурацией UI для каждого действия.
+const automationsConfig = {
     'like_feed': { 
+        id: 'like_feed',
         icon: <ThumbUpIcon />, 
         name: "Лайки в ленте новостей", 
         description: "Проставляет лайки на посты в ленте новостей.",
-        modalTitle: "Лайки в ленте новостей", 
+        modalTitle: "Лайки в ленте новостей",
+        has_count_slider: true,
+        modal_count_label: 'Количество лайков',
+        default_count: 100,
+        has_filters: true,
     },
     'add_recommended': { 
+        id: 'add_recommended',
         icon: <RecommendIcon />, 
         name: "Добавление друзей", 
         description: "Отправляет заявки пользователям из списка рекомендаций.",
         modalTitle: "Добавление друзей из рекомендаций",
+        has_count_slider: true,
+        modal_count_label: 'Количество заявок',
+        default_count: 20,
+        has_filters: true,
     },
      'accept_friends': { 
+        id: 'accept_friends',
         icon: <GroupAddIcon />, 
         name: "Прием заявок в друзья",
         description: "Принимает входящие заявки в друзья по вашим фильтрам.",
         modalTitle: "Прием входящих заявок",
+        has_count_slider: false, // Количество определяется API
+        has_filters: true,
     },
     'remove_friends': { 
+        id: 'remove_friends',
         icon: <PersonRemoveIcon />, 
         name: "Очистка списка друзей",
         description: "Удаляет неактивных и забаненных друзей.",
         modalTitle: "Чистка списка друзей",
+        has_count_slider: true,
+        modal_count_label: 'Максимум удалений',
+        default_count: 500,
+        has_filters: true,
     },
     'view_stories': { 
+        id: 'view_stories',
         icon: <HistoryIcon />, 
         name: "Просмотр историй",
         description: "Просматривает все доступные истории друзей.",
         modalTitle: "Просмотр историй",
+        has_count_slider: false,
+        has_filters: false,
     },
     'mass_messaging': { 
+        id: 'mass_messaging',
         icon: <SendIcon />, 
         name: "Массовая рассылка",
         description: "Отправляет сообщения друзьям по заданным критериям.",
         modalTitle: "Массовая отправка сообщений друзьям",
+        has_count_slider: true,
+        modal_count_label: 'Количество сообщений',
+        default_count: 50,
+        has_filters: true,
     },
     'leave_groups': { 
+        id: 'leave_groups',
         icon: <GroupRemoveIcon />, 
         name: "Отписка от сообществ",
         description: "Отписывается от сообществ по ключевому слову.",
         modalTitle: 'Отписка от сообществ',
+        has_count_slider: true,
+        modal_count_label: 'Максимум отписок',
+        default_count: 50,
+        has_filters: true,
     },
     'join_groups': { 
+        id: 'join_groups',
         icon: <AddToPhotosIcon />, 
         name: "Вступление в группы",
         description: "Вступает в группы по ключевым словам.",
         modalTitle: 'Вступление в группы',
+        has_count_slider: true,
+        modal_count_label: 'Максимум вступлений',
+        default_count: 20,
+        has_filters: true,
     },
     'birthday_congratulation': { 
+        id: 'birthday_congratulation',
         icon: <CakeIcon />, 
         name: "Поздравления с ДР", 
         description: "Поздравляет ваших друзей с Днем Рождения.",
+        has_count_slider: false,
+        has_filters: false,
     },
     'eternal_online': { 
+        id: 'eternal_online',
         icon: <OnlinePredictionIcon />, 
         name: "Вечный онлайн", 
         description: "Поддерживает статус 'онлайн' для вашего аккаунта.",
+        has_count_slider: false,
+        has_filters: false,
     },
     'post_scheduler': {
+        id: 'post_scheduler',
         icon: <CalendarMonthIcon />,
         name: "Планировщик постов",
-        description: "Создавайте и планируйте публикации наперед."
+        description: "Создавайте и планируйте публикации наперед.",
+        has_count_slider: false,
+        has_filters: false,
     }
 };
+
+// Преобразуем объект в массив для удобного маппинга в UI (например, в UnifiedActionPanel)
+const automationsArray = Object.values(automationsConfig);
 
 export const content = {
     appName: "Zenith",
@@ -1290,7 +1350,10 @@ export const content = {
         login: "Войти",
         logout: "Выйти",
     },
-    tasks: tasks,
+    // Массив для рендеринга списков
+    automations: automationsArray,
+    // Объект для быстрого доступа к конфигу по ключу (например, в модальных окнах)
+    actions: automationsConfig,
     loginPage: {
         title: "Добро пожаловать в Zenith",
         subtitle: "Ваш интеллектуальный ассистент для ВКонтакте",
@@ -1785,7 +1848,8 @@ export default PlanCard;
 
 // --- frontend/src/pages/Dashboard/DashboardPage.js ---
 import React, { useState, useEffect, Suspense, lazy } from 'react';
-import { Box, Grid, Typography, motion, Stack } from '@mui/material';
+import { Box, Grid, Typography, Stack } from '@mui/material';
+import { motion } from 'framer-motion';
 import Joyride, { STATUS } from 'react-joyride';
 
 import { useStore } from '../../store';
@@ -3719,7 +3783,7 @@ import { LabelWithTooltip } from './fields/LabelWithTooltip';
 
 // --- Внутренние компоненты для разных наборов фильтров ---
 
-const CommonFiltersSettings = ({ actionKey }) => {
+export const CommonFiltersSettings = ({ actionKey }) => {
     const showClosedProfilesFilter = ['accept_friends', 'add_recommended', 'mass_messaging'].includes(actionKey);
     const isAcceptFriends = actionKey === 'accept_friends';
 
@@ -3770,7 +3834,7 @@ const CommonFiltersSettings = ({ actionKey }) => {
     );
 };
 
-const RemoveFriendsFilters = () => {
+export const RemoveFriendsFilters = () => {
     return (
         <Box>
             <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 600 }}>Критерии для чистки</Typography>
@@ -5063,7 +5127,7 @@ import React, { useState, useEffect } from 'react';
 import { Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Stack, Box, Chip, CircularProgress } from '@mui/material';
 import { DateTimePicker } from '@mui/x-date-pickers/DateTimePicker';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
-import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
+import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFnsV3';
 import ruLocale from 'date-fns/locale/ru';
 import AddPhotoAlternateIcon from '@mui/icons-material/AddPhotoAlternate';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -5702,33 +5766,31 @@ export const ScenarioStepList = ({ steps, setSteps, onStepChange, onStepRemove, 
 // frontend/src/pages/Scenarios/components/ScenarioStepSettings.js
 import React from 'react';
 import { Stack, Typography, FormControl, Select, MenuItem, InputLabel } from '@mui/material';
-import ActionModalFilters from 'pages/Dashboard/components/ActionModalFilters';
-import { content } from 'content/content';
-import CountSlider from 'components/CountSlider';
-import { useUserStore } from 'store';
+// ИСПРАВЛЕНО: относительные пути
+import { ActionModalFilters } from '../../Dashboard/components/ActionModal/ActionModalFilters'; 
+import { content } from '../../../content/content';
+import CountSlider from '../../../components/CountSlider';
+import { useCurrentUser } from '../../../hooks/useCurrentUser'; // <-- Правильный хук
 
-// --- ИСПРАВЛЕНИЕ: Этот код был по ошибке перемещен в другой файл. Теперь он на своем месте. ---
 export const StepSettings = ({ step, onSettingsChange, onBatchChange }) => {
-    const userInfo = useUserStore(state => state.userInfo);
+    const { data: userInfo } = useCurrentUser(); // <-- Получаем данные пользователя из React Query
 
     const handleFieldChange = (name, value) => {
         const newSettings = { ...step.settings, [name]: value };
         onSettingsChange(newSettings);
     };
+    
+    // Эта функция теперь не нужна, т.к. ActionModalFilters использует react-hook-form
+    // и управляет своим состоянием самостоятельно.
+    // onSettingsChange будет вызываться только для слайдера и других полей здесь.
 
-    const handleFilterChange = (name, value) => {
-        const filterName = name.replace('filters.', '');
-        const newFilters = { ...step.settings.filters, [filterName]: value };
-        onSettingsChange({ ...step.settings, filters: newFilters });
-    };
-
+    // ИСПРАВЛЕНО: Получаем конфиг по ключу из content.actions
     const actionConfig = content.actions[step.action_type];
-    // --- ИСПРАВЛЕНИЕ: Правильный поиск конфига автоматизации в массиве ---
     const automationConfig = content.automations.find(a => a.id === step.action_type);
 
     if (!actionConfig || !automationConfig) return null;
 
-    const hasSettings = !['view_stories', 'eternal_online'].includes(step.action_type);
+    const hasSettings = automationConfig.has_count_slider || automationConfig.has_filters;
 
     if (!hasSettings) {
         return <Typography variant="body2" color="text.secondary" sx={{ mt: 2, pl: 1 }}>Для этого действия нет дополнительных настроек.</Typography>;
@@ -5744,7 +5806,7 @@ export const StepSettings = ({ step, onSettingsChange, onBatchChange }) => {
 
     return (
         <Stack spacing={3} sx={{ mt: 2, p: 2, borderTop: '1px solid', borderColor: 'divider' }}>
-            {actionConfig.modal_count_label && (
+            {automationConfig.has_count_slider && (
                 <CountSlider
                     label={actionConfig.modal_count_label}
                     value={step.settings.count || 20}
@@ -5755,9 +5817,9 @@ export const StepSettings = ({ step, onSettingsChange, onBatchChange }) => {
             
             {automationConfig.has_filters && (
                  <ActionModalFilters 
-                    filters={step.settings.filters || {}} 
-                    onChange={handleFilterChange} 
                     actionKey={step.action_type} 
+                    // Компонент теперь работает с react-hook-form, 
+                    // ему не нужны пропсы filters и onChange
                 />
             )}
 
