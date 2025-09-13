@@ -7,7 +7,7 @@ from sqlalchemy.future import select
 
 from app.db.session import get_db
 from app.db.models import User, Automation
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_active_profile
 from app.core.config_loader import AUTOMATIONS_CONFIG
 from app.core.plans import is_feature_available_for_plan
 
@@ -27,7 +27,7 @@ class AutomationUpdateRequest(BaseModel):
 
 @router.get("", response_model=List[AutomationStatus])
 async def get_automations_status(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
     """Возвращает статусы всех автоматизаций, указывая, доступны ли они по тарифу."""
@@ -58,7 +58,7 @@ async def get_automations_status(
 async def update_automation(
     automation_type: str,
     request_data: AutomationUpdateRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
     """Включает, выключает или настраивает автоматизацию с проверкой прав доступа."""

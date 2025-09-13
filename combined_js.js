@@ -2,7 +2,7 @@
 
 // --- frontend/src\api.js ---
 
-// frontend/src/api.js
+// --- frontend/src/api.js ---
 import axios from 'axios';
 import { useUserStore } from 'store/userStore';
 
@@ -28,16 +28,15 @@ apiClient.interceptors.response.use(
   }
 );
 
-// --- Auth ---
 export const loginWithVkToken = (vkToken) => apiClient.post('/api/v1/auth/vk', { vk_token: vkToken });
+export const switchProfile = (profileId) => apiClient.post('/api/v1/auth/switch-profile', { profile_id: profileId }).then(res => res.data);
 
-// --- User ---
 export const fetchUserInfo = () => apiClient.get('/api/v1/users/me');
 export const fetchUserLimits = () => apiClient.get('/api/v1/users/me/limits');
 export const updateUserDelayProfile = (profile) => apiClient.put('/api/v1/users/me/delay-profile', profile);
 export const fetchTaskInfo = (taskKey) => apiClient.get(`/api/v1/users/task-info?task_key=${taskKey}`);
+export const getManagedProfiles = () => apiClient.get('/api/v1/users/me/managed-profiles').then(res => res.data);
 
-// --- Tasks & History ---
 export const runTask = (taskKey, params) => apiClient.post(`/api/v1/tasks/run/${taskKey}`, params);
 export const fetchTaskHistory = ({ pageParam = 1 }, filters) => {
     const params = new URLSearchParams({ page: pageParam, size: 25 });
@@ -49,38 +48,55 @@ export const fetchTaskHistory = ({ pageParam = 1 }, filters) => {
 export const cancelTask = (taskHistoryId) => apiClient.post(`/api/v1/tasks/${taskHistoryId}/cancel`);
 export const retryTask = (taskHistoryId) => apiClient.post(`/api/v1/tasks/${taskHistoryId}/retry`);
 
-// --- Stats & Analytics ---
 export const fetchActivityStats = (days = 7) => apiClient.get(`/api/v1/stats/activity?days=${days}`).then(res => res.data);
 export const fetchAudienceAnalytics = () => apiClient.get('/api/v1/analytics/audience').then(res => res.data);
 export const fetchProfileGrowth = (days = 30) => apiClient.get(`/api/v1/analytics/profile-growth?days=${days}`).then(res => res.data);
 export const fetchProfileSummary = () => apiClient.get('/api/v1/analytics/profile-summary').then(res => res.data);
+export const fetchFriendRequestConversion = () => apiClient.get('/api/v1/analytics/friend-request-conversion').then(res => res.data);
+export const fetchPostActivityHeatmap = () => apiClient.get('/api/v1/analytics/post-activity-heatmap').then(res => res.data);
 
-// --- Automations ---
 export const fetchAutomations = () => apiClient.get('/api/v1/automations').then(res => res.data);
 export const updateAutomation = ({ automationType, isActive, settings }) => apiClient.post(`/api/v1/automations/${automationType}`, { is_active: isActive, settings: settings || {} }).then(res => res.data);
 
-// --- Billing ---
 export const fetchAvailablePlans = () => apiClient.get('/api/v1/billing/plans').then(res => res.data);
 export const createPayment = (planId, months) => apiClient.post('/api/v1/billing/create-payment', { plan_id: planId, months }).then(res => res.data);
 
-// --- Scenarios ---
-export const fetchScenarios = () => apiClient.get('/api/v1/scenarios').then(res => res.data);
-export const createScenario = (data) => apiClient.post('/api/v1/scenarios', data).then(res => res.data);
-export const updateScenario = ({ id, ...data }) => apiClient.put(`/api/v1/scenarios/${id}`, data).then(res => res.data);
-export const deleteScenario = (id) => apiClient.delete(`/api/v1/scenarios/${id}`);
+// Функции для Планировщика
+export const fetchPosts = () => apiClient.get('/api/v1/posts').then(res => res.data);
+export const createPost = (data) => apiClient.post('/api/v1/posts', data).then(res => res.data);
+export const updatePost = (id, data) => apiClient.put(`/api/v1/posts/${id}`, data).then(res => res.data);
+export const deletePost = (id) => apiClient.delete(`/api/v1/posts/${id}`);
+export const uploadImageForPost = (formData) => apiClient.post('/api/v1/posts/upload-image', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+}).then(res => res.data);
 
-// --- Notifications ---
+export const fetchScenarios = () => apiClient.get('/api/v1/scenarios').then(res => res.data);
+export const fetchScenarioById = (id) => apiClient.get(`/api/v1/scenarios/${id}`).then(res => res.data);
+export const createScenario = (data) => apiClient.post('/api/v1/scenarios', data).then(res => res.data);
+export const updateScenario = (id, data) => apiClient.put(`/api/v1/scenarios/${id}`, data).then(res => res.data);
+export const deleteScenario = (id) => apiClient.delete(`/api/v1/scenarios/${id}`);
+export const fetchAvailableConditions = () => apiClient.get('/api/v1/scenarios/available-conditions').then(res => res.data);
+
 export const fetchNotifications = () => apiClient.get('/api/v1/notifications').then(res => res.data);
 export const markNotificationsAsRead = () => apiClient.post('/api/v1/notifications/read');
 
-// --- Proxies ---
 export const fetchProxies = () => apiClient.get('/api/v1/proxies').then(res => res.data);
 export const addProxy = (proxyUrl) => apiClient.post('/api/v1/proxies', { proxy_url: proxyUrl }).then(res => res.data);
 export const deleteProxy = (id) => apiClient.delete(`/api/v1/proxies/${id}`);
 
+export const fetchFilterPresets = (actionType) => apiClient.get(`/api/v1/users/me/filter-presets?action_type=${actionType}`).then(res => res.data);
+export const createFilterPreset = (data) => apiClient.post('/api/v1/users/me/filter-presets', data).then(res => res.data);
+export const deleteFilterPreset = (id) => apiClient.delete(`/api/v1/users/me/filter-presets/${id}`);
+
+// Командный функционал
+export const fetchMyTeam = () => apiClient.get('/api/v1/teams/my-team').then(res => res.data);
+export const inviteTeamMember = (vkId) => apiClient.post('/api/v1/teams/my-team/members', { user_vk_id: vkId });
+export const removeTeamMember = (memberId) => apiClient.delete(`/api/v1/teams/my-team/members/${memberId}`);
+export const updateMemberAccess = (memberId, accesses) => apiClient.put(`/api/v1/teams/my-team/members/${memberId}/access`, accesses);
+
 // --- frontend/src\App.js ---
 
-// frontend/src/App.js
+// --- frontend/src/App.js ---
 import React, { useEffect, Suspense, lazy } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { ThemeProvider, CssBaseline, Box, CircularProgress } from '@mui/material';
@@ -90,13 +106,18 @@ import { queryClient } from './queryClient.js';
 import { theme, globalStyles } from './theme.js';
 import { useUserStore, useUserActions } from './store/userStore.js';
 import Layout from './components/Layout.js';
+
 import ErrorBoundary from './components/ErrorBoundary.js';
+import { useFeatureFlag } from 'hooks/useFeatureFlag.js';
 
 const HomePage = lazy(() => import('./pages/Home/HomePage.js'));
 const LoginPage = lazy(() => import('./pages/Login/LoginPage.js'));
 const DashboardPage = lazy(() => import('./pages/Dashboard/DashboardPage.js'));
 const ScenariosPage = lazy(() => import('./pages/Scenarios/ScenarioPage.js'));
 const BillingPage = lazy(() => import('./pages/Billing/BillingPage.js'));
+const TeamPage = lazy(() => import('./pages/Team/TeamPage.js'));
+const ScenarioEditorPage = lazy(() => import('./pages/Scenarios/editor/ScenarioEditorPage.js'));
+const ForbiddenPage = lazy(() => import('./pages/Forbidden/ForbiddenPage.js'));
 
 const FullscreenLoader = () => (
     <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
@@ -113,6 +134,14 @@ const PrivateRoutes = () => {
     }
     
     return jwtToken ? <Outlet /> : <Navigate to="/login" replace />;
+};
+
+const ProtectedRoute = ({ feature, children }) => {
+    const { isFeatureAvailable } = useFeatureFlag();
+    if (!feature || isFeatureAvailable(feature)) {
+        return children;
+    }
+    return <Navigate to="/forbidden" replace />;
 };
 
 function App() {
@@ -133,7 +162,6 @@ function App() {
   }
   
   return (
-    // <-- ИЗМЕНЕНИЕ 3: Используем импортированный queryClient
     <QueryClientProvider client={queryClient}>
       <ThemeProvider theme={theme}>
         <CssBaseline />
@@ -147,10 +175,32 @@ function App() {
                   <Route path="/" element={<HomePage />} />
                   <Route path="/login" element={jwtToken ? <Navigate to="/dashboard" replace /> : <LoginPage />} />
                   <Route path="/billing" element={<BillingPage />} />
+                  <Route path="/forbidden" element={<ForbiddenPage />} />
+
                   <Route element={<PrivateRoutes />}>
                     <Route path="/dashboard" element={<DashboardPage />} />
-                    <Route path="/scenarios" element={<ScenariosPage />} />
+                    <Route path="/scenarios" element={
+                        <ProtectedRoute feature="scenarios">
+                            <ScenariosPage />
+                        </ProtectedRoute>
+                    } />
+                    <Route path="/scenarios/new" element={
+                        <ProtectedRoute feature="scenarios">
+                            <ScenarioEditorPage />
+                        </ProtectedRoute>
+                    } />
+                    <Route path="/scenarios/:id" element={
+                        <ProtectedRoute feature="scenarios">
+                            <ScenarioEditorPage />
+                        </ProtectedRoute>
+                    } />
+                    <Route path="/team" element={
+                        <ProtectedRoute feature="agency_mode">
+                            <TeamPage />
+                        </ProtectedRoute>
+                    } />
                   </Route>
+
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Route>
               </Routes>
@@ -649,7 +699,7 @@ export default function Footer() {
 
 // --- frontend/src\components\Layout.js ---
 
-// frontend/src/components/Layout.js
+// --- frontend/src/components/Layout.js ---
 import React from 'react';
 import {
     AppBar, Toolbar, Typography, Button, Container, Box, Stack,
@@ -657,19 +707,20 @@ import {
 } from '@mui/material';
 import { Link as RouterLink, useLocation, Outlet } from 'react-router-dom';
 import { useUserStore, useUserActions } from 'store/userStore';
-// --- ИЗМЕНЕНИЕ: Иконка заменена на более стильную и подходящую ---
 import HubIcon from '@mui/icons-material/Hub';
 import MenuIcon from '@mui/icons-material/Menu';
 import { content } from 'content/content';
 import NotificationsBell from './NotificationsBell';
 import Footer from './Footer';
-// --- ИЗМЕНЕНИЕ: Импортируем хук для проверки тарифа ---
 import { useFeatureFlag } from 'hooks/useFeatureFlag';
+import ProfileSwitcher from './ProfileSwitcher';
 
 const navItems = [
-    { label: content.nav.dashboard, to: "/dashboard", feature: null }, // Доступно всем
-    { label: content.nav.scenarios, to: "/scenarios", feature: "scenarios" }, // Доступно по фиче
-    { label: content.nav.billing, to: "/billing", feature: null }, // Доступно всем
+    { label: content.nav.dashboard, to: "/dashboard", feature: null }, 
+    { label: content.nav.scenarios, to: "/scenarios", feature: "scenarios" },
+    { label: content.nav.posts, to: "/posts", feature: "post_scheduler" },  
+    { label: content.nav.team, to: "/team", feature: "agency_mode" },
+    { label: content.nav.billing, to: "/billing", feature: null }, 
 ];
 
 const NavButton = ({ to, children }) => {
@@ -730,21 +781,19 @@ const MobileDrawer = ({ open, onClose, onLogout, visibleNavItems }) => (
 export default function Layout() {
     const jwtToken = useUserStore(state => state.jwtToken);
     const { logout } = useUserActions();
-    // --- ИЗМЕНЕНИЕ: Получаем функцию проверки фич ---
     const { isFeatureAvailable } = useFeatureFlag();
     
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
     const [drawerOpen, setDrawerOpen] = React.useState(false);
 
-    // --- ИЗМЕНЕНИЕ: Фильтруем навигацию на основе тарифа пользователя ---
     const visibleNavItems = navItems.filter(item => !item.feature || isFeatureAvailable(item.feature));
     
     return (
         <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
             <AppBar position="sticky" color="transparent" elevation={0} sx={{ backdropFilter: 'blur(10px)', backgroundColor: 'rgba(13, 14, 18, 0.7)', borderBottom: 1, borderColor: 'divider' }}>
-                <Container maxWidth="xl">
-                    <Toolbar sx={{ py: 1 }}>
+                <Container maxWidth={false}>
+                    <Toolbar sx={{ py: 1, px: { xs: 1, sm: 2, lg: 4 } }}>
                         <Stack direction="row" alignItems="center" spacing={1.5} component={RouterLink} to="/" sx={{textDecoration: 'none'}}>
                            <HubIcon color="primary" sx={{ fontSize: '2.5rem' }} />
                            <Typography variant="h5" sx={{ color: 'text.primary', fontWeight: 700, display: { xs: 'none', sm: 'block' } }}>
@@ -758,6 +807,7 @@ export default function Layout() {
                              <>
                                 {jwtToken ? (
                                     <>
+                                        {isFeatureAvailable('agency_mode') && <ProfileSwitcher isMobile />}
                                         <NotificationsBell />
                                         <IconButton onClick={() => setDrawerOpen(true)}><MenuIcon /></IconButton>
                                     </>
@@ -767,7 +817,7 @@ export default function Layout() {
                              </>
                         ) : (
                             <Stack direction="row" spacing={1} alignItems="center">
-                                {/* --- ИЗМЕНЕНИЕ: Отображаем только доступные пункты меню --- */}
+                                {jwtToken && isFeatureAvailable('agency_mode') && <ProfileSwitcher />}
                                 {jwtToken && visibleNavItems.map(item => <NavButton key={item.to} to={item.to}>{item.label}</NavButton>)}
                                 {jwtToken ? (
                                     <>
@@ -819,7 +869,7 @@ export default LazyLoader;
 
 // --- frontend/src\components\NotificationsBell.js ---
 
-// frontend/src/components/NotificationsBell.js (ЗНАЧИТЕЛЬНЫЕ ИЗМЕНЕНИЯ)
+// --- frontend/src/components/NotificationsBell.js ---
 import React, { useState } from 'react';
 import {
     IconButton, Badge, Popover, List, ListItem, ListItemText,
@@ -833,6 +883,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchNotifications, markNotificationsAsRead } from 'api';
 import { formatDistanceToNow } from 'date-fns';
 import { ru } from 'date-fns/locale';
+import { motion, AnimatePresence } from 'framer-motion';
 
 const levelConfig = {
     error: { color: 'error', icon: <ErrorOutlineIcon /> },
@@ -854,6 +905,10 @@ function NotificationItem({ notification }) {
                     bgcolor: (theme) => alpha(theme.palette.text.primary, 0.05)
                 }
             }}
+            component={motion.div}
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.3 }}
         >
             <ListItemAvatar sx={{ minWidth: 40, mt: 0.5 }}>
                 <Avatar sx={{ bgcolor: `${config.color}.main`, width: 32, height: 32 }}>
@@ -925,20 +980,26 @@ export default function NotificationsBell() {
                 open={open}
                 anchorEl={anchorEl}
                 onClose={handleClose}
-                // --- ИЗМЕНЕНИЕ: Позиционирование ближе к краю и стилизация ---
                 anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
                 transformOrigin={{ vertical: 'top', horizontal: 'right' }}
-                slotProps={{ paper: { sx: { 
-                    width: 380, 
-                    maxHeight: 500, 
-                    display: 'flex', 
-                    flexDirection: 'column', 
-                    borderRadius: 3, 
-                    mt: 1.5,
-                    // --- ИЗМЕНЕНИЕ: Добавляем полупрозрачность и размытие фона ---
-                    backgroundColor: 'rgba(22, 22, 24, 0.8)',
-                    backdropFilter: 'blur(10px)',
-                } } }}
+                PaperProps={{
+                    component: motion.div,
+                    initial: { opacity: 0, y: -10 },
+                    animate: { opacity: 1, y: 0 },
+                    exit: { opacity: 0, y: -10 },
+                    sx: { 
+                        width: 380, 
+                        maxHeight: 500, 
+                        display: 'flex', 
+                        flexDirection: 'column', 
+                        borderRadius: 3, 
+                        mt: 1.5,
+                        backgroundColor: 'rgba(22, 22, 24, 0.85)',
+                        backdropFilter: 'blur(12px)',
+                        border: '1px solid',
+                        borderColor: 'divider',
+                    }
+                }}
             >
                 <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
                     <Typography variant="h6" component="div">Уведомления</Typography>
@@ -948,24 +1009,124 @@ export default function NotificationsBell() {
                     <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}><CircularProgress /></Box>
                 ) : (
                     <List sx={{ p: 0, overflow: 'auto' }}>
-                        {data?.items?.length > 0 ? (
-                            data.items.map((notif, index) => (
-                                <React.Fragment key={notif.id}>
-                                    <NotificationItem notification={notif} />
-                                    {index < data.items.length - 1 && <Divider component="li" variant="inset" />}
-                                </React.Fragment>
-                            ))
-                        ) : (
-                            <Typography sx={{ p: 3, textAlign: 'center', color: 'text.secondary' }}>
-                                Здесь пока пусто
-                            </Typography>
-                        )}
+                        <AnimatePresence>
+                            {data?.items?.length > 0 ? (
+                                data.items.map((notif, index) => (
+                                    <React.Fragment key={notif.id}>
+                                        <NotificationItem notification={notif} />
+                                        {index < data.items.length - 1 && <Divider component="li" variant="inset" />}
+                                    </React.Fragment>
+                                ))
+                            ) : (
+                                <Box p={3} component={motion.div} initial={{opacity: 0}} animate={{opacity: 1}}>
+                                    <Typography sx={{ textAlign: 'center', color: 'text.secondary' }}>
+                                        Здесь пока пусто
+                                    </Typography>
+                                </Box>
+                            )}
+                        </AnimatePresence>
                     </List>
                 )}
             </Popover>
         </>
     );
 }
+
+// --- frontend/src\components\ProfileSwitcher.js ---
+
+// --- frontend/src/components/ProfileSwitcher.js ---
+import React, { useState } from 'react';
+import { Box, Typography, Menu, MenuItem, Button, Avatar, ListItemIcon, ListItemText, CircularProgress, Tooltip, IconButton } from '@mui/material';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import AddIcon from '@mui/icons-material/Add';
+import { useUserStore, useUserActions } from 'store/userStore';
+import { useQuery } from '@tanstack/react-query';
+import { getManagedProfiles } from 'api';
+
+const ProfileSwitcher = ({ isMobile }) => {
+    const { setActiveProfile } = useUserActions();
+    const activeProfileId = useUserStore(state => state.activeProfileId);
+    
+    const { data: profiles, isLoading } = useQuery({
+        queryKey: ['managedProfiles'],
+        queryFn: getManagedProfiles,
+    });
+    
+    const [anchorEl, setAnchorEl] = useState(null);
+    const open = Boolean(anchorEl);
+
+    const handleClick = (event) => setAnchorEl(event.currentTarget);
+    const handleClose = () => setAnchorEl(null);
+
+    const handleSelectProfile = (profileId) => {
+        setActiveProfile(profileId);
+        handleClose();
+    };
+
+    const handleAddProfile = () => {
+        console.log("Add new profile clicked");
+        handleClose();
+    };
+    
+    const currentProfile = profiles?.find(p => p.id === activeProfileId);
+
+    if (isLoading && !currentProfile) {
+        return <CircularProgress size={24} />;
+    }
+
+    if (isMobile) {
+        return (
+            <Tooltip title="Сменить профиль">
+                <IconButton onClick={handleClick}>
+                    <Avatar src={currentProfile?.photo_50} sx={{ width: 32, height: 32 }} />
+                </IconButton>
+            </Tooltip>
+        );
+    }
+
+    return (
+        <>
+            <Button
+                onClick={handleClick}
+                sx={{ color: 'text.primary', textTransform: 'none', borderRadius: 2, p: 0.5 }}
+                startIcon={<Avatar src={currentProfile?.photo_50} sx={{ width: 32, height: 32 }} />}
+                endIcon={<KeyboardArrowDownIcon />}
+            >
+                <Typography sx={{ display: { xs: 'none', md: 'block' }, fontWeight: 600, mx: 1 }}>
+                    {isLoading ? 'Загрузка...' : `${currentProfile?.first_name} ${currentProfile?.last_name}`}
+                </Typography>
+            </Button>
+            <Menu anchorEl={anchorEl} open={open} onClose={handleClose}>
+                {isLoading ? (
+                    <Box sx={{ display: 'flex', justifyContent: 'center', p: 2 }}>
+                        <CircularProgress size={24} />
+                    </Box>
+                ) : (
+                    profiles?.map((profile) => (
+                        <MenuItem 
+                            key={profile.id} 
+                            onClick={() => handleSelectProfile(profile.id)}
+                            selected={profile.id === activeProfileId}
+                        >
+                            <ListItemIcon>
+                                <Avatar src={profile.photo_50} sx={{ width: 28, height: 28 }} />
+                            </ListItemIcon>
+                            <ListItemText>{profile.first_name} {profile.last_name}</ListItemText>
+                        </MenuItem>
+                    ))
+                )}
+                <MenuItem onClick={handleAddProfile}>
+                    <ListItemIcon>
+                        <AddIcon />
+                    </ListItemIcon>
+                    <ListItemText>Добавить профиль</ListItemText>
+                </MenuItem>
+            </Menu>
+        </>
+    );
+};
+
+export default ProfileSwitcher;
 
 // --- frontend/src\components\StatCard.js ---
 
@@ -1028,46 +1189,52 @@ export default StatCard;
 
 // --- frontend/src\content\content.js ---
 
-// frontend/src/content/content.js
+// --- frontend/src/content/content.js ---
 import React from 'react';
 import GroupAddIcon from '@mui/icons-material/GroupAdd';
 import ThumbUpIcon from '@mui/icons-material/ThumbUp';
 import RecommendIcon from '@mui/icons-material/Recommend';
 import HistoryIcon from '@mui/icons-material/History';
 import PersonRemoveIcon from '@mui/icons-material/PersonRemove';
-import FavoriteIcon from '@mui/icons-material/Favorite';
 import CakeIcon from '@mui/icons-material/Cake';
 import SendIcon from '@mui/icons-material/Send';
 import OnlinePredictionIcon from '@mui/icons-material/OnlinePrediction';
+import GroupRemoveIcon from '@mui/icons-material/GroupRemove';
+import AddToPhotosIcon from '@mui/icons-material/AddToPhotos';
+import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 
 export const content = {
     appName: "Zenith",
     nav: {
         dashboard: "Кабинет",
         scenarios: "Сценарии",
+        posts: "Планировщик",
         billing: "Тарифы",
         login: "Войти",
         logout: "Выйти",
     },
     actions: {
         'accept_friends': { icon: <GroupAddIcon />, title: 'Прием заявок', modalTitle: "Прием входящих заявок" },
-        'like_feed': { icon: <ThumbUpIcon />, title: 'Лайки в ленте', modalTitle: "Лайки в ленте новостей" },
-        'add_recommended': { icon: <RecommendIcon />, title: 'Добавить друзей', modalTitle: "Добавление друзей из рекомендаций" },
-        'like_friends_feed': { icon: <FavoriteIcon />, title: 'Лайки друзьям', modalTitle: "Лайки на посты друзей" },
+        'like_feed': { icon: <ThumbUpIcon />, title: 'Лайкинг ленты', modalTitle: "Лайки в ленте новостей", modal_count_label: "Количество лайков" },
+        'add_recommended': { icon: <RecommendIcon />, title: 'Добавление друзей', modalTitle: "Добавление друзей из рекомендаций", modal_count_label: "Количество заявок" },
         'view_stories': { icon: <HistoryIcon />, title: 'Просмотр историй', modalTitle: "Просмотр историй" },
-        'remove_friends': { icon: <PersonRemoveIcon />, title: 'Чистка друзей', modalTitle: "Чистка списка друзей" },
-        'mass_messaging': { icon: <SendIcon />, title: 'Массовая рассылка', modalTitle: "Массовая рассылка друзьям" },
+        'remove_friends': { icon: <PersonRemoveIcon />, title: 'Чистка друзей', modalTitle: "Чистка списка друзей", modal_count_label: "Максимум удалений" },
+        'mass_messaging': { icon: <SendIcon />, title: 'Отправка сообщений', modalTitle: "Массовая отправка сообщений друзьям", modal_count_label: "Количество сообщений" },
+        'leave_groups': { icon: <GroupRemoveIcon />, title: 'Отписка от сообществ', modalTitle: 'Отписка от сообществ', modal_count_label: "Максимум отписок" },
+        'join_groups': { icon: <AddToPhotosIcon />, title: 'Вступление в группы', modalTitle: 'Вступление в группы', modal_count_label: "Максимум вступлений" },
     },
     automations: [
-        { id: "like_feed", icon: <ThumbUpIcon />, name: "Авто-лайки в ленте", description: "Проставляет лайки на посты в ленте новостей." },
-        { id: "add_recommended", icon: <RecommendIcon />, name: "Авто-добавление друзей", description: "Отправляет заявки пользователям из списка рекомендаций." },
-        { id: "birthday_congratulation", icon: <CakeIcon />, name: "Авто-поздравления", description: "Поздравляет ваших друзей с Днем Рождения." },
-        { id: "accept_friends", icon: <GroupAddIcon />, name: "Авто-прием заявок", description: "Принимает входящие заявки в друзья по вашим фильтрам." },
-        { id: "remove_friends", icon: <PersonRemoveIcon />, name: "Авто-чистка друзей", description: "Удаляет неактивных и забаненных друзей." },
-        { id: "view_stories", icon: <HistoryIcon />, name: "Авто-просмотр историй", description: "Просматривает все доступные истории друзей." },
-        { id: "like_friends_feed", icon: <FavoriteIcon />, name: "Авто-лайки друзьям", description: "Проявляет активность, ставя лайки на посты друзей." },
-        { id: "mass_messaging", icon: <SendIcon />, name: "Авто-рассылка", description: "Отправляет сообщения друзьям по заданным критериям." },
-        { id: "eternal_online", icon: <OnlinePredictionIcon />, name: "Вечный онлайн", description: "Поддерживает статус 'онлайн' для вашего аккаунта." },
+        { id: "like_feed", icon: <ThumbUpIcon />, name: "Лайкинг ленты", description: "Проставляет лайки на посты в ленте новостей.", has_filters: true, group: 'standard' },
+        { id: "add_recommended", icon: <RecommendIcon />, name: "Добавление друзей", description: "Отправляет заявки пользователям из списка рекомендаций.", has_filters: true, group: 'standard' },
+        { id: "birthday_congratulation", icon: <CakeIcon />, name: "Поздравления с ДР", description: "Поздравляет ваших друзей с Днем Рождения.", has_filters: false, group: 'standard' },
+        { id: "accept_friends", icon: <GroupAddIcon />, name: "Прием заявок", description: "Принимает входящие заявки в друзья по вашим фильтрам.", has_filters: true, group: 'standard' },
+        { id: "remove_friends", icon: <PersonRemoveIcon />, name: "Чистка друзей", description: "Удаляет неактивных и забаненных друзей.", has_filters: true, group: 'standard' },
+        { id: "leave_groups", icon: <GroupRemoveIcon />, name: "Отписка от сообществ", description: "Отписывается от сообществ по ключевому слову.", has_filters: true, group: 'standard' },
+        { id: "join_groups", icon: <AddToPhotosIcon />, name: "Вступление в группы", description: "Вступает в группы по ключевым словам.", has_filters: true, group: 'standard' },
+        { id: "view_stories", icon: <HistoryIcon />, name: "Просмотр историй", description: "Просматривает все доступные истории друзей.", has_filters: false, group: 'standard' },
+        { id: "mass_messaging", icon: <SendIcon />, name: "Отправка сообщений", description: "Отправляет сообщения друзьям по заданным критериям.", has_filters: true, group: 'standard' },
+        { id: "post_scheduler", icon: <CalendarMonthIcon />, name: "Планировщик постов", description: "Создавайте и планируйте публикации наперед.", has_filters: false, group: 'content' },
+        { id: "eternal_online", icon: <OnlinePredictionIcon />, name: "Вечный онлайн", description: "Поддерживает статус 'онлайн' для вашего аккаунта.", has_filters: false, group: 'online' },
     ],
     loginPage: {
         title: "Добро пожаловать в Zenith",
@@ -1105,6 +1272,7 @@ export const content = {
         }
     }
 };
+
 
 // --- frontend/src\hooks\useActionModalState.js ---
 
@@ -1279,17 +1447,19 @@ export const useFeatureFlag = () => {
 
 // --- frontend/src\pages\Billing\BillingPage.js ---
 
-// frontend/src/pages/Billing/BillingPage.js
+// --- frontend/src/pages/Billing/BillingPage.js ---
 import React, { useState } from 'react';
-import { Container, Typography, Grid, Skeleton, Stack, ToggleButtonGroup, ToggleButton } from '@mui/material';
+import { Container, Typography, Grid, Skeleton, Stack, ToggleButtonGroup, ToggleButton, Box, Paper, alpha } from '@mui/material';
 import { motion } from 'framer-motion';
 import { useUserStore } from 'store/userStore';
 import { createPayment, fetchAvailablePlans } from 'api.js';
 import { toast } from 'react-hot-toast';
 import { useQuery } from '@tanstack/react-query';
 import PlanCard from './components/PlanCard';
+import { ReactComponent as VisaLogo } from './assets/visa.svg';
+import { ReactComponent as MastercardLogo } from './assets/mastercard.svg';
+import { ReactComponent as MirLogo } from './assets/mir.svg';
 
-// --- ИЗМЕНЕНИЕ: Выносим опции периодов для удобства ---
 const periodOptions = [
     { months: 1, label: '1 месяц' },
     { months: 3, label: '3 месяца' },
@@ -1300,12 +1470,10 @@ const periodOptions = [
 export default function BillingPage() {
     const userInfo = useUserStore((state) => state.userInfo);
     const [loadingPlan, setLoadingPlan] = useState(null);
-    // --- ИЗМЕНЕНИЕ: Состояние теперь хранит количество месяцев ---
     const [selectedMonths, setSelectedMonths] = useState(1);
 
     const { data: plansData, isLoading } = useQuery({ queryKey: ['plans'], queryFn: fetchAvailablePlans });
     
-    // --- ИЗМЕНЕНИЕ: Функция теперь использует selectedMonths из состояния ---
     const handleChoosePlan = async (planId) => {
         setLoadingPlan(planId);
         try {
@@ -1328,75 +1496,85 @@ export default function BillingPage() {
     const itemVariants = { hidden: { opacity: 0, y: 30 }, visible: { opacity: 1, y: 0 } };
 
     return (
-        <Container maxWidth="lg" sx={{ py: { xs: 4, md: 8 } }}>
-            <motion.div initial="hidden" animate="visible" variants={containerVariants}>
-                <motion.div variants={itemVariants}>
-                    <Typography variant="h3" component="h1" textAlign="center" gutterBottom sx={{fontWeight: 700}}>Прозрачные тарифы для вашего роста</Typography>
-                </motion.div>
-                <motion.div variants={itemVariants}>
-                    <Typography variant="h6" color="text.secondary" textAlign="center" sx={{ mb: 6, maxWidth: '700px', mx: 'auto' }}>Инвестируйте в автоматизацию, чтобы сосредоточиться на том, что действительно важно — на создании контента.</Typography>
-                </motion.div>
+        <Box sx={{ position: 'relative', overflow: 'hidden' }}>
+            <Box sx={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', background: theme => `radial-gradient(ellipse at 50% 0%, ${alpha(theme.palette.primary.dark, 0.2)} 0%, transparent 70%)`, zIndex: 0 }} />
+            <Container maxWidth="lg" sx={{ py: { xs: 4, md: 8 }, position: 'relative', zIndex: 1 }}>
+                <motion.div initial="hidden" animate="visible" variants={containerVariants}>
+                    <motion.div variants={itemVariants}>
+                        <Typography variant="h3" component="h1" textAlign="center" gutterBottom sx={{fontWeight: 700}}>Прозрачные тарифы для вашего роста</Typography>
+                    </motion.div>
+                    <motion.div variants={itemVariants}>
+                        <Typography variant="h6" color="text.secondary" textAlign="center" sx={{ mb: 6, maxWidth: '700px', mx: 'auto' }}>Инвестируйте в автоматизацию, чтобы сосредоточиться на том, что действительно важно — на создании контента и живом общении.</Typography>
+                    </motion.div>
 
-                {/* --- ИЗМЕНЕНИЕ: ToggleButton для выбора периода --- */}
-                <motion.div variants={itemVariants}>
-                     <Stack alignItems="center" sx={{mb: 8}}>
-                        <ToggleButtonGroup value={selectedMonths} exclusive onChange={handlePeriodChange} aria-label="billing period">
-                            {periodOptions.map(opt => (
-                                <ToggleButton key={opt.months} value={opt.months} sx={{px: 3, py: 1}}>
-                                    {opt.label}
-                                </ToggleButton>
-                            ))}
-                        </ToggleButtonGroup>
-                    </Stack>
+                    <motion.div variants={itemVariants}>
+                        <Stack alignItems="center" sx={{mb: 8}}>
+                            <ToggleButtonGroup value={selectedMonths} exclusive onChange={handlePeriodChange} aria-label="billing period">
+                                {periodOptions.map(opt => (
+                                    <ToggleButton key={opt.months} value={opt.months} sx={{px: 3, py: 1}}>
+                                        {opt.label}
+                                    </ToggleButton>
+                                ))}
+                            </ToggleButtonGroup>
+                        </Stack>
+                    </motion.div>
                 </motion.div>
-            </motion.div>
-            
-            <Grid container spacing={{ xs: 3, md: 4 }} alignItems="stretch" justifyContent="center">
-                {isLoading ? (
-                    Array.from(new Array(3)).map((_, index) => (
-                       <Grid item xs={12} md={4} key={index}> <Skeleton variant="rounded" height={600} sx={{ borderRadius: 4 }} /> </Grid>
-                    ))
-                ) : (
-                    plansData?.plans.map((plan) => (
-                        <Grid item xs={12} md={4} key={plan.id}
-                            component={motion.div} variants={itemVariants}
-                            sx={{ zIndex: plan.is_popular ? 2 : 1, transform: plan.is_popular ? { xs: 'none', md: 'scale(1.05)' } : 'none' }}
-                        >
-                            <PlanCard
-                                plan={plan}
-                                isCurrent={plan.id === userInfo?.plan && userInfo?.is_plan_active}
-                                onChoose={() => handleChoosePlan(plan.id)} 
-                                isLoading={loadingPlan === plan.id}
-                                selectedMonths={selectedMonths}
-                                // --- ИЗМЕНЕНИЕ: Передаем информацию о скидке в дочерний компонент ---
-                                periodInfo={plan.periods?.find(p => p.months === selectedMonths)}
-                            />
-                        </Grid>
-                    ))
-                )}
-            </Grid>
-        </Container>
+                
+                <Grid container spacing={{ xs: 3, md: 4 }} alignItems="stretch" justifyContent="center">
+                    {isLoading ? (
+                        Array.from(new Array(3)).map((_, index) => (
+                        <Grid item xs={12} md={4} key={index}> <Skeleton variant="rounded" height={600} sx={{ borderRadius: 4 }} /> </Grid>
+                        ))
+                    ) : (
+                        plansData?.plans.map((plan) => (
+                            <Grid item xs={12} md={4} key={plan.id}
+                                component={motion.div} variants={itemVariants}
+                                sx={{ zIndex: plan.is_popular ? 2 : 1, transform: plan.is_popular ? { xs: 'none', md: 'scale(1.05)' } : 'none' }}
+                            >
+                                <PlanCard
+                                    plan={plan}
+                                    isCurrent={plan.id === userInfo?.plan && userInfo?.is_plan_active}
+                                    onChoose={() => handleChoosePlan(plan.id)} 
+                                    isLoading={loadingPlan === plan.id}
+                                    selectedMonths={selectedMonths}
+                                    periodInfo={plan.periods?.find(p => p.months === selectedMonths)}
+                                />
+                            </Grid>
+                        ))
+                    )}
+                </Grid>
+                <motion.div variants={itemVariants}>
+                    <Paper variant="outlined" sx={{ mt: 8, p: 3, maxWidth: 'sm', mx: 'auto', bgcolor: 'transparent' }}>
+                        <Stack direction="row" spacing={3} justifyContent="center" alignItems="center">
+                            <Typography variant="body2" color="text.secondary">Безопасная оплата:</Typography>
+                            <Stack direction="row" spacing={2} alignItems="center">
+                               <VisaLogo height={24} />
+                               <MastercardLogo height={24} />
+                               <MirLogo height={24} />
+                            </Stack>
+                        </Stack>
+                    </Paper>
+                </motion.div>
+            </Container>
+        </Box>
     );
 }
 
 // --- frontend/src\pages\Billing\components\PlanCard.js ---
 
-// frontend/src/pages/Billing/components/PlanCard.js
+// --- frontend/src/pages/Billing/components/PlanCard.js ---
 import React from 'react';
 import { Paper, Button, Box, Chip, List, ListItem, ListItemIcon, Divider, CircularProgress, Typography, Stack, alpha } from '@mui/material';
 import CheckIcon from '@mui/icons-material/Check';
 import StarIcon from '@mui/icons-material/Star';
-
-// --- ИЗМЕНЕНИЕ: Добавляем уникальные иконки для каждого тарифа ---
 import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import RocketLaunchOutlinedIcon from '@mui/icons-material/RocketLaunchOutlined';
 import DiamondOutlinedIcon from '@mui/icons-material/DiamondOutlined';
 
-// --- ИЗМЕНЕНИЕ: Компонент теперь принимает selectedMonths и periodInfo для динамического рендера ---
 const PlanCard = ({ plan, isCurrent, onChoose, isLoading, selectedMonths, periodInfo }) => {
 
-    // --- ИЗМЕНЕНИЕ: Логика расчета финальной цены с учетом скидки ---
-    const finalPrice = plan.price === 0 ? 0 : Math.round(plan.price * selectedMonths * (1 - (periodInfo?.discount_percent || 0) / 100));
+    const originalPrice = plan.price * selectedMonths;
+    const finalPrice = plan.price === 0 ? 0 : Math.round(originalPrice * (1 - (periodInfo?.discount_percent || 0) / 100));
     const pricePerMonth = finalPrice > 0 ? Math.round(finalPrice / selectedMonths) : 0;
 
     const planMeta = {
@@ -1412,7 +1590,6 @@ const PlanCard = ({ plan, isCurrent, onChoose, isLoading, selectedMonths, period
             p: 4, display: 'flex', flexDirection: 'column', height: '100%',
             position: 'relative', overflow: 'hidden',
             boxShadow: plan.is_popular ? (theme) => `0 16px 48px -16px ${alpha(theme.palette[meta.color].main, 0.4)}` : 'inherit',
-            // --- ИЗМЕНЕНИЕ: Стильная обводка для популярных и текущих тарифов ---
             '&:before': {
                 content: '""', position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
                 borderRadius: 'inherit', padding: '2px',
@@ -1439,10 +1616,16 @@ const PlanCard = ({ plan, isCurrent, onChoose, isLoading, selectedMonths, period
                  {finalPrice > 0 && <Typography variant="h6" component="span" color="text.secondary">₽</Typography>}
             </Box>
             
-            {/* --- ИЗМЕНЕНИЕ: Динамический показ скидки и цены за месяц --- */}
             <Stack direction="row" spacing={1} alignItems="center" sx={{minHeight: 40}}>
-                {selectedMonths > 1 && plan.price > 0 && <Chip label={`~${pricePerMonth.toLocaleString('ru-RU')} ₽ / мес.`} size="small" />}
-                {periodInfo?.discount_percent > 0 && <Chip label={`Выгода ${periodInfo.discount_percent}%`} color="success" variant="outlined" size="small" />}
+                 {periodInfo?.discount_percent > 0 && (
+                     <>
+                        <Typography variant="body2" color="text.secondary" sx={{ textDecoration: 'line-through' }}>
+                            {originalPrice.toLocaleString('ru-RU')} ₽
+                        </Typography>
+                        <Chip label={`Выгода ${periodInfo.discount_percent}%`} color="success" variant="outlined" size="small" sx={{ fontWeight: 600 }} />
+                     </>
+                 )}
+                 {selectedMonths > 1 && plan.price > 0 && <Chip label={`~${pricePerMonth.toLocaleString('ru-RU')} ₽ / мес.`} size="small" />}
             </Stack>
             
             <Divider sx={{ my: 2 }} />
@@ -1471,29 +1654,26 @@ export default PlanCard;
 
 // --- frontend/src\pages\Dashboard\DashboardPage.js ---
 
-import React, { Suspense, useState, lazy, memo } from 'react';
+// --- frontend/src/pages/Dashboard/DashboardPage.js ---
+import React, { Suspense, useState, lazy, memo, useEffect } from 'react';
 import { Box, Paper, Link, Chip, Stack, Typography, Avatar, Grid, Button, Tooltip, Select, MenuItem, useTheme } from '@mui/material';
 import { motion } from 'framer-motion';
+import Joyride, { STATUS } from 'react-joyride';
 
-// Hooks & State Management
 import { useUserStore, useUserActions } from 'store/userStore';
 import { useDashboardManager } from 'hooks/useDashboardManager';
 import { useFeatureFlag } from 'hooks/useFeatureFlag';
 import { useMutation } from '@tanstack/react-query';
 
-// API & Utils
 import { updateUserDelayProfile } from 'api';
 import { toast } from 'react-hot-toast';
 
-// Components
 import LazyLoader from 'components/LazyLoader';
-// --- ИЗМЕНЕНИЕ: Заменяем относительные пути на абсолютные для надежности ---
 import ActionModal from 'pages/Dashboard/components/ActionModal';
 import TaskLogWidget from 'pages/Dashboard/components/TaskLogWidget';
 import ProfileSummaryWidget from 'pages/Dashboard/components/ProfileSummaryWidget';
 import UnifiedActionPanel from 'pages/Dashboard/components/UnifiedActionPanel';
 
-// Icons
 import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
 import VpnKeyIcon from '@mui/icons-material/VpnKey';
 import SpeedIcon from '@mui/icons-material/Speed';
@@ -1502,14 +1682,14 @@ import SlowMotionVideoIcon from '@mui/icons-material/SlowMotionVideo';
 import WifiIcon from '@mui/icons-material/Wifi';
 import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
 
-// --- ИЗМЕНЕНИЕ: Заменяем относительные пути на абсолютные в ленивых импортах ---
 const ActivityChartWidget = lazy(() => import('pages/Dashboard/components/ActivityChartWidget'));
 const AudienceAnalyticsWidget = lazy(() => import('pages/Dashboard/components/AudienceAnalyticsWidget'));
 const ProfileGrowthWidget = lazy(() => import('pages/Dashboard/components/ProfileGrowthWidget'));
 const ProxyManagerModal = lazy(() => import('pages/Dashboard/components/ProxyManagerModal'));
 const AutomationSettingsModal = lazy(() => import('pages/Dashboard/components/AutomationSettingsModal'));
+const FriendRequestConversionWidget = lazy(() => import('pages/Dashboard/components/FriendRequestConversionWidget'));
+const PostActivityHeatmapWidget = lazy(() => import('pages/Dashboard/components/PostActivityHeatmapWidget'));
 
-// Animation Variants
 const motionVariants = {
     initial: { opacity: 0, y: 20 },
     animate: (i) => ({ opacity: 1, y: 0, transition: { delay: i * 0.1, duration: 0.5, ease: "easeOut" } }),
@@ -1538,7 +1718,7 @@ const UserProfileCard = memo(({ userInfo, connectionStatus, onProxyManagerOpen }
     const isConnected = connectionStatus === 'На связи';
 
     return (
-        <Paper sx={{ p: 3, display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: 'center', gap: 3, height: '100%' }}>
+        <Paper id="profile-card" sx={{ p: 3, display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: 'center', gap: 3, height: '100%' }}>
             <Avatar src={userInfo.photo_200} sx={{ width: 100, height: 100, flexShrink: 0, border: '4px solid', borderColor: theme.palette.background.default, boxShadow: 3 }} />
             <Box flexGrow={1} width="100%">
                  <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1} sx={{mb: 1.5}}>
@@ -1598,6 +1778,40 @@ export default function DashboardPage() {
     const { modalState, openModal, closeModal, onActionSubmit } = useDashboardManager();
     const [isProxyModalOpen, setProxyModalOpen] = useState(false);
     const [automationToEdit, setAutomationToEdit] = useState(null);
+    const [runTour, setRunTour] = useState(false);
+    
+    const tourSteps = [
+        {
+            target: '#action-panel',
+            content: 'Это Панель действий. Здесь собраны все доступные вам задачи. Запускайте их вручную или настраивайте для автоматической работы.',
+            placement: 'right',
+        },
+        {
+            target: '#profile-summary',
+            content: 'Эти виджеты показывают ключевые метрики вашего профиля и эффективность ваших действий в Zenith.',
+            placement: 'bottom',
+        },
+        {
+            target: '#task-log',
+            content: 'А здесь вы можете отслеживать статус и результаты всех запущенных задач в реальном времени.',
+            placement: 'top',
+        }
+    ];
+
+    useEffect(() => {
+        const hasSeenTour = localStorage.getItem('zenith_tour_completed');
+        if (!hasSeenTour) {
+            setRunTour(true);
+        }
+    }, []);
+
+    const handleJoyrideCallback = (data) => {
+        const { status } = data;
+        if ([STATUS.FINISHED, STATUS.SKIPPED].includes(status)) {
+            setRunTour(false);
+            localStorage.setItem('zenith_tour_completed', 'true');
+        }
+    };
 
     if (!userInfo) {
         return <LazyLoader />;
@@ -1605,6 +1819,23 @@ export default function DashboardPage() {
 
     return (
         <Box sx={{ py: 4, px: { xs: 1, sm: 2, lg: 3 } }}>
+             <Joyride
+                run={runTour}
+                steps={tourSteps}
+                continuous
+                showProgress
+                showSkipButton
+                callback={handleJoyrideCallback}
+                styles={{
+                    options: {
+                      arrowColor: '#161618',
+                      backgroundColor: '#161618',
+                      primaryColor: '#5E5CE6',
+                      textColor: '#F5F5F7',
+                      zIndex: 1301,
+                    },
+                }}
+            />
              <motion.div custom={0} variants={motionVariants} initial="initial" animate="animate">
                 <Typography variant="h4" component="h1" sx={{ fontWeight: 700, mb: 3 }}>
                     Панель управления
@@ -1612,37 +1843,47 @@ export default function DashboardPage() {
             </motion.div>
             
             <Grid container spacing={3}>
-                {/* Левая колонка */}
-                <Grid item xs={12} lg={4}>
+                <Grid item xs={12} lg={4} id="action-panel">
                     <motion.div custom={1} variants={motionVariants} initial="initial" animate="animate" style={{ height: '100%' }}>
                        <UnifiedActionPanel onRun={openModal} onSettings={setAutomationToEdit} />
                     </motion.div>
                 </Grid>
                 
-                {/* Правая колонка */}
                 <Grid item xs={12} lg={8}>
                     <Stack spacing={3}>
                         <motion.div custom={2} variants={motionVariants} initial="initial" animate="animate">
                             <UserProfileCard userInfo={userInfo} connectionStatus={connectionStatus} onProxyManagerOpen={() => setProxyModalOpen(true)} />
                         </motion.div>
-                         <motion.div custom={2.5} variants={motionVariants} initial="initial" animate="animate">
-                             <Suspense fallback={<LazyLoader />}>
-                                 <ProfileSummaryWidget />
-                             </Suspense>
-                         </motion.div>
-                        <motion.div custom={3} variants={motionVariants} initial="initial" animate="animate">
+                         <Grid container spacing={3} id="profile-summary">
+                            <Grid item xs={12} md={7}>
+                                <Suspense fallback={<LazyLoader />}>
+                                    <ProfileSummaryWidget />
+                                </Suspense>
+                            </Grid>
+                             <Grid item xs={12} md={5}>
+                                <Suspense fallback={<LazyLoader />}>
+                                    <FriendRequestConversionWidget />
+                                </Suspense>
+                             </Grid>
+                         </Grid>
+                        <motion.div custom={4} variants={motionVariants} initial="initial" animate="animate">
                             <Suspense fallback={<LazyLoader />}>
                                 <ActivityChartWidget />
                             </Suspense>
                         </motion.div>
                         {isFeatureAvailable('profile_growth_analytics') && (
-                            <motion.div custom={4} variants={motionVariants} initial="initial" animate="animate">
+                            <motion.div custom={5} variants={motionVariants} initial="initial" animate="animate">
                                <Suspense fallback={<LazyLoader />}>
                                     <ProfileGrowthWidget />
                                </Suspense>
                             </motion.div>
                         )}
-                        <motion.div custom={5} variants={motionVariants} initial="initial" animate="animate">
+                        <motion.div custom={6} variants={motionVariants} initial="initial" animate="animate">
+                           <Suspense fallback={<LazyLoader />}>
+                                <PostActivityHeatmapWidget />
+                           </Suspense>
+                        </motion.div>
+                        <motion.div custom={7} variants={motionVariants} initial="initial" animate="animate">
                            <Suspense fallback={<LazyLoader />}>
                                 <AudienceAnalyticsWidget />
                            </Suspense>
@@ -1650,9 +1891,8 @@ export default function DashboardPage() {
                     </Stack>
                 </Grid>
 
-                {/* Нижний блок на всю ширину */}
-                <Grid item xs={12}>
-                    <motion.div custom={6} variants={motionVariants} initial="initial" animate="animate">
+                <Grid item xs={12} id="task-log">
+                    <motion.div custom={8} variants={motionVariants} initial="initial" animate="animate">
                          <TaskLogWidget />
                     </motion.div>
                 </Grid>
@@ -1666,6 +1906,7 @@ export default function DashboardPage() {
         </Box>
     );
 }
+
 
 // --- frontend/src\pages\Dashboard\components\ActionModal.js ---
 
@@ -1707,7 +1948,7 @@ export default ActionModal;
 
 // --- frontend/src\pages\Dashboard\components\ActionModalContent.js ---
 
-// frontend/src/pages/Dashboard/components/ActionModalContent.js
+// --- frontend/src/pages/Dashboard/components/ActionModalContent.js ---
 import React from 'react';
 import { TextField, Box, FormControlLabel, Switch, Divider, Tooltip, Stack } from '@mui/material';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
@@ -1778,16 +2019,30 @@ const MassMessageSettings = ({ params, onChange }) => (
     </Stack>
 );
 
+const LikeFeedSettings = ({ params, onChange }) => (
+    <FormControlLabel
+        control={<Switch checked={params.filters?.only_with_photo || false} onChange={(e) => onChange('filters.only_with_photo', e.target.checked)} />}
+        label={
+             <Box display="flex" alignItems="center" component="span">
+                Лайкать только посты с фото
+                <Tooltip title="Игнорировать текстовые посты без изображений." placement="top" arrow>
+                     <InfoOutlinedIcon fontSize="small" color="secondary" sx={{ ml: 0.5, cursor: 'help' }} />
+                </Tooltip>
+            </Box>
+        }
+    />
+);
+
 const ActionModalContent = ({ actionKey, params, onParamChange, limit }) => {
     const actionConfig = content.actions[actionKey];
     if (!actionConfig) return null;
 
     const needsCount = !!actionConfig.modal_count_label;
-    const hasFilters = !['view_stories'].includes(actionKey);
+    const automationConfig = content.automations.find(a => a.id === actionKey);
+    const hasFilters = automationConfig?.has_filters ?? false;
     
     return (
         <Stack spacing={3} py={1}>
-            {/* --- ИЗМЕНЕНИЕ: Замена TextField на CountSlider --- */}
             {needsCount && (
                 <CountSlider
                     label={actionConfig.modal_count_label}
@@ -1795,6 +2050,10 @@ const ActionModalContent = ({ actionKey, params, onParamChange, limit }) => {
                     onChange={(val) => onParamChange('count', val)}
                     max={limit}
                 />
+            )}
+            
+            {actionKey === 'like_feed' && (
+                <LikeFeedSettings params={params} onChange={onParamChange} />
             )}
             
             {actionKey === 'add_recommended' && (
@@ -1826,13 +2085,14 @@ export default ActionModalContent;
 
 // --- frontend/src\pages\Dashboard\components\ActionModalFilters.js ---
 
-// frontend/src/pages/Dashboard/components/ActionModalFilters.js
+// --- frontend/src/pages/Dashboard/components/ActionModalFilters.js ---
 import React from 'react';
 import {
-    FormControlLabel, Switch, Select, MenuItem, InputLabel, FormControl, Grid, Typography, Box, Tooltip, TextField
+    FormControlLabel, Switch, Select, MenuItem, InputLabel, FormControl, Grid, Typography, Box, Tooltip, TextField, Divider
 } from '@mui/material';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { content } from 'content/content';
+import PresetManager from './PresetManager';
 
 const FilterWrapper = ({ children }) => (
     <Box>
@@ -1849,6 +2109,22 @@ const LabelWithTooltip = ({ title, tooltipText }) => (
         </Tooltip>
     </Box>
 );
+
+const NumberFilterField = ({ name, value, label, onChange }) => (
+    <TextField
+        name={name}
+        value={value || ''}
+        onChange={onChange}
+        label={label}
+        type="number"
+        size="small"
+        fullWidth
+        placeholder="Любое"
+        inputProps={{ min: 0 }}
+        helperText="Оставьте пустым, чтобы не использовать"
+    />
+);
+
 
 export const CommonFiltersSettings = ({ filters, onChange, actionKey }) => {
     const showClosedProfilesFilter = ['accept_friends', 'add_recommended', 'mass_messaging'].includes(actionKey);
@@ -1870,7 +2146,7 @@ export const CommonFiltersSettings = ({ filters, onChange, actionKey }) => {
                     <Grid item xs={12} sm={6}>
                         <FormControlLabel
                             control={<Switch name="allow_closed_profiles" checked={filters.allow_closed_profiles || false} onChange={handleChange} />}
-                            label={<LabelWithTooltip title="Закрытые профили" tooltipText="Разрешить взаимодействие с пользователями, у которых закрыт профиль." />}
+                            label={<LabelWithTooltip title="Закрытые профили" tooltipText="Разрешить взаимодействие с пользователями, у которых закрыт профиль. Часть фильтров (статус, кол-во друзей) не будет применяться." />}
                         />
                     </Grid>
                 )}
@@ -1905,60 +2181,14 @@ export const CommonFiltersSettings = ({ filters, onChange, actionKey }) => {
                         size="small"
                         fullWidth
                         placeholder="Например: ищу работу, спб"
-                        helperText="Не применяется к закрытым профилям."
                     />
                 </Grid>
                  {isAcceptFriends && (
                     <>
-                        {/* --- ИЗМЕНЕНИЕ: Замена Select на TextField для гибкости --- */}
-                        <Grid item xs={6}>
-                           <TextField
-                                name="min_friends"
-                                value={filters.min_friends || ''}
-                                onChange={handleChange}
-                                label="Мин. друзей"
-                                type="number"
-                                size="small"
-                                fullWidth
-                                placeholder="Любое"
-                           />
-                        </Grid>
-                         <Grid item xs={6}>
-                           <TextField
-                                name="max_friends"
-                                value={filters.max_friends || ''}
-                                onChange={handleChange}
-                                label="Макс. друзей"
-                                type="number"
-                                size="small"
-                                fullWidth
-                                placeholder="Любое"
-                           />
-                        </Grid>
-                         <Grid item xs={6}>
-                           <TextField
-                                name="min_followers"
-                                value={filters.min_followers || ''}
-                                onChange={handleChange}
-                                label="Мин. подписчиков"
-                                type="number"
-                                size="small"
-                                fullWidth
-                                placeholder="Любое"
-                           />
-                        </Grid>
-                         <Grid item xs={6}>
-                            <TextField
-                                name="max_followers"
-                                value={filters.max_followers || ''}
-                                onChange={handleChange}
-                                label="Макс. подписчиков"
-                                type="number"
-                                size="small"
-                                fullWidth
-                                placeholder="Любое"
-                           />
-                        </Grid>
+                        <Grid item xs={6}><NumberFilterField name="min_friends" value={filters.min_friends} label="Мин. друзей" onChange={handleChange} /></Grid>
+                        <Grid item xs={6}><NumberFilterField name="max_friends" value={filters.max_friends} label="Макс. друзей" onChange={handleChange} /></Grid>
+                        <Grid item xs={6}><NumberFilterField name="min_followers" value={filters.min_followers} label="Мин. подписчиков" onChange={handleChange} /></Grid>
+                        <Grid item xs={6}><NumberFilterField name="max_followers" value={filters.max_followers} label="Макс. подписчиков" onChange={handleChange} /></Grid>
                     </>
                 )}
             </Grid>
@@ -2009,11 +2239,55 @@ export const RemoveFriendsFilters = ({ filters, onChange }) => {
     );
 };
 
+const KeywordFilter = ({ title, keyword, onChange, placeholder, helperText }) => (
+    <Box>
+        <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 600 }}>{title}</Typography>
+        <TextField
+            name="status_keyword"
+            value={keyword || ''}
+            onChange={onChange}
+            label="Ключевое слово или фраза"
+            size="small"
+            fullWidth
+            placeholder={placeholder}
+            helperText={helperText}
+        />
+    </Box>
+);
+
 export default function ActionModalFilters({ filters, onChange, actionKey }) {
-    if (actionKey === 'remove_friends') {
-        return <RemoveFriendsFilters filters={filters} onChange={(name, val) => onChange(`filters.${name}`, val)} />;
+    const onApplyPreset = (newFilters) => {
+        onChange('filters', newFilters);
+    };
+
+    const automationConfig = content.automations.find(a => a.id === actionKey);
+    const hasFilters = automationConfig?.has_filters ?? false;
+    if (!hasFilters) return null;
+    
+    let FilterComponent;
+    const handleChange = (e) => onChange(`filters.${e.target.name}`, e.target.value);
+
+    switch (actionKey) {
+        case 'remove_friends':
+            FilterComponent = <RemoveFriendsFilters filters={filters} onChange={(name, val) => onChange(`filters.${name}`, val)} />;
+            break;
+        case 'leave_groups':
+            FilterComponent = <KeywordFilter title="Критерии для отписки" keyword={filters.status_keyword} onChange={handleChange} placeholder="Например: барахолка, новости" helperText="Оставьте пустым, чтобы отписываться от всех подряд." />;
+            break;
+        case 'join_groups':
+            FilterComponent = <KeywordFilter title="Критерии для вступления" keyword={filters.status_keyword} onChange={handleChange} placeholder="Например: SMM, дизайн, маркетинг" helperText="Введите ключевые слова для поиска релевантных групп." />;
+            break;
+        default:
+            FilterComponent = <CommonFiltersSettings filters={filters} onChange={(name, val) => onChange(`filters.${name}`, val)} actionKey={actionKey} />;
     }
-    return <CommonFiltersSettings filters={filters} onChange={(name, val) => onChange(`filters.${name}`, val)} actionKey={actionKey} />;
+
+    return (
+        <Box>
+            <PresetManager actionKey={actionKey} currentFilters={filters} onApply={onApplyPreset} />
+            <Divider sx={{ my: 2 }} />
+            {FilterComponent}
+        </Box>
+    );
 }
 
 // --- frontend/src\pages\Dashboard\components\ActionPanel.js ---
@@ -2074,14 +2348,15 @@ export default function ActionPanel({ onConfigure }) {
 
 // --- frontend/src\pages\Dashboard\components\ActivityChartWidget.js ---
 
-// frontend/src/pages/Dashboard/components/ActivityChartWidget.js
+// --- frontend/src/pages/Dashboard/components/ActivityChartWidget.js ---
 import React, { useState, useMemo } from 'react';
 import { Paper, Typography, Box, useTheme, ButtonGroup, Button, Skeleton } from '@mui/material';
-import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
+import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, Legend } from 'recharts';
 import { useQuery } from '@tanstack/react-query';
 import { fetchActivityStats } from 'api.js';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
+import { motion } from 'framer-motion';
 
 const CustomTooltip = ({ active, payload, label }) => {
     if (active && payload && payload.length) {
@@ -2153,16 +2428,17 @@ export default function ActivityChartWidget() {
                     <YAxis stroke={theme.palette.text.secondary} fontSize="0.8rem" />
                     <CartesianGrid strokeDasharray="3 3" stroke={theme.palette.divider} />
                     <Tooltip content={<CustomTooltip />} />
-                    <Area type="monotone" dataKey="Лайки" stroke={theme.palette.primary.main} fillOpacity={1} fill="url(#colorLikes)" strokeWidth={2} />
-                    <Area type="monotone" dataKey="Отправлено заявок" stroke={theme.palette.success.main} fillOpacity={1} fill="url(#colorRequests)" strokeWidth={2} />
-                    <Area type="monotone" dataKey="Принято заявок" stroke={theme.palette.warning.main} fillOpacity={1} fill="url(#colorAccepted)" strokeWidth={2} />
+                    <Legend />
+                    <Area type="monotone" dataKey="Лайки" stroke={theme.palette.primary.main} fillOpacity={1} fill="url(#colorLikes)" strokeWidth={2.5} activeDot={{ r: 6 }} />
+                    <Area type="monotone" dataKey="Отправлено заявок" stroke={theme.palette.success.main} fillOpacity={1} fill="url(#colorRequests)" strokeWidth={2.5} activeDot={{ r: 6 }}/>
+                    <Area type="monotone" dataKey="Принято заявок" stroke={theme.palette.warning.main} fillOpacity={1} fill="url(#colorAccepted)" strokeWidth={2.5} activeDot={{ r: 6 }}/>
                 </AreaChart>
             </ResponsiveContainer>
         );
     }
 
     return (
-        <Paper sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column' }}>
+        <Paper sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column' }} component={motion.div} initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
                 <Typography variant="h6" sx={{ fontWeight: 600 }}>Статистика активности</Typography>
                 <ButtonGroup size="small">
@@ -2177,15 +2453,20 @@ export default function ActivityChartWidget() {
     );
 }
 
+
+
+
+
 // --- frontend/src\pages\Dashboard\components\AudienceAnalyticsWidget.js ---
 
-// frontend/src/pages/Dashboard/components/AudienceAnalyticsWidget.js
+// --- frontend/src/pages/Dashboard/components/AudienceAnalyticsWidget.js ---
 import React, { useMemo } from 'react';
 import { Paper, Typography, useTheme, Grid, Skeleton, Tooltip, IconButton, Stack, alpha, Box } from '@mui/material';
-import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip as RechartsTooltip, PieChart, Pie, Cell, Legend } from 'recharts';
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip as RechartsTooltip, PieChart, Pie, Cell, Sector } from 'recharts';
 import { useQuery } from '@tanstack/react-query';
 import { fetchAudienceAnalytics } from 'api.js';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import { motion } from 'framer-motion';
 
 const CustomTooltip = ({ active, payload, label }) => {
     if (active && payload && payload.length) {
@@ -2198,25 +2479,39 @@ const CustomTooltip = ({ active, payload, label }) => {
     return null;
 };
 
-// --- ИЗМЕНЕНИЕ: Кастомная метка для PieChart, чтобы текст был внутри ---
-const RADIAN = Math.PI / 180;
-const renderCustomizedLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent }) => {
-    const radius = innerRadius + (outerRadius - innerRadius) * 0.5;
-    const x = cx + radius * Math.cos(-midAngle * RADIAN);
-    const y = cy + radius * Math.sin(-midAngle * RADIAN);
+const renderActiveShape = (props) => {
+  const { cx, cy, innerRadius, outerRadius, startAngle, endAngle, fill, payload, percent } = props;
 
-    if (percent < 0.05) return null; // Не показывать метку для очень маленьких секторов
-
-    return (
-        <text x={x} y={y} fill="white" textAnchor="middle" dominantBaseline="central" fontSize="0.9rem" fontWeight={600}>
-            {`${(percent * 100).toFixed(0)}%`}
-        </text>
-    );
+  return (
+    <g>
+      <text x={cx} y={cy} dy={-10} textAnchor="middle" fill={fill} fontSize="1.2rem" fontWeight={700}>
+        {`${(percent * 100).toFixed(0)}%`}
+      </text>
+      <text x={cx} y={cy} dy={12} textAnchor="middle" fill={fill} fontSize="0.9rem">
+        {payload.name}
+      </text>
+      <Sector
+        cx={cx} cy={cy}
+        innerRadius={innerRadius} outerRadius={outerRadius}
+        startAngle={startAngle} endAngle={endAngle}
+        fill={fill}
+      />
+      <Sector
+        cx={cx} cy={cy}
+        startAngle={startAngle} endAngle={endAngle}
+        innerRadius={outerRadius + 6} outerRadius={outerRadius + 10}
+        fill={fill}
+      />
+    </g>
+  );
 };
 
 export default function AudienceAnalyticsWidget() {
     const theme = useTheme();
     const { data, isLoading, isError } = useQuery({ queryKey: ['audienceAnalytics'], queryFn: fetchAudienceAnalytics, staleTime: 1000 * 60 * 60 });
+    const [activeIndex, setActiveIndex] = React.useState(0);
+
+    const onPieEnter = (_, index) => setActiveIndex(index);
 
     const chartData = useMemo(() => {
         return {
@@ -2239,22 +2534,23 @@ export default function AudienceAnalyticsWidget() {
                     <Typography variant="subtitle1" sx={{ fontWeight: 600, textAlign: 'center', mb: 1 }}>Пол</Typography>
                     <ResponsiveContainer width="100%" height={220}>
                         <PieChart>
-                            {/* --- ИЗМЕНЕНИЕ: Используем кастомную метку --- */}
-                            <Pie data={chartData.sex} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} labelLine={false} label={renderCustomizedLabel}>
+                            <Pie 
+                                data={chartData.sex} dataKey="value" nameKey="name" 
+                                cx="50%" cy="50%" innerRadius={60} outerRadius={90}
+                                activeIndex={activeIndex} activeShape={renderActiveShape}
+                                onMouseEnter={onPieEnter}
+                            >
                                 {chartData.sex.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
                             </Pie>
-                             <RechartsTooltip content={<CustomTooltip />} />
-                            <Legend />
                         </PieChart>
                     </ResponsiveContainer>
                 </Grid>
                  <Grid item xs={12} md={7}>
                     <Typography variant="subtitle1" sx={{ fontWeight: 600, textAlign: 'center', mb: 1 }}>Топ городов</Typography>
                      <ResponsiveContainer width="100%" height={220}>
-                        {/* --- ИЗМЕНЕНИЕ: Увеличен отступ слева для длинных названий --- */}
                         <BarChart data={chartData.city} layout="vertical" margin={{ top: 5, right: 20, left: 80, bottom: 5 }}>
                              <XAxis type="number" hide />
-                             <YAxis type="category" dataKey="name" width={80} tick={{ fill: theme.palette.text.secondary, fontSize: '0.8rem' }} tickLine={false} axisLine={false} />
+                             <YAxis type="category" dataKey="name" width={80} tick={{ fill: theme.palette.text.secondary, fontSize: '0.8rem' }} tickLine={false} axisLine={false} interval={0} />
                              <RechartsTooltip content={<CustomTooltip />} cursor={{ fill: alpha(theme.palette.primary.main, 0.1) }}/>
                              <Bar dataKey="value" barSize={20} radius={[0, 8, 8, 0]}>
                                  {chartData.city.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
@@ -2267,7 +2563,7 @@ export default function AudienceAnalyticsWidget() {
     };
 
     return (
-        <Paper sx={{ p: 3, height: '100%' }}>
+        <Paper sx={{ p: 3, height: '100%' }} component={motion.div} initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
              <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
                 <Typography variant="h6" sx={{ fontWeight: 600, m: 0 }}>Анализ аудитории</Typography>
                 <Tooltip title="Анализ на основе ваших друзей. Данные периодически обновляются для поддержания актуальности." arrow>
@@ -2278,6 +2574,7 @@ export default function AudienceAnalyticsWidget() {
         </Paper>
     );
 }
+
 
 // --- frontend/src\pages\Dashboard\components\AutomationSettingsModal.js ---
 
@@ -2470,16 +2767,330 @@ const AutomationSettingsModal = ({ open, onClose, automation }) => {
 
 export default AutomationSettingsModal;
 
+// --- frontend/src\pages\Dashboard\components\FriendRequestConversionWidget.js ---
+
+// --- frontend/src/pages/Dashboard/components/FriendRequestConversionWidget.js ---
+import React from 'react';
+import { Paper, Typography, Box, Skeleton, Stack, Tooltip, IconButton } from '@mui/material';
+import { useQuery } from '@tanstack/react-query';
+import { ResponsiveContainer, RadialBarChart, RadialBar, PolarAngleAxis } from 'recharts';
+import { fetchFriendRequestConversion } from 'api';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import { useTheme } from '@mui/material/styles';
+import { motion } from 'framer-motion';
+
+const FriendRequestConversionWidget = () => {
+    const theme = useTheme();
+    const { data, isLoading, isError } = useQuery({
+        queryKey: ['friendRequestConversion'],
+        queryFn: fetchFriendRequestConversion,
+        staleTime: 1000 * 60 * 15, // 15 minutes
+    });
+
+    const conversionRate = data?.conversion_rate || 0;
+    const chartData = [{ name: 'conversion', value: conversionRate }];
+    
+    const color = conversionRate > 75 ? theme.palette.success.main : conversionRate > 40 ? theme.palette.warning.main : theme.palette.error.main;
+
+    const renderContent = () => {
+        if (isLoading) {
+            return <Skeleton variant="circular" width={150} height={150} sx={{ mx: 'auto' }} />;
+        }
+        if (isError) {
+            return <Typography color="error.main">Ошибка загрузки данных.</Typography>;
+        }
+        if (data?.sent_total === 0) {
+            return <Typography color="text.secondary">Отправьте заявки в друзья, чтобы увидеть статистику.</Typography>;
+        }
+
+        return (
+            <Stack direction="row" alignItems="center" spacing={2}>
+                <Box sx={{ width: 150, height: 150, position: 'relative' }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                        <RadialBarChart
+                            innerRadius="75%"
+                            outerRadius="90%"
+                            data={chartData}
+                            startAngle={90}
+                            endAngle={-270}
+                        >
+                            <PolarAngleAxis type="number" domain={[0, 100]} angleAxisId={0} tick={false} />
+                            <RadialBar
+                                background
+                                dataKey="value"
+                                cornerRadius={10}
+                                fill={color}
+                                angleAxisId={0}
+                            />
+                        </RadialBarChart>
+                    </ResponsiveContainer>
+                    <Box sx={{
+                        position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center'
+                    }}>
+                        <Typography variant="h4" sx={{ fontWeight: 700, color }}>
+                            {conversionRate.toFixed(1)}%
+                        </Typography>
+                    </Box>
+                </Box>
+                <Box>
+                    <Typography variant="h6" sx={{ fontWeight: 600 }}>Конверсия заявок</Typography>
+                    <Typography color="text.secondary">
+                        Принято: <b style={{ color: theme.palette.text.primary }}>{data.accepted_total.toLocaleString('ru-RU')}</b>
+                    </Typography>
+                    <Typography color="text.secondary">
+                        Отправлено: <b style={{ color: theme.palette.text.primary }}>{data.sent_total.toLocaleString('ru-RU')}</b>
+                    </Typography>
+                </Box>
+            </Stack>
+        );
+    };
+
+    return (
+        <Paper
+            sx={{
+                p: 3,
+                height: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'center',
+                alignItems: 'center',
+                textAlign: 'center'
+            }}
+            component={motion.div} initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+        >
+            <Stack direction="row" spacing={1} sx={{ position: 'absolute', top: 8, right: 8 }}>
+                 <Tooltip title="Показывает, какой процент отправленных вами заявок в друзья был принят. Данные обновляются каждые несколько часов." arrow>
+                    <IconButton size="small"><InfoOutlinedIcon fontSize='small' /></IconButton>
+                </Tooltip>
+            </Stack>
+            {renderContent()}
+        </Paper>
+    );
+};
+
+export default FriendRequestConversionWidget;
+
+// --- frontend/src\pages\Dashboard\components\PostActivityHeatmapWidget.js ---
+
+// --- frontend/src/pages/Dashboard/components/PostActivityHeatmapWidget.js ---
+import React from 'react';
+import { Paper, Typography, Box, Skeleton, Tooltip, Stack, alpha } from '@mui/material';
+import { useQuery } from '@tanstack/react-query';
+import { fetchPostActivityHeatmap } from 'api';
+import { motion } from 'framer-motion';
+
+const daysOfWeek = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+const hoursOfDay = Array.from({ length: 24 }, (_, i) => i.toString().padStart(2, '0'));
+
+const HeatmapCell = ({ value }) => {
+    const opacity = value / 100;
+    return (
+        <Tooltip title={`Активность: ${value}%`} placement="top">
+            <Box
+                sx={{
+                    width: '100%',
+                    paddingBottom: '100%', // Создает квадрат
+                    backgroundColor: theme => alpha(theme.palette.primary.main, opacity),
+                    borderRadius: '2px',
+                    transition: 'background-color 0.2s ease-in-out',
+                    '&:hover': {
+                        border: theme => `1px solid ${theme.palette.primary.light}`,
+                    }
+                }}
+            />
+        </Tooltip>
+    );
+};
+
+const PostActivityHeatmapWidget = () => {
+    const { data, isLoading } = useQuery({
+        queryKey: ['postActivityHeatmap'],
+        queryFn: fetchPostActivityHeatmap,
+        staleTime: 1000 * 60 * 60, // 1 час
+    });
+
+    return (
+        <Paper sx={{ p: 3 }} component={motion.div} initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+            <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>
+                Лучшее время для постинга
+            </Typography>
+            {isLoading ? (
+                <Skeleton variant="rounded" height={200} />
+            ) : (
+                <Stack spacing={1}>
+                    <Box sx={{ display: 'grid', gridTemplateColumns: '30px repeat(24, 1fr)', gap: '4px' }}>
+                        <Box />
+                        {hoursOfDay.map(hour => (
+                            <Typography key={hour} variant="caption" color="text.secondary" textAlign="center">
+                                {hour % 2 === 0 ? hour : ''}
+                            </Typography>
+                        ))}
+                    </Box>
+                    <Box sx={{ display: 'grid', gridTemplateColumns: '30px repeat(24, 1fr)', gap: '4px' }}>
+                        {daysOfWeek.map((day, dayIndex) => (
+                            <React.Fragment key={day}>
+                                <Typography variant="caption" color="text.secondary" sx={{ display: 'flex', alignItems: 'center' }}>{day}</Typography>
+                                {data?.data[dayIndex].map((value, hourIndex) => (
+                                    <HeatmapCell key={`${dayIndex}-${hourIndex}`} value={value} />
+                                ))}
+                            </React.Fragment>
+                        ))}
+                    </Box>
+                    <Stack direction="row" justifyContent="flex-end" alignItems="center" spacing={1} sx={{ mt: 1 }}>
+                        <Typography variant="caption" color="text.secondary">Меньше</Typography>
+                        <Box sx={{ width: 15, height: 15, borderRadius: '2px', background: theme => alpha(theme.palette.primary.main, 0.1) }} />
+                        <Box sx={{ width: 15, height: 15, borderRadius: '2px', background: theme => alpha(theme.palette.primary.main, 0.4) }} />
+                        <Box sx={{ width: 15, height: 15, borderRadius: '2px', background: theme => alpha(theme.palette.primary.main, 0.7) }} />
+                        <Box sx={{ width: 15, height: 15, borderRadius: '2px', background: theme => alpha(theme.palette.primary.main, 1.0) }} />
+                        <Typography variant="caption" color="text.secondary">Больше</Typography>
+                    </Stack>
+                </Stack>
+            )}
+        </Paper>
+    );
+};
+
+export default PostActivityHeatmapWidget;
+
+// --- frontend/src\pages\Dashboard\components\PresetManager.js ---
+
+// --- frontend/src/pages/Dashboard/components/PresetManager.js ---
+import React, { useState } from 'react';
+import { Box, FormControl, InputLabel, Select, MenuItem, Button, IconButton, ListItemText, Dialog, DialogTitle, DialogContent, TextField, DialogActions, CircularProgress, Typography, Stack, Divider } from '@mui/material';
+import DeleteIcon from '@mui/icons-material/Delete';
+import AddIcon from '@mui/icons-material/Add';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { fetchFilterPresets, createFilterPreset, deleteFilterPreset } from 'api';
+import { toast } from 'react-hot-toast';
+
+const PresetManager = ({ actionKey, currentFilters, onApply }) => {
+    const queryClient = useQueryClient();
+    const [selectedPresetId, setSelectedPresetId] = useState('');
+    const [isSaveDialogOpen, setSaveDialogOpen] = useState(false);
+    const [presetName, setPresetName] = useState('');
+
+    const { data: presets, isLoading } = useQuery({
+        queryKey: ['filterPresets', actionKey],
+        queryFn: () => fetchFilterPresets(actionKey),
+        enabled: !!actionKey,
+    });
+
+    const createMutation = useMutation({
+        mutationFn: createFilterPreset,
+        onSuccess: () => {
+            toast.success("Пресет успешно сохранен!");
+            queryClient.invalidateQueries({ queryKey: ['filterPresets', actionKey] });
+            setSaveDialogOpen(false);
+            setPresetName('');
+        },
+        onError: (err) => toast.error(err.response?.data?.detail || "Ошибка сохранения"),
+    });
+
+    const deleteMutation = useMutation({
+        mutationFn: deleteFilterPreset,
+        onSuccess: () => {
+            toast.success("Пресет удален.");
+            queryClient.invalidateQueries({ queryKey: ['filterPresets', actionKey] });
+            setSelectedPresetId('');
+        },
+        onError: (err) => toast.error(err.response?.data?.detail || "Ошибка удаления"),
+    });
+
+    const handleSelectPreset = (event) => {
+        const id = event.target.value;
+        setSelectedPresetId(id);
+        const selected = presets.find(p => p.id === id);
+        if (selected) {
+            onApply(selected.filters);
+        }
+    };
+
+    const handleDeletePreset = (event, id) => {
+        event.stopPropagation();
+        deleteMutation.mutate(id);
+    };
+
+    const handleSavePreset = () => {
+        if (!presetName.trim()) {
+            toast.error("Название пресета не может быть пустым.");
+            return;
+        }
+        createMutation.mutate({
+            name: presetName,
+            action_type: actionKey,
+            filters: currentFilters,
+        });
+    };
+
+    return (
+        <Box>
+            <Stack direction="row" spacing={2} alignItems="center">
+                <FormControl fullWidth size="small" disabled={isLoading}>
+                    <InputLabel>Пресеты фильтров</InputLabel>
+                    <Select
+                        value={selectedPresetId}
+                        label="Пресеты фильтров"
+                        onChange={handleSelectPreset}
+                        renderValue={(selected) => presets?.find(p => p.id === selected)?.name || ''}
+                    >
+                        <MenuItem value="" disabled><em>Выберите пресет</em></MenuItem>
+                        <Divider />
+                        {presets?.map(preset => (
+                            <MenuItem key={preset.id} value={preset.id}>
+                                <ListItemText primary={preset.name} />
+                                <IconButton edge="end" size="small" onClick={(e) => handleDeletePreset(e, preset.id)} disabled={deleteMutation.isLoading}>
+                                    <DeleteIcon fontSize="small" />
+                                </IconButton>
+                            </MenuItem>
+                        ))}
+                         {presets?.length === 0 && <MenuItem disabled><Typography variant="body2" color="text.secondary" sx={{px: 2}}>Нет сохраненных пресетов</Typography></MenuItem>}
+                    </Select>
+                </FormControl>
+                <Button variant="outlined" size="small" startIcon={<AddIcon />} onClick={() => setSaveDialogOpen(true)}>
+                    Сохранить
+                </Button>
+            </Stack>
+
+            <Dialog open={isSaveDialogOpen} onClose={() => setSaveDialogOpen(false)}>
+                <DialogTitle>Сохранить пресет фильтров</DialogTitle>
+                <DialogContent>
+                    <TextField
+                        autoFocus
+                        margin="dense"
+                        label="Название пресета"
+                        fullWidth
+                        variant="standard"
+                        value={presetName}
+                        onChange={(e) => setPresetName(e.target.value)}
+                    />
+                </DialogContent>
+                <DialogActions>
+                    <Button onClick={() => setSaveDialogOpen(false)}>Отмена</Button>
+                    <Button onClick={handleSavePreset} disabled={createMutation.isLoading}>
+                        {createMutation.isLoading ? <CircularProgress size={22} /> : "Сохранить"}
+                    </Button>
+                </DialogActions>
+            </Dialog>
+        </Box>
+    );
+};
+
+export default PresetManager;
+
 // --- frontend/src\pages\Dashboard\components\ProfileGrowthWidget.js ---
 
-// frontend/src/pages/Dashboard/components/ProfileGrowthWidget.js
+// --- frontend/src/pages/Dashboard/components/ProfileGrowthWidget.js ---
 import React, { useState, useMemo } from 'react';
-import { Paper, Typography, Box, useTheme, Skeleton, Button, ButtonGroup } from '@mui/material';
+import { Paper, Typography, Box, useTheme, Skeleton, Button, ButtonGroup, Chip, Stack } from '@mui/material';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { useQuery } from '@tanstack/react-query';
 import { fetchProfileGrowth } from 'api.js';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
+import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
+import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
+import { motion } from 'framer-motion';
 
 const CustomTooltip = ({ active, payload, label }) => {
     if (active && payload && payload.length) {
@@ -2488,7 +3099,7 @@ const CustomTooltip = ({ active, payload, label }) => {
                 <Typography variant="body2" sx={{ mb: 1, fontWeight: 600 }}>{format(new Date(label), 'd MMMM yyyy', { locale: ru })}</Typography>
                 {payload.map(p => (
                     <Typography key={p.name} variant="body2" sx={{ color: p.color }}>
-                        {`${p.name}: ${p.value}`}
+                        {`${p.name}: ${p.value.toLocaleString('ru-RU')}`}
                     </Typography>
                 ))}
             </Paper>
@@ -2498,32 +3109,53 @@ const CustomTooltip = ({ active, payload, label }) => {
 };
 
 export default function ProfileGrowthWidget() {
-    const [dataType, setDataType] = useState('likes'); // 'likes' or 'friends'
+    const [dataType, setDataType] = useState('likes');
     const theme = useTheme();
     const { data, isLoading } = useQuery({
         queryKey: ['profileGrowth'],
         queryFn: () => fetchProfileGrowth(30),
-        staleTime: 1000 * 60 * 60, // 1 hour
+        staleTime: 1000 * 60 * 60,
     });
 
-    const chartData = useMemo(() => {
-        if (!data?.data) return [];
-        return data.data.map(item => ({
+    const { chartData, dailyDelta } = useMemo(() => {
+        if (!data?.data) return { chartData: [], dailyDelta: null };
+        const chartData = data.data.map(item => ({
             date: new Date(item.date).getTime(),
             value: dataType === 'likes' ? item.total_likes_on_content : item.friends_count,
         }));
+        
+        let dailyDelta = null;
+        if (chartData.length >= 2) {
+            const last = chartData[chartData.length - 1].value;
+            const prev = chartData[chartData.length - 2].value;
+            dailyDelta = last - prev;
+        }
+
+        return { chartData, dailyDelta };
     }, [data, dataType]);
     
     const metricName = dataType === 'likes' ? 'Сумма лайков' : 'Количество друзей';
+    const deltaColor = dailyDelta > 0 ? 'success' : dailyDelta < 0 ? 'error' : 'default';
 
     return (
-        <Paper sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column' }}>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+        <Paper sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column' }} component={motion.div} initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+            <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
                 <Typography variant="h6" sx={{ fontWeight: 600 }}>Динамика роста профиля</Typography>
                 <ButtonGroup size="small">
                     <Button variant={dataType === 'likes' ? 'contained' : 'outlined'} onClick={() => setDataType('likes')}>Лайки</Button>
                     <Button variant={dataType === 'friends' ? 'contained' : 'outlined'} onClick={() => setDataType('friends')}>Друзья</Button>
                 </ButtonGroup>
+            </Stack>
+            <Box sx={{ mb: 2, height: 24 }}>
+                {dailyDelta !== null && !isLoading && (
+                    <Chip
+                        icon={dailyDelta > 0 ? <ArrowUpwardIcon /> : <ArrowDownwardIcon />}
+                        label={` ${dailyDelta > 0 ? '+' : ''}${dailyDelta.toLocaleString('ru-RU')} за сутки`}
+                        color={deltaColor}
+                        size="small"
+                        variant="outlined"
+                    />
+                )}
             </Box>
             {isLoading ? (
                 <Skeleton variant="rounded" height={250} />
@@ -2536,10 +3168,10 @@ export default function ProfileGrowthWidget() {
                             tickFormatter={(timeStr) => format(new Date(timeStr), 'd MMM', { locale: ru })}
                             fontSize="0.8rem"
                         />
-                        <YAxis stroke={theme.palette.text.secondary} fontSize="0.8rem" domain={['dataMin - 10', 'dataMax + 10']} />
+                        <YAxis stroke={theme.palette.text.secondary} fontSize="0.8rem" domain={['dataMin - 10', 'dataMax + 10']} allowDataOverflow />
                         <CartesianGrid strokeDasharray="3 3" stroke={theme.palette.divider} />
                         <Tooltip content={<CustomTooltip />} />
-                        <Line type="monotone" dataKey="value" name={metricName} stroke={theme.palette.secondary.main} strokeWidth={3} dot={false} />
+                        <Line type="monotone" dataKey="value" name={metricName} stroke={theme.palette.secondary.main} strokeWidth={3} dot={false} activeDot={{ r: 8 }} />
                     </LineChart>
                 </ResponsiveContainer>
             )}
@@ -2549,24 +3181,23 @@ export default function ProfileGrowthWidget() {
 
 // --- frontend/src\pages\Dashboard\components\ProfileSummaryWidget.js ---
 
-// frontend/src/pages/Dashboard/components/ProfileSummaryWidget.js (НОВЫЙ ФАЙЛ)
+// --- frontend/src/pages/Dashboard/components/ProfileSummaryWidget.js ---
 import React from 'react';
 import { Grid } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
 import { fetchProfileSummary } from 'api';
 import StatCard from 'components/StatCard';
-
-// Иконки
 import GroupIcon from '@mui/icons-material/Group';
 import RssFeedIcon from '@mui/icons-material/RssFeed';
 import PhotoLibraryIcon from '@mui/icons-material/PhotoLibrary';
 import ArticleIcon from '@mui/icons-material/Article';
+import { motion } from 'framer-motion';
 
 const ProfileSummaryWidget = () => {
     const { data, isLoading } = useQuery({
         queryKey: ['profileSummary'],
         queryFn: fetchProfileSummary,
-        staleTime: 1000 * 60 * 60, // 1 час
+        staleTime: 1000 * 60 * 60,
     });
 
     const stats = [
@@ -2577,9 +3208,13 @@ const ProfileSummaryWidget = () => {
     ];
 
     return (
-        <Grid container spacing={2}>
+        <Grid container spacing={2} sx={{height: '100%'}}>
             {stats.map((stat, index) => (
-                <Grid item xs={12} sm={6} key={index}>
+                <Grid item xs={12} sm={6} key={index} component={motion.div}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: index * 0.1 }}
+                >
                     <StatCard
                         title={stat.title}
                         value={isLoading ? 0 : stat.value}
@@ -2762,7 +3397,7 @@ export default StatCard;
 
 // --- frontend/src\pages\Dashboard\components\TaskLogWidget.js ---
 
-// frontend/src/pages/Dashboard/components/TaskLogWidget.js
+// --- frontend/src/pages/Dashboard/components/TaskLogWidget.js ---
 import React, { useState, useRef, useCallback } from 'react';
 import {
     Paper, Typography, Box, CircularProgress, Chip, Collapse, IconButton,
@@ -2780,13 +3415,11 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { toast } from 'react-hot-toast';
 import TaskParametersViewer from './TaskParametersViewer';
 
-// Иконки для каждого типа задач
 import GroupAddIcon from '@mui/icons-material/GroupAdd';
 import ThumbUpIcon from '@mui/icons-material/ThumbUp';
 import RecommendIcon from '@mui/icons-material/Recommend';
 import HistoryIcon from '@mui/icons-material/History';
 import PersonRemoveIcon from '@mui/icons-material/PersonRemove';
-import FavoriteIcon from '@mui/icons-material/Favorite';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import SendIcon from '@mui/icons-material/Send';
 import GroupRemoveIcon from '@mui/icons-material/GroupRemove';
@@ -2801,14 +3434,13 @@ const statusMap = {
 };
 
 const taskIconMap = {
-    'Прием заявок': <GroupAddIcon fontSize="small" />,
-    'Лайки в ленте': <ThumbUpIcon fontSize="small" />,
-    'Добавить друзей': <RecommendIcon fontSize="small" />,
-    'Просмотр историй': <HistoryIcon fontSize="small" />,
-    'Чистка друзей': <PersonRemoveIcon fontSize="small" />,
-    'Лайки друзьям': <FavoriteIcon fontSize="small" />,
-    'Массовая рассылка': <SendIcon fontSize="small" />,
-    'Отписка от сообществ': <GroupRemoveIcon fontSize="small" />
+    'Прием заявок': <GroupAddIcon />,
+    'Лайкинг ленты': <ThumbUpIcon />,
+    'Добавление друзей': <RecommendIcon />,
+    'Просмотр историй': <HistoryIcon />,
+    'Чистка друзей': <PersonRemoveIcon />,
+    'Отправка сообщений': <SendIcon />,
+    'Отписка от сообществ': <GroupRemoveIcon />
 };
 
 const TaskEntry = React.memo(({ task }) => {
@@ -2835,7 +3467,7 @@ const TaskEntry = React.memo(({ task }) => {
     });
     
     const hasDetails = task.parameters && Object.keys(task.parameters).length > 0;
-    const TaskIcon = Object.entries(taskIconMap).find(([key]) => task.task_name.includes(key))?.[1] || <HelpOutlineIcon fontSize="small" />;
+    const TaskIcon = taskIconMap[task.task_name] || <HelpOutlineIcon />;
 
     return (
         <motion.div
@@ -2844,20 +3476,25 @@ const TaskEntry = React.memo(({ task }) => {
             transition={{ type: 'spring', stiffness: 300, damping: 30 }}>
             <Paper variant="outlined" sx={{ mb: 1.5, bgcolor: 'background.default', transition: 'box-shadow 0.2s', '&:hover': { boxShadow: 3, borderColor: 'primary.main' } }}>
                 <Box sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 2, cursor: hasDetails ? 'pointer' : 'default' }} onClick={() => hasDetails && setOpen(!open)}>
-                    <Box sx={{ width: 40, flexShrink: 0, display: 'flex', justifyContent: 'center' }}>
-                        {hasDetails ? <IconButton size="small">{open ? <KeyboardArrowUpIcon /> : <KeyboardArrowDownIcon />}</IconButton> : <Box sx={{width: 28}}/>}
-                    </Box>
-                    <Typography variant="body2" sx={{ width: 160, flexShrink: 0, color: 'text.secondary' }}>
-                        {format(new Date(task.created_at), 'd MMM yyyy, HH:mm', { locale: ru })}
-                    </Typography>
-                    <Stack direction="row" alignItems="center" spacing={1.5} sx={{ flexGrow: 1, overflow: 'hidden' }}>
-                        <Tooltip title={task.task_name} placement="top-start">
-                           <Box sx={{ color: 'primary.main', display: 'flex' }}>{TaskIcon}</Box>
-                        </Tooltip>
-                        <Typography sx={{ fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{task.task_name}</Typography>
+                    
+                    <Stack sx={{ width: 40, flexShrink: 0, display: 'flex', alignItems: 'center' }}>
+                         {hasDetails ? <IconButton size="small">{open ? <KeyboardArrowUpIcon /> : <KeyboardArrowDownIcon />}</IconButton> : <Box sx={{width: 28}}/>}
                     </Stack>
-                    <Stack direction="row" alignItems="center" spacing={1}>
-                        <Chip label={statusInfo.label} color={statusInfo.color} size="small" variant="outlined" />
+
+                    <Stack direction="row" alignItems="center" spacing={1.5} sx={{ flexGrow: 1, minWidth: 0 }}>
+                        <Tooltip title={task.task_name} placement="top-start">
+                           <Box sx={{ color: 'primary.main', display: 'flex', fontSize: '1.5rem' }}>{TaskIcon}</Box>
+                        </Tooltip>
+                        <Stack sx={{ minWidth: 0 }}>
+                             <Typography sx={{ fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{task.task_name}</Typography>
+                             <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                                {format(new Date(task.created_at), 'd MMM yyyy, HH:mm', { locale: ru })}
+                            </Typography>
+                        </Stack>
+                    </Stack>
+                    
+                    <Stack direction="row" alignItems="center" spacing={1} sx={{flexShrink: 0}}>
+                        <Chip label={statusInfo.label} color={statusInfo.color} size="small" variant="filled" sx={{fontWeight: 600}} />
                         {task.status === 'FAILURE' && (
                             <Tooltip title="Повторить задачу">
                                 <span>
@@ -2917,6 +3554,8 @@ export default function TaskLogWidget() {
         if (node) observer.current.observe(node);
     }, [isFetchingNextPage, fetchNextPage, hasNextPage, isFetching]);
 
+    const allItems = data?.pages.flatMap(page => page.items) || [];
+
     return (
         <Paper sx={{ p: 3, display: 'flex', flexDirection: 'column', height: '100%', minHeight: '500px' }}>
             <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
@@ -2937,23 +3576,21 @@ export default function TaskLogWidget() {
                 {status === 'error' && <Typography color="error">Ошибка: {error.message}</Typography>}
                 
                 <AnimatePresence>
-                    {data?.pages.map((page, i) => (
-                        <React.Fragment key={i}>
-                            {page.items.map((task, index) => (
-                                <div ref={page.items.length === index + 1 ? lastTaskElementRef : null} key={task.id}>
-                                    <TaskEntry task={task} />
-                                </div>
-                            ))}
-                        </React.Fragment>
+                    {allItems.map((task, index) => (
+                        <div ref={allItems.length === index + 1 ? lastTaskElementRef : null} key={task.id}>
+                            <TaskEntry task={task} />
+                        </div>
                     ))}
                 </AnimatePresence>
 
                 {isFetchingNextPage && <Box sx={{ display: 'flex', justifyContent: 'center', p: 2 }}><CircularProgress size={30} /></Box>}
-                {!hasNextPage && data?.pages[0]?.items.length > 0 &&
+                {!hasNextPage && allItems.length > 0 &&
                     <Typography textAlign="center" color="text.secondary" sx={{ mt: 2 }}>Вы загрузили всю историю.</Typography>
                 }
-                {!data?.pages[0]?.items.length && !isFetching &&
-                    <Typography textAlign="center" color="text.secondary" sx={{ mt: 4 }}>Здесь пока нет записей. Запустите задачу, и она появится в истории.</Typography>
+                {allItems.length === 0 && !isFetching &&
+                    <Typography textAlign="center" color="text.secondary" sx={{ mt: 4, p: 2 }}>
+                        Здесь пока нет записей. Запустите задачу из "Панели действий", и она появится в истории.
+                    </Typography>
                 }
             </Box>
         </Paper>
@@ -3023,26 +3660,29 @@ export default TaskParametersViewer;
 
 // --- frontend/src\pages\Dashboard\components\UnifiedActionPanel.js ---
 
-// frontend/src/pages/Dashboard/components/UnifiedActionPanel.js
+// --- frontend/src/pages/Dashboard/components/UnifiedActionPanel.js ---
 import React from 'react';
 import { Paper, Typography, Stack, Switch, Tooltip, Box, CircularProgress, Skeleton, IconButton, alpha } from '@mui/material';
 import SettingsIcon from '@mui/icons-material/Settings';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import LockIcon from '@mui/icons-material/Lock';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchAutomations, updateAutomation } from 'api.js';
 import { toast } from 'react-hot-toast';
 import { content } from 'content/content';
 import { motion } from 'framer-motion';
+import { useFeatureFlag } from 'hooks/useFeatureFlag';
 
 const ActionRow = ({ action, automation, onRun, onSettings, onToggle, isToggling }) => {
-    const isAvailable = automation?.is_available ?? true;
+    const { isFeatureAvailable } = useFeatureFlag();
+    const isAutomationAvailable = isFeatureAvailable(action.id);
+    const isToggleAvailable = isFeatureAvailable('automations_center');
     const isActive = automation?.is_active ?? false;
     const isMutatingThisRow = isToggling && onToggle.variables?.automationType === action.id;
     
     const handleToggle = (event) => {
         const newIsActive = event.target.checked;
-        // --- ИЗМЕНЕНИЕ: Проверяем доступность функции ПЕРЕД отправкой мутации ---
-        if (newIsActive && !isAvailable) {
+        if (!isToggleAvailable) {
             toast.error(`Автоматизация недоступна на вашем тарифе.`);
             return;
         }
@@ -3055,10 +3695,9 @@ const ActionRow = ({ action, automation, onRun, onSettings, onToggle, isToggling
                 variant="outlined"
                 sx={{
                     p: 2, display: 'flex', alignItems: 'center', gap: 2,
-                    // --- ИЗМЕНЕНИЕ: Делаем недоступные функции полупрозрачными ---
-                    opacity: automation?.is_available ? 1 : 0.6,
+                    opacity: isAutomationAvailable ? 1 : 0.6,
                     transition: 'all 0.3s ease',
-                    '&:hover': isAvailable ? {
+                    '&:hover': isAutomationAvailable ? {
                         boxShadow: 3,
                         borderColor: 'primary.main',
                         bgcolor: (theme) => alpha(theme.palette.primary.main, 0.05),
@@ -3071,27 +3710,34 @@ const ActionRow = ({ action, automation, onRun, onSettings, onToggle, isToggling
                      <Typography variant="caption" color="text.secondary">{action.description}</Typography>
                 </Box>
                 <Stack direction="row" spacing={0.5} alignItems="center">
-                    {/* --- ИЗМЕНЕНИЕ: Новая логика кнопок --- */}
-                    <Tooltip title="Настроить и запустить вручную">
-                        <IconButton onClick={() => onRun(action.id, action.name)}><PlayArrowIcon /></IconButton>
+                    <Tooltip title={isAutomationAvailable ? "Настроить и запустить вручную" : "Недоступно на вашем тарифе"}>
+                        <span>
+                            <IconButton onClick={() => onRun(action.id, action.name)} disabled={!isAutomationAvailable}>
+                                <PlayArrowIcon />
+                            </IconButton>
+                        </span>
                     </Tooltip>
-                    <Tooltip title={isAvailable ? "Настроить автоматизацию" : "Недоступно на вашем тарифе"}>
+                    <Tooltip title={isAutomationAvailable ? "Настроить автоматизацию" : "Недоступно на вашем тарифе"}>
                          <span>
-                             <IconButton onClick={() => onSettings(automation)} disabled={!isAvailable}>
+                             <IconButton onClick={() => onSettings(automation)} disabled={!isAutomationAvailable}>
                                  <SettingsIcon fontSize="small" />
                              </IconButton>
                          </span>
                     </Tooltip>
-                    <Tooltip title={!isAvailable ? "Функция автоматизации недоступна на вашем тарифе" : (isActive ? "Выключить автоматизацию" : "Включить автоматизацию")}>
+                    <Tooltip title={!isToggleAvailable ? "Функция автоматизации недоступна на вашем тарифе" : (isActive ? "Выключить автоматизацию" : "Включить автоматизацию")}>
                         <Box sx={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 24 }}>
                             {isMutatingThisRow && <CircularProgress size={24} sx={{ position: 'absolute' }} />}
-                            <Switch
-                                checked={isActive}
-                                onChange={handleToggle}
-                                disabled={!isAvailable || isMutatingThisRow}
-                                color="success"
-                                sx={{ opacity: isMutatingThisRow ? 0 : 1 }}
-                            />
+                             {isToggleAvailable ? (
+                                <Switch
+                                    checked={isActive}
+                                    onChange={handleToggle}
+                                    disabled={isMutatingThisRow}
+                                    color="success"
+                                    sx={{ opacity: isMutatingThisRow ? 0 : 1 }}
+                                />
+                             ) : (
+                                 <LockIcon fontSize="small" sx={{color: 'text.disabled'}}/>
+                             )}
                         </Box>
                     </Tooltip>
                 </Stack>
@@ -3269,9 +3915,45 @@ export const UserProfileCard = React.memo(({ userInfo, connectionStatus, onProxy
     );
 });
 
+// --- frontend/src\pages\Forbidden\ForbiddenPage.js ---
+
+// --- frontend/src/pages/Forbidden/ForbiddenPage.js ---
+import React from 'react';
+import { Box, Paper, Typography, Button } from '@mui/material';
+import { Link as RouterLink } from 'react-router-dom';
+import BlockIcon from '@mui/icons-material/Block';
+import { motion } from 'framer-motion';
+
+const ForbiddenPage = () => {
+    return (
+        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '80vh' }}>
+            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
+                <Paper sx={{ p: 4, textAlign: 'center', maxWidth: 500 }}>
+                    <BlockIcon color="error" sx={{ fontSize: 60, mb: 2 }}/>
+                    <Typography variant="h5" component="h1" gutterBottom sx={{ fontWeight: 600 }}>
+                        Доступ ограничен
+                    </Typography>
+                    <Typography color="text.secondary" sx={{ mb: 3 }}>
+                        Эта страница или функция недоступна на вашем текущем тарифном плане. Пожалуйста, обновите тариф, чтобы получить доступ.
+                    </Typography>
+                    <Button 
+                        variant="contained" 
+                        component={RouterLink}
+                        to="/billing"
+                    >
+                        Перейти к тарифам
+                    </Button>
+                </Paper>
+            </motion.div>
+        </Box>
+    );
+};
+
+export default ForbiddenPage;
+
 // --- frontend/src\pages\Home\HomePage.js ---
 
-// frontend/src/pages/Home/HomePage.js
+// --- frontend/src/pages/Home/HomePage.js ---
 import React from 'react';
 import { Box, alpha, Container } from '@mui/material';
 import HeroSection from './components/HeroSection';
@@ -3282,6 +3964,7 @@ import CtaSection from './components/CtaSection';
 import CaseStudiesSection from './components/CaseStudiesSection';
 import PrinciplesSection from './components/PrinciplesSection';
 import FaqSection from './components/FaqSection';
+import TargetAudienceSection from './components/TargetAudienceSection';
 
 export const SectionWrapper = ({ children, background = 'transparent', py = { xs: 8, md: 12 } }) => (
     <Box sx={{ py, backgroundColor: background, overflow: 'hidden' }}>
@@ -3305,20 +3988,24 @@ export default function HomePage() {
       <SectionWrapper>
         <AdvantageSection />
       </SectionWrapper>
-      
+
       <SectionWrapper background={(theme) => alpha(theme.palette.background.paper, 0.5)}>
+        <TargetAudienceSection />
+      </SectionWrapper>
+      
+      <SectionWrapper>
         <CaseStudiesSection />
       </SectionWrapper>
       
-      <SectionWrapper>
+      <SectionWrapper background={(theme) => alpha(theme.palette.background.paper, 0.5)}>
         <StepsSection />
       </SectionWrapper>
       
-      <SectionWrapper background={(theme) => alpha(theme.palette.background.paper, 0.5)}>
+      <SectionWrapper>
         <PrinciplesSection />
       </SectionWrapper>
       
-      <SectionWrapper>
+      <SectionWrapper background={(theme) => alpha(theme.palette.background.paper, 0.5)}>
         <FaqSection />
       </SectionWrapper>
       
@@ -3329,9 +4016,10 @@ export default function HomePage() {
   );
 }
 
+
 // --- frontend/src\pages\Home\components\AdvantageSection.js ---
 
-// frontend/src/pages/Home/components/AdvantageSection.js
+// --- frontend/src/pages/Home/components/AdvantageSection.js ---
 import React from 'react';
 import { Typography, Stack, Paper, alpha, useTheme, Grid } from '@mui/material';
 import { motion } from 'framer-motion';
@@ -3387,18 +4075,18 @@ const AdvantageSection = () => {
                            Ваше технологическое преимущество
                         </Typography>
                         <Typography variant="h6" color="text.secondary" sx={{ mb: 4 }}>
-                            Мы объединили передовые технологии и глубокое понимание алгоритмов, чтобы вы получали измеримый результат.
+                            Мы объединили поведенческую эмуляцию и data-driven подход, чтобы вы получали измеримый и органический результат.
                         </Typography>
                     </motion.div>
                     <Stack spacing={3}>
                         <motion.div variants={fadeInUp}>
-                            <Stack direction="row" spacing={2}><SecurityIcon color="primary"/><Typography><b>Безопасность — наш приоритет:</b> работа через временный токен VK и поддержка личных прокси для полной анонимности.</Typography></Stack>
+                            <Stack direction="row" spacing={2}><SecurityIcon color="primary"/><Typography><b>Безопасность — наш приоритет:</b> работа через временный API-ключ и поддержка персональных прокси для полной анонимности.</Typography></Stack>
                         </motion.div>
                         <motion.div variants={fadeInUp}>
-                            <Stack direction="row" spacing={2}><AutoAwesomeIcon color="primary"/><Typography><b>Интеллектуальная имитация:</b> алгоритм Humanizer™ делает автоматизацию неотличимой от ручной работы, предотвращая блокировки.</Typography></Stack>
+                            <Stack direction="row" spacing={2}><AutoAwesomeIcon color="primary"/><Typography><b>Интеллектуальная имитация:</b> алгоритм Humanizer™ делает автоматизацию неотличимой от ручной работы, соблюдая динамические лимиты VK.</Typography></Stack>
                         </motion.div>
                          <motion.div variants={fadeInUp}>
-                            <Stack direction="row" spacing={2}><TimerIcon color="primary"/><Typography><b>Автоматизация 24/7:</b> настройте сценарии один раз, и Zenith будет работать на вас круглосуточно, даже когда вы оффлайн.</Typography></Stack>
+                            <Stack direction="row" spacing={2}><TimerIcon color="primary"/><Typography><b>Облачная инфраструктура 24/7:</b> настройте сценарии один раз, и Zenith будет работать на вас круглосуточно, даже когда вы оффлайн.</Typography></Stack>
                         </motion.div>
                     </Stack>
                  </motion.div>
@@ -3416,8 +4104,8 @@ const AdvantageSection = () => {
                                 <YAxis yAxisId="right" orientation="right" stroke={theme.palette.secondary.main} fontSize="0.8rem" />
                                 <Tooltip content={<CustomTooltip />} />
                                 <Legend />
-                                <Line yAxisId="left" type="monotone" dataKey="Охват" stroke={theme.palette.primary.main} strokeWidth={3} dot={false}/>
-                                <Line yAxisId="right" type="monotone" dataKey="Подписчики" stroke={theme.palette.secondary.main} strokeWidth={3} dot={false}/>
+                                <Line yAxisId="left" type="monotone" dataKey="Охват" stroke={theme.palette.primary.main} strokeWidth={3} dot={{ r: 4, strokeWidth: 2, fill: theme.palette.background.paper }} activeDot={{ r: 8 }}/>
+                                <Line yAxisId="right" type="monotone" dataKey="Подписчики" stroke={theme.palette.secondary.main} strokeWidth={3} dot={{ r: 4, strokeWidth: 2, fill: theme.palette.background.paper }} activeDot={{ r: 8 }}/>
                             </LineChart>
                          </ResponsiveContainer>
                      </Paper>
@@ -3695,7 +4383,7 @@ export default FeatureHighlightCard;
 
 // --- frontend/src\pages\Home\components\FeaturesSection.js ---
 
-// frontend/src/pages/Home/components/FeaturesSection.js
+// --- frontend/src/pages/Home/components/FeaturesSection.js ---
 import React from 'react';
 import { Grid, Typography } from '@mui/material';
 import { motion } from 'framer-motion';
@@ -3708,12 +4396,12 @@ import CloudQueueOutlinedIcon from '@mui/icons-material/CloudQueueOutlined';
 import FilterAltOutlinedIcon from '@mui/icons-material/FilterAltOutlined';
 
 const featuresData = [
-    { icon: <HubOutlinedIcon />, title: "Продвинутые сценарии", description: "Создавайте сложные цепочки действий, которые будут выполняться по вашему расписанию 24/7." },
-    { icon: <PsychologyOutlinedIcon />, title: "Алгоритм Humanizer™", description: "Интеллектуальные задержки между действиями имитируют поведение человека, минимизируя риски." },
-    { icon: <BarChartOutlinedIcon />, title: "Live-аналитика", description: "Отслеживайте динамику роста друзей, подписчиков и охватов на наглядных графиках." },
-    { icon: <VpnKeyOutlinedIcon />, title: "Поддержка Proxy", description: "Используйте собственные прокси-серверы для максимальной анонимности и безопасности аккаунта." },
-    { icon: <CloudQueueOutlinedIcon />, title: "Облачная работа", description: "Все задачи выполняются на наших серверах. Вам не нужно держать компьютер включенным." },
-    { icon: <FilterAltOutlinedIcon />, title: "Детальная фильтрация", description: "Таргетируйте аудиторию по полу, онлайну, активности и другим критериям для максимальной эффективности." },
+    { icon: <HubOutlinedIcon />, title: "Продвинутые сценарии", description: "Комбинируйте действия в сложные цепочки и запускайте их по гибкому расписанию для достижения долгосрочных целей." },
+    { icon: <PsychologyOutlinedIcon />, title: "Алгоритм Humanizer™", description: "Интеллектуальные задержки и вариативность действий имитируют поведение человека, минимизируя риски." },
+    { icon: <BarChartOutlinedIcon />, title: "Live-аналитика", description: "Отслеживайте динамику роста друзей, подписчиков и охватов на наглядных графиках в реальном времени." },
+    { icon: <VpnKeyOutlinedIcon />, title: "Поддержка Proxy", description: "Используйте собственные прокси-серверы для максимальной анонимности и обхода сетевых ограничений." },
+    { icon: <CloudQueueOutlinedIcon />, title: "Облачная работа 24/7", description: "Все задачи выполняются на наших серверах. Вам не нужно держать компьютер или браузер включенным." },
+    { icon: <FilterAltOutlinedIcon />, title: "Детальная фильтрация", description: "Таргетируйте аудиторию по десяткам критериев: от геолокации и онлайн-статуса до количества друзей." },
 ];
 
 const fadeInUp = {
@@ -3729,7 +4417,7 @@ const FeaturesSection = () => {
       <motion.div initial="initial" whileInView="animate" variants={staggerContainer} viewport={{ once: true, amount: 0.2 }}>
           <motion.div variants={fadeInUp}>
                <Typography variant="h3" component="h2" textAlign="center" sx={{ mb: 8, fontWeight: 700 }}>
-                  Все инструменты для эффективного SMM
+                  Профессиональный инструментарий для SMM
               </Typography>
           </motion.div>
           <Grid container spacing={5}>
@@ -3747,7 +4435,7 @@ export default FeaturesSection;
 
 // --- frontend/src\pages\Home\components\HeroSection.js ---
 
-// frontend/src/pages/Home/components/HeroSection.js
+// --- frontend/src/pages/Home/components/HeroSection.js ---
 import React from 'react';
 import { Container, Typography, Button, Stack } from '@mui/material';
 import { Link as RouterLink } from 'react-router-dom';
@@ -3770,19 +4458,19 @@ const HeroSection = () => {
             component="h1" 
             sx={{
               fontWeight: 800,
-              maxWidth: '850px',
+              maxWidth: '950px',
               mx: 'auto',
-              background: (theme) => `linear-gradient(45deg, ${theme.palette.primary.main} 30%, ${theme.palette.secondary.main} 90%)`,
+              background: (theme) => `linear-gradient(45deg, ${theme.palette.text.primary} 60%, ${theme.palette.secondary.main} 100%)`,
               WebkitBackgroundClip: 'text',
               WebkitTextFillColor: 'transparent',
             }}
           >
-            Интеллектуальная платформа для продвижения ВКонтакте
+            Платформа для органического роста и автоматизации SMM-задач ВКонтакте
           </Typography>
         </motion.div>
         <motion.div variants={{ hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0, transition: { duration: 0.7, delay: 0.2 } } }}>
           <Typography variant="h6" color="text.secondary" paragraph sx={{ mt: 3, mb: 4, maxWidth: '750px', mx: 'auto' }}>
-            Zenith — это ваш надежный партнер для органического роста, повышения охватов и комплексной автоматизации рутинных SMM-задач. Сосредоточьтесь на контенте, а мы позаботимся о его продвижении.
+            Zenith эмулирует поведенческие факторы для естественного увеличения охватов и автоматизирует рутинные процессы. Сосредоточьтесь на контенте, а мы позаботимся о его эффективном продвижении.
           </Typography>
         </motion.div>
         <motion.div variants={{ hidden: { scale: 0.8, opacity: 0 }, visible: { scale: 1, opacity: 1, transition: { duration: 0.5, delay: 0.4 } } }}>
@@ -3790,9 +4478,8 @@ const HeroSection = () => {
               <Button variant="contained" size="large" component={RouterLink} to="/login" sx={{py: 1.5, px: 5, fontSize: '1.1rem'}}>
                   Начать бесплатно (14 дней)
               </Button>
-              {/* <-- ИЗМЕНЕНИЕ: Кнопка теперь ведет на страницу тарифов --> */}
               <Button variant="outlined" size="large" component={RouterLink} to="/billing" sx={{py: 1.5, px: 5, fontSize: '1.1rem'}}>
-                  Узнать больше
+                  Смотреть тарифы
               </Button>
           </Stack>
         </motion.div>
@@ -3800,7 +4487,6 @@ const HeroSection = () => {
     </Container>
   );
 };
-
 export default HeroSection;
 
 // --- frontend/src\pages\Home\components\PrinciplesSection.js ---
@@ -3964,6 +4650,90 @@ const StepsSection = () => {
 
 export default StepsSection;
 
+// --- frontend/src\pages\Home\components\TargetAudienceSection.js ---
+
+// --- frontend/src/pages/Home/components/TargetAudienceSection.js ---
+import React from 'react';
+import { Grid, Typography, Paper, Box, alpha } from '@mui/material';
+import { motion } from 'framer-motion';
+import StorefrontIcon from '@mui/icons-material/Storefront';
+import BrushIcon from '@mui/icons-material/Brush';
+import CampaignIcon from '@mui/icons-material/Campaign';
+
+const audienceData = [
+  {
+    icon: <CampaignIcon />,
+    title: "SMM-специалистам и агентствам",
+    description: "Автоматизируйте рутину по всем клиентским проектам, экономьте часы работы и предоставляйте отчеты на основе реальной динамики роста.",
+    color: "primary"
+  },
+  {
+    icon: <BrushIcon />,
+    title: "Блогерам и экспертам",
+    description: "Наращивайте лояльную аудиторию, повышайте вовлеченность и охваты, поддерживая постоянную активность на странице без усилий.",
+    color: "secondary"
+  },
+  {
+    icon: <StorefrontIcon />,
+    title: "Малому и локальному бизнесу",
+    description: "Привлекайте целевых клиентов из вашего города, информируйте их о новинках и повышайте узнаваемость бренда в соцсетях.",
+    color: "success"
+  },
+];
+
+const fadeInUp = {
+    initial: { y: 40, opacity: 0, scale: 0.95 },
+    animate: { y: 0, opacity: 1, scale: 1, transition: { type: "spring", stiffness: 100, damping: 20, duration: 0.8 } }
+};
+const staggerContainer = {
+    animate: { transition: { staggerChildren: 0.15 } }
+};
+
+const AudienceCard = ({ icon, title, description, color }) => (
+    <motion.div variants={fadeInUp} style={{ height: '100%' }}>
+        <Paper 
+            sx={{ 
+                p: 3, 
+                height: '100%',
+                display: 'flex', 
+                flexDirection: 'column',
+                textAlign: 'center',
+                alignItems: 'center',
+                borderColor: `${color}.main`,
+                background: (theme) => `radial-gradient(circle at 50% 0%, ${alpha(theme.palette[color].dark, 0.1)}, ${theme.palette.background.paper} 50%)`
+            }}
+        >
+            <Box sx={{ color: `${color}.main`, fontSize: '3rem', mb: 2 }}>{icon}</Box>
+            <Typography variant="h5" sx={{ fontWeight: 700, mb: 1.5 }}>{title}</Typography>
+            <Typography color="text.secondary">{description}</Typography>
+        </Paper>
+    </motion.div>
+);
+
+const TargetAudienceSection = () => {
+    return (
+        <motion.div initial="initial" whileInView="animate" variants={staggerContainer} viewport={{ once: true, amount: 0.2 }}>
+            <motion.div variants={fadeInUp}>
+                <Typography variant="h3" component="h2" textAlign="center" sx={{ mb: 2, fontWeight: 700 }}>
+                    Для кого подходит Zenith?
+                </Typography>
+                <Typography variant="h6" color="text.secondary" textAlign="center" sx={{ mb: 8, maxWidth: '700px', mx: 'auto' }}>
+                    Наша платформа создана для всех, кто хочет использовать ВКонтакте как эффективный канал для достижения своих целей.
+                </Typography>
+            </motion.div>
+            <Grid container spacing={4} alignItems="stretch">
+                {audienceData.map((audience, i) => (
+                    <Grid item xs={12} md={4} key={i}>
+                        <AudienceCard {...audience} />
+                    </Grid>
+                ))}
+            </Grid>
+        </motion.div>
+    );
+};
+
+export default TargetAudienceSection;
+
 // --- frontend/src\pages\Login\LoginPage.js ---
 
 // frontend/src/pages/Login/LoginPage.js
@@ -4068,6 +4838,301 @@ export default function LoginPage() {
         </Container>
     );
 }
+
+// --- frontend/src\pages\Posts\PostEditorModal.js ---
+
+// --- frontend/src/pages/Posts/PostEditorModal.js ---
+import React, { useState, useEffect } from 'react';
+import { Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Stack, Box, Chip, CircularProgress } from '@mui/material';
+import { DateTimePicker } from '@mui/x-date-pickers/DateTimePicker';
+import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
+import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
+import ruLocale from 'date-fns/locale/ru';
+import AddPhotoAlternateIcon from '@mui/icons-material/AddPhotoAlternate';
+import DeleteIcon from '@mui/icons-material/Delete';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { uploadImageForPost, createPost, updatePost, deletePost } from 'api';
+import { toast } from 'react-hot-toast';
+
+const PostEditorModal = ({ open, onClose, post, selectedDate }) => {
+    const queryClient = useQueryClient();
+    const [text, setText] = useState('');
+    const [publishAt, setPublishAt] = useState(new Date());
+    const [attachments, setAttachments] = useState([]);
+    const [isUploading, setIsUploading] = useState(false);
+
+    const isEditMode = !!post;
+
+    useEffect(() => {
+        if (open) {
+            if (isEditMode) {
+                setText(post.post_text || '');
+                setPublishAt(new Date(post.publish_at));
+                setAttachments(post.attachments || []);
+            } else {
+                setText('');
+                setPublishAt(selectedDate ? new Date(selectedDate) : new Date());
+                setAttachments([]);
+            }
+        }
+    }, [open, post, selectedDate, isEditMode]);
+
+    const createMutation = useMutation({
+        mutationFn: createPost,
+        onSuccess: () => {
+            toast.success("Пост успешно запланирован!");
+            queryClient.invalidateQueries({ queryKey: ['posts'] });
+            onClose();
+        },
+        onError: () => toast.error("Ошибка планирования поста"),
+    });
+
+    const updateMutation = useMutation({
+        mutationFn: ({ postId, data }) => updatePost(postId, data),
+        onSuccess: () => {
+            toast.success("Пост успешно обновлен!");
+            queryClient.invalidateQueries({ queryKey: ['posts'] });
+            onClose();
+        },
+        onError: () => toast.error("Ошибка обновления поста"),
+    });
+
+    const deleteMutation = useMutation({
+        mutationFn: deletePost,
+        onSuccess: () => {
+            toast.success("Пост удален.");
+            queryClient.invalidateQueries({ queryKey: ['posts'] });
+            onClose();
+        },
+        onError: () => toast.error("Ошибка удаления"),
+    });
+
+    const handleImageUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        setIsUploading(true);
+        const formData = new FormData();
+        formData.append('image', file);
+        try {
+            const res = await uploadImageForPost(formData);
+            setAttachments(prev => [...prev, res.attachment_id]);
+        } catch (error) {
+            toast.error("Ошибка загрузки изображения");
+        } finally {
+            setIsUploading(false);
+            e.target.value = null;
+        }
+    };
+
+    const handleSave = () => {
+        const postData = {
+            post_text: text,
+            publish_at: publishAt.toISOString(),
+            attachments,
+        };
+        if (isEditMode) {
+            updateMutation.mutate({ postId: post.id, data: postData });
+        } else {
+            createMutation.mutate(postData);
+        }
+    };
+
+    const handleDelete = () => {
+        if (window.confirm("Вы уверены, что хотите удалить этот пост?")) {
+            deleteMutation.mutate(post.id);
+        }
+    };
+
+    const isLoading = createMutation.isLoading || updateMutation.isLoading || deleteMutation.isLoading;
+
+    return (
+        <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
+            <DialogTitle>{isEditMode ? 'Редактировать пост' : 'Новый пост'}</DialogTitle>
+            <DialogContent>
+                <Stack spacing={3} sx={{ pt: 1 }}>
+                    <TextField multiline rows={8} label="Текст поста" value={text} onChange={(e) => setText(e.target.value)} fullWidth />
+                    <Box>
+                        <Button component="label" startIcon={isUploading ? <CircularProgress size={20} /> : <AddPhotoAlternateIcon />} disabled={isUploading}>
+                            Загрузить фото
+                            <input type="file" hidden accept="image/*" onChange={handleImageUpload} />
+                        </Button>
+                        <Stack direction="row" spacing={1} sx={{ mt: 1 }} flexWrap="wrap">
+                            {attachments.map(att => (
+                                <Chip key={att} label="Фото" onDelete={() => setAttachments(prev => prev.filter(a => a !== att))} />
+                            ))}
+                        </Stack>
+                    </Box>
+                    <LocalizationProvider dateAdapter={AdapterDateFns} adapterLocale={ruLocale}>
+                        <DateTimePicker label="Дата и время публикации" value={publishAt} onChange={setPublishAt} renderInput={(params) => <TextField {...params} />} />
+                    </LocalizationProvider>
+                </Stack>
+            </DialogContent>
+            <DialogActions sx={{ justifyContent: 'space-between', p: 2 }}>
+                <Box>
+                    {isEditMode && (
+                        <Button color="error" startIcon={<DeleteIcon />} onClick={handleDelete} disabled={isLoading}>
+                            Удалить
+                        </Button>
+                    )}
+                </Box>
+                <Box>
+                    <Button onClick={onClose} disabled={isLoading}>Отмена</Button>
+                    <Button onClick={handleSave} variant="contained" disabled={isLoading}>
+                        {isLoading ? <CircularProgress size={24} /> : 'Сохранить'}
+                    </Button>
+                </Box>
+            </DialogActions>
+        </Dialog>
+    );
+};
+
+export default PostEditorModal;
+
+// --- frontend/src\pages\Posts\PostsPage.js ---
+
+// --- frontend/src/pages/Posts/PostsPage.js ---
+import React, { useState, useMemo } from 'react';
+import FullCalendar from '@fullcalendar/react';
+import dayGridPlugin from '@fullcalendar/daygrid';
+import timeGridPlugin from '@fullcalendar/timegrid';
+import interactionPlugin from '@fullcalendar/interaction';
+import { Box, Paper, Typography, CircularProgress, useTheme } from '@mui/material';
+import { styled, alpha } from '@mui/material/styles';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { fetchPosts, updatePost } from 'api';
+import PostEditorModal from './PostEditorModal';
+import { toast } from 'react-hot-toast';
+
+const StyledCalendarWrapper = styled(Box)(({ theme }) => ({
+    '& .fc': {
+        '--fc-border-color': theme.palette.divider,
+        '--fc-daygrid-event-dot-width': '8px',
+        '--fc-event-border-color': 'transparent',
+        '--fc-event-text-color': theme.palette.common.white,
+        '--fc-today-bg-color': alpha(theme.palette.primary.main, 0.1),
+        '--fc-page-bg-color': 'transparent',
+        '--fc-neutral-bg-color': 'transparent',
+    },
+    '& .fc .fc-toolbar-title': { fontSize: '1.5em', fontWeight: 700, color: theme.palette.text.primary },
+    '& .fc .fc-button': {
+        background: alpha(theme.palette.text.secondary, 0.1),
+        color: theme.palette.text.primary,
+        border: `1px solid ${theme.palette.divider}`,
+        textTransform: 'none',
+        boxShadow: 'none',
+        '&:hover': { background: alpha(theme.palette.text.secondary, 0.2) },
+    },
+    '& .fc .fc-button-primary:not(:disabled).fc-button-active, .fc .fc-button-primary:not(:disabled):active': {
+        backgroundColor: theme.palette.primary.main,
+        borderColor: theme.palette.primary.main,
+    },
+    '& .fc-daygrid-day.fc-day-today': { background: alpha(theme.palette.primary.dark, 0.15) },
+    '& .fc-event': {
+        padding: '4px 8px',
+        borderRadius: theme.shape.borderRadius,
+        cursor: 'pointer',
+        transition: 'transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out',
+        border: 'none !important',
+        '&:hover': { transform: 'translateY(-2px)', boxShadow: theme.shadows[4] },
+    },
+    '& .fc-daygrid-day-number': { color: theme.palette.text.secondary, padding: '8px' },
+}));
+
+const PostsPage = () => {
+    const theme = useTheme();
+    const queryClient = useQueryClient();
+    const [modalState, setModalState] = useState({ open: false, event: null, date: null });
+
+    const { data: posts, isLoading } = useQuery({ queryKey: ['posts'], queryFn: fetchPosts });
+
+    const updateMutation = useMutation({
+        mutationFn: ({ postId, data }) => updatePost(postId, data),
+        onSuccess: () => {
+            toast.success("Дата публикации обновлена");
+            queryClient.invalidateQueries({ queryKey: ['posts'] });
+        },
+        onError: () => toast.error("Не удалось обновить дату"),
+    });
+
+    const events = useMemo(() => posts?.map(post => ({
+        id: post.id.toString(),
+        title: post.post_text,
+        start: new Date(post.publish_at),
+        allDay: false,
+        backgroundColor: {
+            scheduled: theme.palette.info.main,
+            published: theme.palette.success.main,
+            failed: theme.palette.error.main,
+        }[post.status],
+        extendedProps: { ...post },
+    })) || [], [posts, theme]);
+
+    const handleDateClick = (arg) => setModalState({ open: true, event: null, date: arg.dateStr });
+    const handleEventClick = (arg) => {
+        const fullPost = posts.find(p => p.id.toString() === arg.event.id);
+        setModalState({ open: true, event: fullPost, date: null });
+    };
+    const handleCloseModal = () => setModalState({ open: false, event: null, date: null });
+
+    const handleEventDrop = (info) => {
+        const { event } = info;
+        const postData = {
+            post_text: event.title,
+            publish_at: event.start.toISOString(),
+            attachments: event.extendedProps.attachments,
+        };
+        updateMutation.mutate({ postId: event.id, data: postData });
+    };
+
+    return (
+        <Box sx={{ p: 3 }}>
+            <Typography variant="h4" component="h1" sx={{ fontWeight: 600, mb: 3 }}>
+                Планировщик постов
+            </Typography>
+            <Paper sx={{ p: { xs: 1, sm: 2, md: 3 } }}>
+                {isLoading ? (
+                    <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}><CircularProgress /></Box>
+                ) : (
+                    <StyledCalendarWrapper>
+                        <FullCalendar
+                            plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
+                            initialView="dayGridMonth"
+                            headerToolbar={{
+                                left: 'prev,next today',
+                                center: 'title',
+                                right: 'dayGridMonth,timeGridWeek,timeGridDay'
+                            }}
+                            events={events}
+                            editable={true}
+                            selectable={true}
+                            selectMirror={true}
+                            dayMaxEvents={true}
+                            dateClick={handleDateClick}
+                            eventClick={handleEventClick}
+                            eventDrop={handleEventDrop}
+                            locale="ru"
+                            buttonText={{
+                                today: 'Сегодня',
+                                month: 'Месяц',
+                                week: 'Неделя',
+                                day: 'День',
+                            }}
+                            height="auto"
+                        />
+                    </StyledCalendarWrapper>
+                )}
+            </Paper>
+            <PostEditorModal
+                open={modalState.open}
+                onClose={handleCloseModal}
+                post={modalState.event}
+                selectedDate={modalState.date}
+            />
+        </Box>
+    );
+};
+
+export default PostsPage;
 
 // --- frontend/src\pages\Scenarios\ScenarioEditorModal.js ---
 
@@ -4177,63 +5242,36 @@ export default ScenarioEditorModal;
 
 // --- frontend/src\pages\Scenarios\ScenarioPage.js ---
 
-// frontend/src/pages/Scenarios/ScenarioPage.js
-import React, { useState } from 'react';
+// --- frontend/src/pages/Scenarios/ScenarioPage.js ---
+import React from 'react';
 import {
     Container, Typography, Box, Button, CircularProgress,
-    Paper, Stack, IconButton, Chip, Tooltip, Switch, alpha
+    Paper, Stack, IconButton, Switch, alpha, Grid
 } from '@mui/material';
 import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
-import PlayCircleOutlineIcon from '@mui/icons-material/PlayCircleOutline';
-import PauseCircleOutlineIcon from '@mui/icons-material/PauseCircleOutline';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchScenarios, deleteScenario, updateScenario } from 'api';
+import { fetchScenarios, deleteScenario } from 'api';
 import { toast } from 'react-hot-toast';
 import cronstrue from 'cronstrue/i18n';
-import ScenarioEditorModal from './ScenarioEditorModal';
-import { content } from 'content/content';
+import { useNavigate } from 'react-router-dom';
 
-const ScenarioCard = ({ scenario, onEdit, onDelete, onToggle }) => {
-    const toggleMutation = useMutation({
-        mutationFn: updateScenario,
-        onSuccess: onToggle.onSuccess,
-        onError: onToggle.onError,
-    });
-
-    const handleToggle = (event) => {
-        const isActive = event.target.checked;
-        toggleMutation.mutate({ ...scenario, is_active: isActive });
-    };
-
-    const isMutating = toggleMutation.isLoading;
-
+const ScenarioCard = ({ scenario, onEdit, onDelete }) => {
+    // В будущем здесь можно будет рендерить мини-карту сценария
     return (
-        <Paper sx={{ p: 2.5, display: 'flex', alignItems: 'center', gap: 2, transition: 'box-shadow 0.2s', '&:hover': { boxShadow: 3 } }}>
+        <Paper sx={{ p: 2.5, display: 'flex', flexDirection: 'column', height: '100%', transition: 'box-shadow 0.2s', '&:hover': { boxShadow: 3 } }}>
             <Box sx={{ flexGrow: 1 }}>
                 <Typography variant="h6" sx={{ fontWeight: 600 }}>{scenario.name}</Typography>
                 <Typography variant="body2" color="text.secondary">
                     {cronstrue.toString(scenario.schedule, { locale: "ru" })}
                 </Typography>
-                <Stack direction="row" spacing={1} sx={{ mt: 1.5, flexWrap: 'wrap', gap: 1 }}>
-                    {scenario.steps.slice(0, 5).map(step => (
-                        <Chip key={step.id} label={content.actions[step.action_type]?.title || step.action_type} size="small" variant="outlined" />
-                    ))}
-                    {scenario.steps.length > 5 && <Chip label={`+${scenario.steps.length - 5}`} size="small" />}
-                </Stack>
             </Box>
-            <Stack direction="row" alignItems="center" spacing={0.5}>
-                <Tooltip title={scenario.is_active ? "Приостановить" : "Запустить"}>
-                    <span>
-                        <Switch
-                            checked={scenario.is_active} onChange={handleToggle} disabled={isMutating}
-                            icon={<PlayCircleOutlineIcon />} checkedIcon={<PauseCircleOutlineIcon />} color="success"
-                        />
-                    </span>
-                </Tooltip>
-                <IconButton onClick={() => onEdit(scenario)} disabled={isMutating}><EditIcon /></IconButton>
-                <IconButton onClick={() => onDelete(scenario.id)} disabled={isMutating}><DeleteIcon sx={{color: 'error.light'}} /></IconButton>
+            <Stack direction="row" alignItems="center" spacing={0.5} sx={{ mt: 2 }}>
+                <Switch checked={scenario.is_active} />
+                <Box sx={{ flexGrow: 1 }} />
+                <IconButton onClick={() => onEdit(scenario.id)}><EditIcon /></IconButton>
+                <IconButton onClick={() => onDelete(scenario.id)}><DeleteIcon sx={{color: 'error.light'}} /></IconButton>
             </Stack>
         </Paper>
     );
@@ -4241,9 +5279,7 @@ const ScenarioCard = ({ scenario, onEdit, onDelete, onToggle }) => {
 
 export default function ScenariosPage() {
     const queryClient = useQueryClient();
-    const [isModalOpen, setIsModalOpen] = useState(false);
-    const [editingScenario, setEditingScenario] = useState(null);
-
+    const navigate = useNavigate();
     const { data: scenarios, isLoading } = useQuery({ queryKey: ['scenarios'], queryFn: fetchScenarios });
 
     const deleteMutation = useMutation({
@@ -4254,63 +5290,46 @@ export default function ScenariosPage() {
         },
         onError: (error) => toast.error(error.message || "Ошибка удаления"),
     });
-    
-    const onToggleSuccess = () => {
-        queryClient.invalidateQueries({ queryKey: ['scenarios'] });
-        toast.success("Статус сценария обновлен.");
-    };
 
-    const handleOpenModal = (scenario = null) => {
-        setEditingScenario(scenario);
-        setIsModalOpen(true);
-    };
-
-    const handleCloseModal = () => {
-        setEditingScenario(null);
-        setIsModalOpen(false);
-    };
+    const handleCreate = () => navigate('/scenarios/new');
+    const handleEdit = (id) => navigate(`/scenarios/${id}`);
 
     return (
-        <>
-            <Container maxWidth="md" sx={{ py: 4 }}>
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 4 }}>
-                    <Typography variant="h4" component="h1" sx={{ fontWeight: 600 }}>
-                        Мои Сценарии
-                    </Typography>
-                    <Button
-                        variant="contained" startIcon={<AddCircleOutlineIcon />}
-                        onClick={() => handleOpenModal()}>
-                        Создать сценарий
-                    </Button>
-                </Box>
+        <Container maxWidth="lg" sx={{ py: 4 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 4 }}>
+                <Typography variant="h4" component="h1" sx={{ fontWeight: 600 }}>
+                    Мои Сценарии
+                </Typography>
+                <Button variant="contained" startIcon={<AddCircleOutlineIcon />} onClick={handleCreate}>
+                    Создать сценарий
+                </Button>
+            </Box>
 
-                {isLoading ? (
-                    <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}><CircularProgress /></Box>
-                ) : (
-                    <Stack spacing={2}>
-                        {/* --- ИЗМЕНЕНИЕ: Добавлен блок "empty state" --- */}
-                        {scenarios?.length === 0 ? (
-                             <Paper sx={{ p: 5, textAlign: 'center', backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.05), borderStyle: 'dashed' }}>
-                                <Typography variant="h6" gutterBottom>У вас пока нет ни одного сценария</Typography>
-                                <Typography color="text.secondary">Сценарии позволяют автоматически выполнять цепочки действий по заданному расписанию. Нажмите "Создать", чтобы добавить первый.</Typography>
-                            </Paper>
-                        ) : (
-                            scenarios?.map(scenario => (
-                                <ScenarioCard
-                                    key={scenario.id} scenario={scenario}
-                                    onEdit={handleOpenModal} onDelete={deleteMutation.mutate}
-                                    onToggle={{ onSuccess: onToggleSuccess, onError: (error) => toast.error(error.message) }}
-                                />
-                            ))
-                        )}
-                    </Stack>
-                )}
-            </Container>
-            <ScenarioEditorModal
-                open={isModalOpen} onClose={handleCloseModal}
-                scenario={editingScenario}
-            />
-        </>
+            {isLoading ? (
+                <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}><CircularProgress /></Box>
+            ) : (
+                <>
+                    {scenarios?.length === 0 ? (
+                        <Paper sx={{ p: 5, textAlign: 'center', backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.05), borderStyle: 'dashed' }}>
+                            <Typography variant="h6" gutterBottom>У вас пока нет ни одного сценария</Typography>
+                            <Typography color="text.secondary">Сценарии позволяют создавать сложные цепочки действий с условиями. Нажмите "Создать", чтобы построить свой первый автоматизированный воркфлоу.</Typography>
+                        </Paper>
+                    ) : (
+                        <Grid container spacing={3}>
+                            {scenarios?.map(scenario => (
+                                <Grid item xs={12} sm={6} md={4} key={scenario.id}>
+                                    <ScenarioCard
+                                        scenario={scenario}
+                                        onEdit={handleEdit}
+                                        onDelete={deleteMutation.mutate}
+                                    />
+                                </Grid>
+                            ))}
+                        </Grid>
+                    )}
+                </>
+            )}
+        </Container>
     );
 }
 
@@ -4544,29 +5563,656 @@ export const StepSettings = ({ step, onSettingsChange, onBatchChange }) => {
     );
 };
 
+// --- frontend/src\pages\Scenarios\editor\ScenarioEditorPage.js ---
+
+
+// --- frontend/src/pages/Scenarios/editor/ScenarioEditorPage.js ---
+import React, { useState, useRef, useCallback, useEffect } from 'react';
+import { Box, Paper, Button, CircularProgress, TextField, Switch, FormControlLabel } from '@mui/material';
+import ReactFlow, { ReactFlowProvider, Background, Controls, useNodesState, useEdgesState, addEdge } from 'reactflow';
+import 'reactflow/dist/style.css';
+import { useParams, useNavigate } from 'react-router-dom';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'react-hot-toast';
+
+import { fetchScenarioById, createScenario, updateScenario } from 'api';
+import { CronBuilder } from '../components/CronBuilder';
+import Sidebar from './Sidebar';
+import ActionNode from './nodes/ActionNode';
+import ConditionNode from './nodes/ConditionNode';
+import StartNode from './nodes/StartNode';
+
+const nodeTypes = {
+    action: ActionNode,
+    condition: ConditionNode,
+    start: StartNode,
+};
+
+let idCounter = 1;
+const getUniqueNodeId = () => `dndnode_${Date.now()}_${idCounter++}`;
+
+const ScenarioEditorPage = () => {
+    const { id: scenarioId } = useParams();
+    const isNew = scenarioId === 'new';
+    const navigate = useNavigate();
+    const queryClient = useQueryClient();
+    const reactFlowWrapper = useRef(null);
+    const [nodes, setNodes, onNodesChange] = useNodesState([]);
+    const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+    const [reactFlowInstance, setReactFlowInstance] = useState(null);
+
+    const [name, setName] = useState('');
+    const [schedule, setSchedule] = useState('0 9 * * *');
+    const [isActive, setIsActive] = useState(false);
+
+    const handleNodeDataChange = useCallback((nodeId, newData) => {
+        setNodes((nds) =>
+          nds.map((node) => {
+            if (node.id === nodeId) {
+              return { ...node, data: { ...node.data, ...newData } };
+            }
+            return node;
+          })
+        );
+    }, [setNodes]);
+
+    const { isLoading: isLoadingScenario } = useQuery({
+        queryKey: ['scenario', scenarioId],
+        queryFn: () => fetchScenarioById(scenarioId),
+        enabled: !isNew,
+        onSuccess: (data) => {
+            if (data) {
+                setName(data.name);
+                setSchedule(data.schedule);
+                setIsActive(data.is_active);
+                setNodes(data.nodes.map(n => ({...n, data: {...n.data, onDataChange: (newData) => handleNodeDataChange(n.id, newData)}})) || []);
+                setEdges(data.edges || []);
+            }
+        }
+    });
+
+    useEffect(() => {
+        if (isNew) {
+            setNodes([{ id: 'start', type: 'start', position: { x: 250, y: 25 }, data: { id: 'start', type: 'start', onDataChange: () => {} } }]);
+            setEdges([]);
+        }
+    }, [isNew, setNodes, setEdges, handleNodeDataChange]);
+
+    const mutation = useMutation({
+        mutationFn: (data) => isNew ? createScenario(data) : updateScenario(scenarioId, data),
+        onSuccess: () => {
+            toast.success(`Сценарий успешно ${isNew ? 'создан' : 'обновлен'}!`);
+            queryClient.invalidateQueries({ queryKey: ['scenarios'] });
+            navigate('/scenarios');
+        },
+        onError: (err) => toast.error(err.response?.data?.detail || "Ошибка сохранения"),
+    });
+
+    const onConnect = useCallback((params) => setEdges((eds) => addEdge({ ...params, type: 'smoothstep', animated: true }, eds)), [setEdges]);
+
+    const onDragOver = useCallback((event) => {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+    }, []);
+
+    const onDrop = useCallback(
+        (event) => {
+            event.preventDefault();
+            const type = event.dataTransfer.getData('application/reactflow');
+            if (typeof type === 'undefined' || !type) return;
+
+            const position = reactFlowInstance.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+            const newNodeId = getUniqueNodeId();
+            const newNode = {
+                id: newNodeId,
+                type,
+                position,
+                data: { id: newNodeId, onDataChange: (newData) => handleNodeDataChange(newNodeId, newData) },
+            };
+            setNodes((nds) => nds.concat(newNode));
+        },
+        [reactFlowInstance, setNodes, handleNodeDataChange]
+    );
+
+    const handleSave = () => {
+        const scenarioPayload = { 
+            name: name || 'Без названия', 
+            schedule: schedule, 
+            is_active: isActive, 
+            nodes: nodes.map(n => ({...n, data: { ...n.data, onDataChange: undefined }})), // Удаляем callback перед отправкой
+            edges 
+        };
+        mutation.mutate(scenarioPayload);
+    };
+    
+    if (isLoadingScenario) return <Box sx={{display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%'}}><CircularProgress /></Box>;
+
+    return (
+        <Box sx={{ height: 'calc(100vh - 64px)', display: 'flex', flexDirection: 'column' }}>
+            <Paper sx={{ p: 2, display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center', borderBottom: 1, borderColor: 'divider' }}>
+                <TextField label="Название сценария" value={name} onChange={(e) => setName(e.target.value)} size="small" />
+                <CronBuilder schedule={schedule} setSchedule={setSchedule} />
+                <FormControlLabel control={<Switch checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />} label="Активен" />
+                <Box sx={{ flexGrow: 1 }} />
+                <Button variant="contained" onClick={handleSave} disabled={mutation.isLoading}>
+                    {mutation.isLoading ? <CircularProgress size={24} /> : 'Сохранить'}
+                </Button>
+            </Paper>
+            <Box sx={{ flexGrow: 1, display: 'flex' }}>
+                <ReactFlowProvider>
+                    <Sidebar />
+                    <Box sx={{ flexGrow: 1, height: '100%' }} ref={reactFlowWrapper}>
+                        <ReactFlow
+                            nodes={nodes}
+                            edges={edges}
+                            onNodesChange={onNodesChange}
+                            onEdgesChange={onEdgesChange}
+                            onConnect={onConnect}
+                            onDrop={onDrop}
+                            onDragOver={onDragOver}
+                            onInit={setReactFlowInstance}
+                            nodeTypes={nodeTypes}
+                            fitView
+                        >
+                            <Background />
+                            <Controls />
+                        </ReactFlow>
+                    </Box>
+                </ReactFlowProvider>
+            </Box>
+        </Box>
+    );
+};
+
+export default ScenarioEditorPage;
+
+// --- frontend/src\pages\Scenarios\editor\Sidebar.js ---
+
+// --- frontend/src/pages/Scenarios/editor/Sidebar.js ---
+import React from 'react';
+import { Paper, Typography, Box } from '@mui/material';
+
+const DraggableNode = ({ type, label }) => {
+    const onDragStart = (event, nodeType) => {
+        event.dataTransfer.setData('application/reactflow', nodeType);
+        event.dataTransfer.effectAllowed = 'move';
+    };
+
+    return (
+        <Box
+            onDragStart={(event) => onDragStart(event, type)}
+            draggable
+            sx={{
+                p: 1.5,
+                border: 1,
+                borderColor: 'divider',
+                borderRadius: 2,
+                bgcolor: 'background.paper',
+                cursor: 'grab',
+                '&:hover': {
+                    borderColor: 'primary.main',
+                    boxShadow: 3,
+                }
+            }}
+        >
+            <Typography variant="body2" sx={{ fontWeight: 500 }}>{label}</Typography>
+        </Box>
+    );
+};
+
+const Sidebar = () => {
+    return (
+        <Paper sx={{ width: 250, p: 2, m: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <Typography variant="h6">Инструменты</Typography>
+            <DraggableNode type="action" label="Действие" />
+            <DraggableNode type="condition" label="Условие" />
+        </Paper>
+    );
+};
+
+export default Sidebar;
+
+// --- frontend/src\pages\Scenarios\editor\nodes\ActionNode.js ---
+
+// --- frontend/src/pages/Scenarios/editor/nodes/ActionNode.js ---
+import React, { useState } from 'react';
+import { FormControl, Select, MenuItem } from '@mui/material';
+import { NodeWrapper, InputHandle, OutputHandle } from './common';
+import { content } from 'content/content';
+
+const ActionNode = ({ data }) => {
+    const [action, setAction] = useState(data.actionType || '');
+
+    const handleSettingsClick = () => {
+        // Открыть модальное окно с настройками для `action`
+        console.log(`Settings for ${action}`);
+    };
+
+    return (
+        <NodeWrapper title="Действие" onSettingsClick={action ? handleSettingsClick : null}>
+            <InputHandle />
+            <FormControl fullWidth size="small">
+                <Select value={action} onChange={(e) => setAction(e.target.value)} displayEmpty>
+                    <MenuItem value="" disabled><em>Выберите действие</em></MenuItem>
+                    {Object.entries(content.actions).map(([key, { title }]) => (
+                        <MenuItem key={key} value={key}>{title}</MenuItem>
+                    ))}
+                </Select>
+            </FormControl>
+            <OutputHandle id="next" />
+        </NodeWrapper>
+    );
+};
+
+export default ActionNode;
+
+// --- frontend/src\pages\Scenarios\editor\nodes\common.js ---
+
+// --- frontend/src/pages/Scenarios/editor/nodes/common.js ---
+import { Handle, Position } from 'reactflow';
+import { Paper, Typography, Box, IconButton, Tooltip } from '@mui/material';
+import SettingsIcon from '@mui/icons-material/Settings';
+
+export const NodeWrapper = ({ children, title, onSettingsClick }) => (
+    <Paper sx={{ border: 2, borderColor: 'primary.main', borderRadius: 2, width: 250 }}>
+        <Box sx={{ p: 1, bgcolor: 'primary.main', color: 'primary.contrastText', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Typography variant="body2" sx={{ fontWeight: 600 }}>{title}</Typography>
+            {onSettingsClick && (
+                <Tooltip title="Настройки шага">
+                    <IconButton size="small" onClick={onSettingsClick} sx={{ color: 'primary.contrastText' }}>
+                        <SettingsIcon fontSize="small" />
+                    </IconButton>
+                </Tooltip>
+            )}
+        </Box>
+        <Box sx={{ p: 2 }}>
+            {children}
+        </Box>
+    </Paper>
+);
+
+export const InputHandle = () => <Handle type="target" position={Position.Left} style={{ background: '#555' }} />;
+export const OutputHandle = ({ id }) => <Handle type="source" position={Position.Right} id={id} style={{ background: '#555' }} />;
+
+// --- frontend/src\pages\Scenarios\editor\nodes\ConditionNode.js ---
+
+// --- frontend/src/pages/Scenarios/editor/nodes/ConditionNode.js ---
+import React, { useState } from 'react';
+import { FormControl, Select, MenuItem, Stack, Typography, TextField } from '@mui/material';
+import { Handle, Position } from 'reactflow';
+import { NodeWrapper, InputHandle } from './common';
+
+// Заглушка, потом будет приходить с API
+const availableConditions = [
+    { key: "friends_count", label: "Количество друзей", type: "number", operators: [">", "<", "=="] },
+    { key: "day_of_week", label: "День недели", type: "select", operators: ["=="], options: [{value: "1", label: "Пн"}] },
+];
+
+const ConditionNode = () => {
+    const [condition, setCondition] = useState('');
+    const selectedCondition = availableConditions.find(c => c.key === condition);
+
+    return (
+        <NodeWrapper title="Условие">
+            <InputHandle />
+            <Stack spacing={2}>
+                <FormControl fullWidth size="small">
+                    <Select value={condition} onChange={(e) => setCondition(e.target.value)} displayEmpty>
+                         <MenuItem value="" disabled><em>Выберите метрику</em></MenuItem>
+                         {availableConditions.map(c => <MenuItem key={c.key} value={c.key}>{c.label}</MenuItem>)}
+                    </Select>
+                </FormControl>
+                {selectedCondition && (
+                    <Stack direction="row" spacing={1} alignItems="center">
+                        <FormControl sx={{ minWidth: 80 }} size="small">
+                            <Select defaultValue=">">
+                                {selectedCondition.operators.map(op => <MenuItem key={op} value={op}>{op}</MenuItem>)}
+                            </Select>
+                        </FormControl>
+                        <TextField size="small" type={selectedCondition.type} />
+                    </Stack>
+                )}
+            </Stack>
+            <Handle type="source" position={Position.Right} id="on_success" style={{ top: '35%', background: '#4CAF50' }} />
+            <Typography variant="caption" sx={{ position: 'absolute', right: -25, top: '35%', transform: 'translateY(-50%)', color: '#4CAF50' }}>Да</Typography>
+            <Handle type="source" position={Position.Right} id="on_failure" style={{ top: '65%', background: '#F44336' }} />
+            <Typography variant="caption" sx={{ position: 'absolute', right: -25, top: '65%', transform: 'translateY(-50%)', color: '#F44336' }}>Нет</Typography>
+        </NodeWrapper>
+    );
+};
+
+export default ConditionNode;
+
+// --- frontend/src\pages\Scenarios\editor\nodes\StartNode.js ---
+
+// --- frontend/src/pages/Scenarios/editor/nodes/StartNode.js ---
+import React from 'react';
+import { NodeWrapper, OutputHandle } from './common';
+
+const StartNode = () => {
+    return (
+        <NodeWrapper title="Старт">
+            <OutputHandle id="next" />
+        </NodeWrapper>
+    );
+};
+
+export default StartNode;
+
+// --- frontend/src\pages\Team\AccessControlModal.js ---
+
+// --- frontend/src/pages/Team/AccessControlModal.js ---
+import React, { useState, useEffect } from 'react';
+import { Dialog, DialogTitle, DialogContent, DialogActions, Button, List, ListItem, ListItemText, Checkbox, ListItemIcon, Avatar, CircularProgress, Typography } from '@mui/material';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { updateMemberAccess } from 'api';
+import { toast } from 'react-hot-toast';
+
+const AccessControlModal = ({ open, onClose, member }) => {
+    const queryClient = useQueryClient();
+    const [accesses, setAccesses] = useState([]);
+
+    useEffect(() => {
+        if (member) {
+            setAccesses(member.accesses || []);
+        }
+    }, [member]);
+
+    const mutation = useMutation({
+        mutationFn: (newAccesses) => updateMemberAccess(member.id, newAccesses),
+        onSuccess: () => {
+            toast.success("Права доступа обновлены!");
+            queryClient.invalidateQueries({ queryKey: ['myTeam'] });
+            onClose();
+        },
+        onError: (err) => toast.error(err.response?.data?.detail || "Ошибка сохранения"),
+    });
+
+    const handleToggle = (profileId) => {
+        setAccesses(prev => prev.map(acc => 
+            acc.profile.id === profileId ? { ...acc, has_access: !acc.has_access } : acc
+        ));
+    };
+
+    const handleSave = () => {
+        const payload = accesses.map(acc => ({
+            profile_user_id: acc.profile.id,
+            has_access: acc.has_access
+        }));
+        mutation.mutate(payload);
+    };
+
+    return (
+        <Dialog open={open} onClose={onClose} fullWidth>
+            <DialogTitle>
+                Настройка доступа для {member?.user_info.first_name}
+            </DialogTitle>
+            <DialogContent dividers>
+                {accesses.length > 0 ? (
+                    <List>
+                        {accesses.map(access => (
+                            <ListItem key={access.profile.id} button onClick={() => handleToggle(access.profile.id)}>
+                                <ListItemIcon>
+                                    <Avatar src={access.profile.photo_50} sx={{ width: 32, height: 32 }}/>
+                                </ListItemIcon>
+                                <ListItemText 
+                                    primary={`${access.profile.first_name} ${access.profile.last_name}`}
+                                    secondary={`ID: ${access.profile.vk_id}`}
+                                />
+                                <Checkbox edge="end" checked={access.has_access} />
+                            </ListItem>
+                        ))}
+                    </List>
+                ) : (
+                    <Typography color="text.secondary" sx={{p: 2, textAlign: 'center'}}>
+                        У вас нет подключенных профилей для предоставления доступа.
+                    </Typography>
+                )}
+            </DialogContent>
+            <DialogActions>
+                <Button onClick={onClose} disabled={mutation.isLoading}>Отмена</Button>
+                <Button onClick={handleSave} variant="contained" disabled={mutation.isLoading}>
+                    {mutation.isLoading ? <CircularProgress size={24} /> : "Сохранить"}
+                </Button>
+            </DialogActions>
+        </Dialog>
+    );
+};
+
+export default AccessControlModal;
+
+// --- frontend/src\pages\Team\InviteMemberModal.js ---
+
+// --- frontend/src/pages/Team/InviteMemberModal.js --- (НОВЫЙ ФАЙЛ)
+import React, { useState } from 'react';
+import { Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, CircularProgress } from '@mui/material';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { inviteTeamMember } from 'api';
+import { toast } from 'react-hot-toast';
+
+const InviteMemberModal = ({ open, onClose }) => {
+    const queryClient = useQueryClient();
+    const [vkId, setVkId] = useState('');
+
+    const mutation = useMutation({
+        mutationFn: () => inviteTeamMember(Number(vkId)),
+        onSuccess: () => {
+            toast.success("Приглашение отправлено!");
+            queryClient.invalidateQueries({ queryKey: ['myTeam'] });
+            onClose();
+            setVkId('');
+        },
+        onError: (err) => toast.error(err.response?.data?.detail || "Ошибка приглашения"),
+    });
+
+    const handleInvite = () => {
+        if (!vkId || isNaN(Number(vkId))) {
+            toast.error("Введите корректный VK ID пользователя.");
+            return;
+        }
+        mutation.mutate();
+    };
+
+    return (
+        <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
+            <DialogTitle>Пригласить в команду</DialogTitle>
+            <DialogContent>
+                <TextField
+                    autoFocus
+                    margin="dense"
+                    label="VK ID пользователя"
+                    fullWidth
+                    variant="outlined"
+                    value={vkId}
+                    onChange={(e) => setVkId(e.target.value)}
+                    placeholder="Например: 12345678"
+                    helperText="Пользователь уже должен быть зарегистрирован в Zenith."
+                />
+            </DialogContent>
+            <DialogActions>
+                <Button onClick={onClose} disabled={mutation.isLoading}>Отмена</Button>
+                <Button onClick={handleInvite} variant="contained" disabled={mutation.isLoading}>
+                    {mutation.isLoading ? <CircularProgress size={24} /> : "Пригласить"}
+                </Button>
+            </DialogActions>
+        </Dialog>
+    );
+};
+
+export default InviteMemberModal;
+
+// --- frontend/src\pages\Team\TeamPage.js ---
+
+// --- frontend/src/pages/Team/TeamPage.js ---
+import React, { useState } from 'react';
+import { Container, Typography, Box, Button, CircularProgress, Paper, Stack, Avatar, IconButton, Tooltip, alpha } from '@mui/material';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { fetchMyTeam, removeTeamMember } from 'api';
+import EditIcon from '@mui/icons-material/Edit';
+import DeleteIcon from '@mui/icons-material/Delete';
+import AddIcon from '@mui/icons-material/Add';
+import AccessControlModal from './AccessControlModal';
+import InviteMemberModal from './InviteMemberModal';
+import { toast } from 'react-hot-toast';
+
+const TeamMemberCard = ({ member, onEditAccess, onDelete, isOwner }) => (
+    <Paper sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 2 }}>
+        <Avatar src={member.user_info.photo_50} />
+        <Box sx={{ flexGrow: 1 }}>
+            <Typography variant="h6">{member.user_info.first_name} {member.user_info.last_name}</Typography>
+            <Typography variant="body2" color="text.secondary">{isOwner ? 'Владелец' : 'Участник'}</Typography>
+        </Box>
+        <Tooltip title="Настроить доступ">
+            <span>
+                <IconButton onClick={() => onEditAccess(member)} disabled={isOwner}><EditIcon /></IconButton>
+            </span>
+        </Tooltip>
+        <Tooltip title="Удалить из команды">
+            <span>
+                <IconButton onClick={() => onDelete(member.id)} disabled={isOwner}><DeleteIcon color={isOwner ? 'disabled' : "error"} /></IconButton>
+            </span>
+        </Tooltip>
+    </Paper>
+);
+
+const TeamPage = () => {
+    const queryClient = useQueryClient();
+    const [accessModal, setAccessModal] = useState({ open: false, member: null });
+    const [isInviteModalOpen, setInviteModalOpen] = useState(false);
+    
+    const { data: team, isLoading } = useQuery({ queryKey: ['myTeam'], queryFn: fetchMyTeam });
+
+    const deleteMutation = useMutation({
+        mutationFn: removeTeamMember,
+        onSuccess: () => {
+            toast.success("Участник удален из команды.");
+            queryClient.invalidateQueries({ queryKey: ['myTeam'] });
+        },
+        onError: (err) => toast.error(err.response?.data?.detail || "Ошибка удаления"),
+    });
+
+    const handleDeleteMember = (memberId) => {
+        if (window.confirm("Вы уверены, что хотите удалить этого участника из команды?")) {
+            deleteMutation.mutate(memberId);
+        }
+    };
+
+    const handleOpenAccessModal = (member) => {
+        setAccessModal({ open: true, member });
+    };
+
+    return (
+        <Container maxWidth="md" sx={{ py: 4 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 4 }}>
+                <Typography variant="h4" component="h1" sx={{ fontWeight: 600 }}>
+                    {isLoading ? 'Загрузка...' : `Команда "${team?.name}"`}
+                </Typography>
+                <Button variant="contained" startIcon={<AddIcon />} onClick={() => setInviteModalOpen(true)}>
+                    Пригласить участника
+                </Button>
+            </Box>
+
+            {isLoading ? (
+                <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}><CircularProgress /></Box>
+            ) : (
+                <Stack spacing={2}>
+                    {team?.members && team.members.length > 0 ? (
+                        team.members.map(member => (
+                            <TeamMemberCard 
+                                key={member.id} 
+                                member={member} 
+                                onEditAccess={handleOpenAccessModal}
+                                onDelete={handleDeleteMember}
+                                isOwner={member.user_id === team.owner_id}
+                            />
+                        ))
+                    ) : (
+                        <Paper sx={{ p: 5, textAlign: 'center', backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.05), borderStyle: 'dashed' }}>
+                            <Typography variant="h6" gutterBottom>В вашей команде пока нет участников</Typography>
+                            <Typography color="text.secondary">Нажмите "Пригласить", чтобы добавить SMM-менеджеров и выдать им доступ к клиентским проектам.</Typography>
+                        </Paper>
+                    )}
+                </Stack>
+            )}
+
+            {accessModal.member && (
+                <AccessControlModal
+                    open={accessModal.open}
+                    onClose={() => setAccessModal({ open: false, member: null })}
+                    member={accessModal.member}
+                />
+            )}
+            <InviteMemberModal
+                open={isInviteModalOpen}
+                onClose={() => setInviteModalOpen(false)}
+            />
+        </Container>
+    );
+};
+
+export default TeamPage;
+
 // --- frontend/src\store\authSlice.js ---
 
-// frontend/src/store/authSlice.js
+// --- frontend/src/store/authSlice.js ---
 import { disconnectWebSocket } from '../websocket';
+import { jwtDecode } from 'jwt-decode';
+import { apiClient } from 'api';
+import { toast } from 'react-hot-toast';
 
 export const createAuthSlice = (set, get) => ({
   jwtToken: localStorage.getItem('jwtToken') || null,
   isLoading: true,
+  activeProfileId: null,
+  managerId: null,
 
   actions: {
     login: (token) => {
       localStorage.setItem('jwtToken', token);
-      set({ jwtToken: token });
+      const decoded = jwtDecode(token);
+      set({ 
+        jwtToken: token, 
+        managerId: decoded.sub, 
+        activeProfileId: decoded.profile_id || decoded.sub 
+      });
     },
     logout: () => {
       localStorage.removeItem('jwtToken');
       disconnectWebSocket();
       get().actions.resetUserSlice(); 
-      set({ jwtToken: null, isLoading: false });
+      set({ jwtToken: null, isLoading: false, activeProfileId: null, managerId: null });
+    },
+    setActiveProfile: async (profileId) => {
+      if (profileId === get().activeProfileId) return;
+
+      try {
+        const response = await apiClient.post('/api/v1/auth/switch-profile', { profile_id: profileId });
+        const { access_token } = response.data;
+        get().actions.login(access_token);
+        window.location.reload();
+      } catch (error) {
+        toast.error("Не удалось переключить профиль.");
+        console.error("Profile switch failed:", error);
+      }
     },
     finishInitialLoad: () => {
       set({ isLoading: false });
     },
+    decodeAndSetIds: () => {
+      const token = get().jwtToken;
+      if (token) {
+        try {
+          const decoded = jwtDecode(token);
+          set({
+            managerId: decoded.sub,
+            activeProfileId: decoded.profile_id || decoded.sub
+          });
+        } catch (e) {
+          console.error("Invalid token:", e);
+          get().actions.logout();
+        }
+      }
+    }
   }
 });
 

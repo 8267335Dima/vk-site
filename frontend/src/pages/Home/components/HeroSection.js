@@ -1,4 +1,4 @@
-// frontend/src/pages/Home/components/HeroSection.js
+// --- frontend/src/pages/Home/components/HeroSection.js ---
 import React from 'react';
 import { Container, Typography, Button, Stack } from '@mui/material';
 import { Link as RouterLink } from 'react-router-dom';
@@ -21,21 +21,19 @@ const HeroSection = () => {
             component="h1" 
             sx={{
               fontWeight: 800,
-              maxWidth: '850px',
+              maxWidth: '950px',
               mx: 'auto',
-              background: (theme) => `linear-gradient(45deg, ${theme.palette.primary.main} 30%, ${theme.palette.secondary.main} 90%)`,
+              background: (theme) => `linear-gradient(45deg, ${theme.palette.text.primary} 60%, ${theme.palette.secondary.main} 100%)`,
               WebkitBackgroundClip: 'text',
               WebkitTextFillColor: 'transparent',
             }}
           >
-            {/* --- ИЗМЕНЕНИЕ: Текст стал более профессиональным --- */}
-            Интеллектуальная платформа для продвижения ВКонтакте
+            Платформа для органического роста и автоматизации SMM-задач ВКонтакте
           </Typography>
         </motion.div>
         <motion.div variants={{ hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0, transition: { duration: 0.7, delay: 0.2 } } }}>
           <Typography variant="h6" color="text.secondary" paragraph sx={{ mt: 3, mb: 4, maxWidth: '750px', mx: 'auto' }}>
-            {/* --- ИЗМЕНЕНИЕ: Описание стало более конкретным --- */}
-            Zenith — это ваш надежный партнер для органического роста, повышения охватов и комплексной автоматизации рутинных SMM-задач. Сосредоточьтесь на контенте, а мы позаботимся о его продвижении.
+            Zenith эмулирует поведенческие факторы для естественного увеличения охватов и автоматизирует рутинные процессы. Сосредоточьтесь на контенте, а мы позаботимся о его эффективном продвижении.
           </Typography>
         </motion.div>
         <motion.div variants={{ hidden: { scale: 0.8, opacity: 0 }, visible: { scale: 1, opacity: 1, transition: { duration: 0.5, delay: 0.4 } } }}>
@@ -43,7 +41,6 @@ const HeroSection = () => {
               <Button variant="contained" size="large" component={RouterLink} to="/login" sx={{py: 1.5, px: 5, fontSize: '1.1rem'}}>
                   Начать бесплатно (14 дней)
               </Button>
-              {/* --- ИЗМЕНЕНИЕ: Кнопка теперь ведет на страницу тарифов --- */}
               <Button variant="outlined" size="large" component={RouterLink} to="/billing" sx={{py: 1.5, px: 5, fontSize: '1.1rem'}}>
                   Смотреть тарифы
               </Button>
@@ -53,5 +50,4 @@ const HeroSection = () => {
     </Container>
   );
 };
-
 export default HeroSection;

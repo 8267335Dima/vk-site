@@ -1,4 +1,4 @@
-// frontend/src/pages/Home/components/AdvantageSection.js
+// --- frontend/src/pages/Home/components/AdvantageSection.js ---
 import React from 'react';
 import { Typography, Stack, Paper, alpha, useTheme, Grid } from '@mui/material';
 import { motion } from 'framer-motion';
@@ -25,7 +25,6 @@ const staggerContainer = {
     animate: { transition: { staggerChildren: 0.15 } }
 };
 
-// --- ИЗМЕНЕНИЕ: Улучшенная всплывающая подсказка для графика ---
 const CustomTooltip = ({ active, payload, label }) => {
     if (active && payload && payload.length) {
         return (
@@ -55,18 +54,18 @@ const AdvantageSection = () => {
                            Ваше технологическое преимущество
                         </Typography>
                         <Typography variant="h6" color="text.secondary" sx={{ mb: 4 }}>
-                            Мы объединили передовые технологии и глубокое понимание алгоритмов, чтобы вы получали измеримый результат.
+                            Мы объединили поведенческую эмуляцию и data-driven подход, чтобы вы получали измеримый и органический результат.
                         </Typography>
                     </motion.div>
                     <Stack spacing={3}>
                         <motion.div variants={fadeInUp}>
-                            <Stack direction="row" spacing={2}><SecurityIcon color="primary"/><Typography><b>Безопасность — наш приоритет:</b> работа через временный токен VK и поддержка личных прокси для полной анонимности.</Typography></Stack>
+                            <Stack direction="row" spacing={2}><SecurityIcon color="primary"/><Typography><b>Безопасность — наш приоритет:</b> работа через временный API-ключ и поддержка персональных прокси для полной анонимности.</Typography></Stack>
                         </motion.div>
                         <motion.div variants={fadeInUp}>
-                            <Stack direction="row" spacing={2}><AutoAwesomeIcon color="primary"/><Typography><b>Интеллектуальная имитация:</b> алгоритм Humanizer™ делает автоматизацию неотличимой от ручной работы, предотвращая блокировки.</Typography></Stack>
+                            <Stack direction="row" spacing={2}><AutoAwesomeIcon color="primary"/><Typography><b>Интеллектуальная имитация:</b> алгоритм Humanizer™ делает автоматизацию неотличимой от ручной работы, соблюдая динамические лимиты VK.</Typography></Stack>
                         </motion.div>
                          <motion.div variants={fadeInUp}>
-                            <Stack direction="row" spacing={2}><TimerIcon color="primary"/><Typography><b>Автоматизация 24/7:</b> настройте сценарии один раз, и Zenith будет работать на вас круглосуточно, даже когда вы оффлайн.</Typography></Stack>
+                            <Stack direction="row" spacing={2}><TimerIcon color="primary"/><Typography><b>Облачная инфраструктура 24/7:</b> настройте сценарии один раз, и Zenith будет работать на вас круглосуточно, даже когда вы оффлайн.</Typography></Stack>
                         </motion.div>
                     </Stack>
                  </motion.div>
@@ -84,8 +83,8 @@ const AdvantageSection = () => {
                                 <YAxis yAxisId="right" orientation="right" stroke={theme.palette.secondary.main} fontSize="0.8rem" />
                                 <Tooltip content={<CustomTooltip />} />
                                 <Legend />
-                                <Line yAxisId="left" type="monotone" dataKey="Охват" stroke={theme.palette.primary.main} strokeWidth={3} dot={false}/>
-                                <Line yAxisId="right" type="monotone" dataKey="Подписчики" stroke={theme.palette.secondary.main} strokeWidth={3} dot={false}/>
+                                <Line yAxisId="left" type="monotone" dataKey="Охват" stroke={theme.palette.primary.main} strokeWidth={3} dot={{ r: 4, strokeWidth: 2, fill: theme.palette.background.paper }} activeDot={{ r: 8 }}/>
+                                <Line yAxisId="right" type="monotone" dataKey="Подписчики" stroke={theme.palette.secondary.main} strokeWidth={3} dot={{ r: 4, strokeWidth: 2, fill: theme.palette.background.paper }} activeDot={{ r: 8 }}/>
                             </LineChart>
                          </ResponsiveContainer>
                      </Paper>

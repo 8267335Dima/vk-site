@@ -5,14 +5,14 @@ from sqlalchemy import select, update, func
 
 from app.db.session import get_db
 from app.db.models import User, Notification
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_active_profile
 from app.api.schemas.notifications import NotificationsResponse
 
 router = APIRouter()
 
 @router.get("", response_model=NotificationsResponse)
 async def get_notifications(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
     """Возвращает последние 50 уведомлений и количество непрочитанных."""
@@ -39,7 +39,7 @@ async def get_notifications(
 
 @router.post("/read", status_code=status.HTTP_204_NO_CONTENT)
 async def mark_notifications_as_read(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
     """Отмечает все уведомления пользователя как прочитанные."""

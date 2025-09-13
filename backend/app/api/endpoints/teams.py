@@ -1,0 +1,159 @@
+# --- backend/app/api/endpoints/teams.py ---
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload, joinedload
+from sqlalchemy import select, delete
+from typing import List
+
+from app.db.session import get_db
+from app.db.models import User, Team, TeamMember, ManagedProfile, TeamProfileAccess, TeamMemberRole
+from app.api.dependencies import get_current_manager_user
+from app.api.schemas.teams import TeamRead, TeamCreate, InviteMemberRequest, UpdateAccessRequest, TeamMemberRead, ProfileInfo, TeamMemberAccess
+from app.core.plans import is_feature_available_for_plan, get_plan_config
+from app.services.vk_api import VKAPI
+from app.core.security import decrypt_data
+import structlog
+
+log = structlog.get_logger(__name__)
+router = APIRouter()
+
+async def check_agency_plan(manager: User = Depends(get_current_manager_user)):
+    if not is_feature_available_for_plan(manager.plan, "agency_mode"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Управление командой доступно только на тарифе 'Agency'."
+        )
+    return manager
+
+async def get_team_owner(manager: User = Depends(check_agency_plan), db: AsyncSession = Depends(get_db)):
+    # Используем joinedload для эффективности
+    stmt = select(Team).options(joinedload(Team.members)).where(Team.owner_id == manager.id)
+    team = (await db.execute(stmt)).scalar_one_or_none()
+    if not team:
+        # Если команды нет, создаем ее автоматически
+        team = Team(name=f"Команда {manager.id}", owner_id=manager.id)
+        db.add(team)
+        await db.commit()
+        await db.refresh(team)
+    return manager, team
+
+@router.get("/my-team", response_model=TeamRead)
+async def get_my_team(
+    manager_and_team: tuple = Depends(get_team_owner),
+    db: AsyncSession = Depends(get_db)
+):
+    manager, team = manager_and_team
+    # Глубокая загрузка всех связанных данных
+    stmt = (
+        select(Team)
+        .options(
+            selectinload(Team.members).selectinload(TeamMember.user),
+            selectinload(Team.members).selectinload(TeamMember.profile_accesses)
+        )
+        .where(Team.id == team.id)
+    )
+    team_details = (await db.execute(stmt)).scalar_one()
+
+    # Получаем все управляемые профили менеджера один раз
+    managed_profiles_db = (await db.execute(
+        select(ManagedProfile).options(selectinload(ManagedProfile.profile)).where(ManagedProfile.manager_user_id == manager.id)
+    )).scalars().all()
+    
+    all_profiles_map = {mp.profile.id: mp.profile for mp in managed_profiles_db}
+
+    members_response = []
+    for member in team_details.members:
+        member_vk_info = await VKAPI(decrypt_data(member.user.encrypted_vk_token)).get_user_info(fields="photo_50")
+        
+        accesses = []
+        member_access_map = {pa.profile_user_id for pa in member.profile_accesses}
+        
+        for profile in all_profiles_map.values():
+            profile_vk_info = await VKAPI(decrypt_data(profile.encrypted_vk_token)).get_user_info(fields="photo_50")
+            accesses.append(TeamMemberAccess(
+                profile=ProfileInfo(
+                    id=profile.id, vk_id=profile.vk_id,
+                    first_name=profile_vk_info.get("first_name", ""),
+                    last_name=profile_vk_info.get("last_name", ""),
+                    photo_50=profile_vk_info.get("photo_50", "")
+                ),
+                has_access=profile.id in member_access_map
+            ))
+            
+        members_response.append(TeamMemberRead(
+            id=member.id, user_id=member.user_id, role=member.role.value,
+            user_info=ProfileInfo(
+                id=member.user.id, vk_id=member.user.vk_id,
+                first_name=member_vk_info.get("first_name", ""),
+                last_name=member_vk_info.get("last_name", ""),
+                photo_50=member_vk_info.get("photo_50", "")
+            ),
+            accesses=accesses
+        ))
+    
+    return TeamRead(id=team.id, name=team.name, owner_id=team.owner_id, members=members_response)
+
+@router.post("/my-team/members", status_code=status.HTTP_201_CREATED)
+async def invite_member(
+    invite_data: InviteMemberRequest,
+    manager_and_team: tuple = Depends(get_team_owner),
+    db: AsyncSession = Depends(get_db)
+):
+    manager, team = manager_and_team
+    plan_config = get_plan_config(manager.plan)
+    max_members = plan_config.get("limits", {}).get("max_team_members", 1)
+    if len(team.members) >= max_members:
+        raise HTTPException(status_code=403, detail=f"Достигнут лимит на количество участников в команде ({max_members}).")
+
+    invited_user = (await db.execute(select(User).where(User.vk_id == invite_data.user_vk_id))).scalar_one_or_none()
+    if not invited_user:
+        raise HTTPException(status_code=404, detail="Пользователь с таким VK ID не найден в системе Zenith.")
+    if invited_user.team_membership or invited_user.owned_team:
+        raise HTTPException(status_code=409, detail="Этот пользователь уже состоит в команде или является владельцем.")
+
+    new_member = TeamMember(team_id=team.id, user_id=invited_user.id)
+    db.add(new_member)
+    await db.commit()
+    return {"message": "Пользователь успешно добавлен в команду."}
+
+@router.delete("/my-team/members/{member_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_member(
+    member_id: int,
+    manager_and_team: tuple = Depends(get_team_owner),
+    db: AsyncSession = Depends(get_db)
+):
+    _, team = manager_and_team
+    member = (await db.execute(select(TeamMember).where(TeamMember.id == member_id, TeamMember.team_id == team.id))).scalar_one_or_none()
+    if not member:
+        raise HTTPException(status_code=404, detail="Участник команды не найден.")
+    if member.user_id == team.owner_id:
+        raise HTTPException(status_code=400, detail="Нельзя удалить владельца команды.")
+        
+    await db.delete(member)
+    await db.commit()
+
+@router.put("/my-team/members/{member_id}/access")
+async def update_member_access(
+    member_id: int,
+    access_data: List[UpdateAccessRequest],
+    manager_and_team: tuple = Depends(get_team_owner),
+    db: AsyncSession = Depends(get_db)
+):
+    _, team = manager_and_team
+    member = (await db.execute(select(TeamMember).where(TeamMember.id == member_id, TeamMember.team_id == team.id))).scalar_one_or_none()
+    if not member:
+        raise HTTPException(status_code=404, detail="Участник команды не найден.")
+
+    # Оптимизированное обновление: сначала удаляем все, потом добавляем нужные
+    await db.execute(delete(TeamProfileAccess).where(TeamProfileAccess.team_member_id == member_id))
+    
+    accesses_to_add = []
+    for access in access_data:
+        if access.has_access:
+            accesses_to_add.append(TeamProfileAccess(team_member_id=member_id, profile_user_id=access.profile_user_id))
+    
+    if accesses_to_add:
+        db.add_all(accesses_to_add)
+        
+    await db.commit()
+    return {"message": "Права доступа обновлены."}

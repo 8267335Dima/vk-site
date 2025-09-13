@@ -1,4 +1,4 @@
-# backend/app/api/schemas/analytics.py
+# --- backend/app/api/schemas/analytics.py ---
 from pydantic import BaseModel, Field
 from typing import List
 from datetime import date
@@ -16,19 +16,11 @@ class AudienceAnalyticsResponse(BaseModel):
     age_distribution: List[AudienceStatItem]
     sex_distribution: List[SexDistributionResponse]
 
-class FriendsDynamicItem(BaseModel):
-    date: date
-    total_friends: int
-
-class FriendsDynamicResponse(BaseModel):
-    data: List[FriendsDynamicItem]
-
-class ActionSummaryItem(BaseModel):
-    date: date
-    total_actions: int
-
-class ActionSummaryResponse(BaseModel):
-    data: List[ActionSummaryItem]
+class ProfileSummaryResponse(BaseModel):
+    friends: int
+    followers: int
+    photos: int
+    wall_posts: int
 
 class ProfileGrowthItem(BaseModel):
     date: date
@@ -37,3 +29,11 @@ class ProfileGrowthItem(BaseModel):
 
 class ProfileGrowthResponse(BaseModel):
     data: List[ProfileGrowthItem]
+
+class FriendRequestConversionResponse(BaseModel):
+    sent_total: int
+    accepted_total: int
+    conversion_rate: float = Field(..., ge=0, le=100)
+
+class PostActivityHeatmapResponse(BaseModel):
+    data: List[List[int]] = Field(..., description="Матрица 7x24, где data[day][hour] = уровень активности от 0 до 100")

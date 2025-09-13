@@ -1,10 +1,11 @@
-// frontend/src/pages/Dashboard/components/ActionModalFilters.js
+// --- frontend/src/pages/Dashboard/components/ActionModalFilters.js ---
 import React from 'react';
 import {
-    FormControlLabel, Switch, Select, MenuItem, InputLabel, FormControl, Grid, Typography, Box, Tooltip, TextField
+    FormControlLabel, Switch, Select, MenuItem, InputLabel, FormControl, Grid, Typography, Box, Tooltip, TextField, Divider
 } from '@mui/material';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { content } from 'content/content';
+import PresetManager from './PresetManager';
 
 const FilterWrapper = ({ children }) => (
     <Box>
@@ -21,6 +22,22 @@ const LabelWithTooltip = ({ title, tooltipText }) => (
         </Tooltip>
     </Box>
 );
+
+const NumberFilterField = ({ name, value, label, onChange }) => (
+    <TextField
+        name={name}
+        value={value || ''}
+        onChange={onChange}
+        label={label}
+        type="number"
+        size="small"
+        fullWidth
+        placeholder="Любое"
+        inputProps={{ min: 0 }}
+        helperText="Оставьте пустым, чтобы не использовать"
+    />
+);
+
 
 export const CommonFiltersSettings = ({ filters, onChange, actionKey }) => {
     const showClosedProfilesFilter = ['accept_friends', 'add_recommended', 'mass_messaging'].includes(actionKey);
@@ -42,7 +59,7 @@ export const CommonFiltersSettings = ({ filters, onChange, actionKey }) => {
                     <Grid item xs={12} sm={6}>
                         <FormControlLabel
                             control={<Switch name="allow_closed_profiles" checked={filters.allow_closed_profiles || false} onChange={handleChange} />}
-                            label={<LabelWithTooltip title="Закрытые профили" tooltipText="Разрешить взаимодействие с пользователями, у которых закрыт профиль." />}
+                            label={<LabelWithTooltip title="Закрытые профили" tooltipText="Разрешить взаимодействие с пользователями, у которых закрыт профиль. Часть фильтров (статус, кол-во друзей) не будет применяться." />}
                         />
                     </Grid>
                 )}
@@ -77,60 +94,14 @@ export const CommonFiltersSettings = ({ filters, onChange, actionKey }) => {
                         size="small"
                         fullWidth
                         placeholder="Например: ищу работу, спб"
-                        helperText="Не применяется к закрытым профилям."
                     />
                 </Grid>
                  {isAcceptFriends && (
                     <>
-                        {/* --- ИЗМЕНЕНИЕ: Замена Select на TextField для гибкости --- */}
-                        <Grid item xs={6}>
-                           <TextField
-                                name="min_friends"
-                                value={filters.min_friends || ''}
-                                onChange={handleChange}
-                                label="Мин. друзей"
-                                type="number"
-                                size="small"
-                                fullWidth
-                                placeholder="Любое"
-                           />
-                        </Grid>
-                         <Grid item xs={6}>
-                           <TextField
-                                name="max_friends"
-                                value={filters.max_friends || ''}
-                                onChange={handleChange}
-                                label="Макс. друзей"
-                                type="number"
-                                size="small"
-                                fullWidth
-                                placeholder="Любое"
-                           />
-                        </Grid>
-                         <Grid item xs={6}>
-                           <TextField
-                                name="min_followers"
-                                value={filters.min_followers || ''}
-                                onChange={handleChange}
-                                label="Мин. подписчиков"
-                                type="number"
-                                size="small"
-                                fullWidth
-                                placeholder="Любое"
-                           />
-                        </Grid>
-                         <Grid item xs={6}>
-                            <TextField
-                                name="max_followers"
-                                value={filters.max_followers || ''}
-                                onChange={handleChange}
-                                label="Макс. подписчиков"
-                                type="number"
-                                size="small"
-                                fullWidth
-                                placeholder="Любое"
-                           />
-                        </Grid>
+                        <Grid item xs={6}><NumberFilterField name="min_friends" value={filters.min_friends} label="Мин. друзей" onChange={handleChange} /></Grid>
+                        <Grid item xs={6}><NumberFilterField name="max_friends" value={filters.max_friends} label="Макс. друзей" onChange={handleChange} /></Grid>
+                        <Grid item xs={6}><NumberFilterField name="min_followers" value={filters.min_followers} label="Мин. подписчиков" onChange={handleChange} /></Grid>
+                        <Grid item xs={6}><NumberFilterField name="max_followers" value={filters.max_followers} label="Макс. подписчиков" onChange={handleChange} /></Grid>
                     </>
                 )}
             </Grid>
@@ -181,9 +152,53 @@ export const RemoveFriendsFilters = ({ filters, onChange }) => {
     );
 };
 
+const KeywordFilter = ({ title, keyword, onChange, placeholder, helperText }) => (
+    <Box>
+        <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 600 }}>{title}</Typography>
+        <TextField
+            name="status_keyword"
+            value={keyword || ''}
+            onChange={onChange}
+            label="Ключевое слово или фраза"
+            size="small"
+            fullWidth
+            placeholder={placeholder}
+            helperText={helperText}
+        />
+    </Box>
+);
+
 export default function ActionModalFilters({ filters, onChange, actionKey }) {
-    if (actionKey === 'remove_friends') {
-        return <RemoveFriendsFilters filters={filters} onChange={(name, val) => onChange(`filters.${name}`, val)} />;
+    const onApplyPreset = (newFilters) => {
+        onChange('filters', newFilters);
+    };
+
+    const automationConfig = content.automations.find(a => a.id === actionKey);
+    const hasFilters = automationConfig?.has_filters ?? false;
+    if (!hasFilters) return null;
+    
+    let FilterComponent;
+    const handleChange = (e) => onChange(`filters.${e.target.name}`, e.target.value);
+
+    switch (actionKey) {
+        case 'remove_friends':
+            FilterComponent = <RemoveFriendsFilters filters={filters} onChange={(name, val) => onChange(`filters.${name}`, val)} />;
+            break;
+        case 'leave_groups':
+            FilterComponent = <KeywordFilter title="Критерии для отписки" keyword={filters.status_keyword} onChange={handleChange} placeholder="Например: барахолка, новости" helperText="Оставьте пустым, чтобы отписываться от всех подряд." />;
+            break;
+        case 'join_groups':
+            FilterComponent = <KeywordFilter title="Критерии для вступления" keyword={filters.status_keyword} onChange={handleChange} placeholder="Например: SMM, дизайн, маркетинг" helperText="Введите ключевые слова для поиска релевантных групп." />;
+            break;
+        default:
+            FilterComponent = <CommonFiltersSettings filters={filters} onChange={(name, val) => onChange(`filters.${name}`, val)} actionKey={actionKey} />;
     }
-    return <CommonFiltersSettings filters={filters} onChange={(name, val) => onChange(`filters.${name}`, val)} actionKey={actionKey} />;
+
+    return (
+        <Box>
+            <PresetManager actionKey={actionKey} currentFilters={filters} onApply={onApplyPreset} />
+            <Divider sx={{ my: 2 }} />
+            {FilterComponent}
+        </Box>
+    );
 }

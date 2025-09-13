@@ -1,4 +1,4 @@
-# backend/app/services/vk_api.py
+# --- backend/app/services/vk_api.py ---
 import aiohttp
 import random
 import json
@@ -69,7 +69,7 @@ class VKAPI:
         return None
     
     async def get_user_friends(self, user_id: int, fields: str = "sex,bdate,city,online,last_seen,is_closed,deactivated") -> Optional[List[Dict[str, Any]]]:
-        params = {"user_id": user_id, "fields": fields}
+        params = {"user_id": user_id, "fields": fields, "order": "random"}
         response = await self._make_request("friends.get", params=params)
         return response.get("items") if response else None
 
@@ -86,7 +86,6 @@ class VKAPI:
         return await self._make_request("stories.get", params={})
 
     async def get_incoming_friend_requests(self, count: int = 1000, **kwargs) -> Optional[Dict[str, Any]]:
-        # --- ИСПРАВЛЕНИЕ: Убираем need_viewed, используем extended для получения профилей ---
         params = {"count": count, **kwargs}
         if 'extended' in params and params['extended'] == 1:
             params['fields'] = "sex,online,last_seen,is_closed,status,counters"
@@ -96,10 +95,10 @@ class VKAPI:
         return await self._make_request("friends.add", params={"user_id": user_id})
 
     async def get_recommended_friends(self, count: int = 100) -> Optional[Dict[str, Any]]:
-        return await self._make_request("friends.getSuggestions", params={"count": count, "filter": "mutual"})
+        return await self._make_request("friends.getSuggestions", params={"count": count, "filter": "mutual", "fields": "sex,online,last_seen,is_closed,photo_id"})
         
-    async def get_newsfeed(self, count: int = 100) -> Optional[Dict[str, Any]]:
-        return await self._make_request("newsfeed.get", params={"filters": "post", "count": count})
+    async def get_newsfeed(self, count: int = 100, filters: str = "post,photo") -> Optional[Dict[str, Any]]:
+        return await self._make_request("newsfeed.get", params={"filters": filters, "count": count})
 
     async def add_like(self, item_type: str, owner_id: int, item_id: int) -> Optional[Dict[str, Any]]:
         return await self._make_request("likes.add", params={"type": item_type, "owner_id": owner_id, "item_id": item_id})
@@ -118,6 +117,18 @@ class VKAPI:
 
     async def set_online(self) -> Optional[int]:
         return await self._make_request("account.setOnline")
+    
+    async def get_groups(self, user_id: int, extended: int = 1, fields: str = "members_count", count: int = 1000) -> Optional[Dict[str, Any]]:
+        return await self._make_request("groups.get", params={"user_id": user_id, "extended": extended, "fields": fields, "count": count})
+
+    async def leave_group(self, group_id: int) -> Optional[int]:
+        return await self._make_request("groups.leave", params={"group_id": group_id})
+
+    async def search_groups(self, query: str, count: int = 100, sort: int = 6) -> Optional[Dict[str, Any]]:
+        return await self._make_request("groups.search", params={"q": query, "count": count, "sort": sort})
+    
+    async def join_group(self, group_id: int) -> Optional[int]:
+        return await self._make_request("groups.join", params={"group_id": group_id})
 
 async def is_token_valid(vk_token: str) -> Optional[int]:
     vk_api = VKAPI(access_token=vk_token)
@@ -126,9 +137,3 @@ async def is_token_valid(vk_token: str) -> Optional[int]:
         return user_info.get('id') if user_info else None
     except VKAPIError:
         return None
-    
-async def get_groups(self, user_id: int, extended: int = 1, fields: str = "members_count", count: int = 1000) -> Optional[Dict[str, Any]]:
-        return await self._make_request("groups.get", params={"user_id": user_id, "extended": extended, "fields": fields, "count": count})
-
-async def leave_group(self, group_id: int) -> Optional[int]:
-        return await self._make_request("groups.leave", params={"group_id": group_id})

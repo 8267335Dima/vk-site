@@ -1,3 +1,4 @@
+# --- backend/app/tasks/runner.py ---
 from app.celery_app import celery_app
 from celery import Task
 from redis.asyncio import Redis as AsyncRedis
@@ -5,7 +6,7 @@ import asyncio
 from sqlalchemy.future import select
 import random
 from sqlalchemy.orm import selectinload
-from app.db.models import Scenario, User, TaskHistory
+from app.db.models import Scenario, User, TaskHistory, ScheduledPost, ScheduledPostStatus
 from app.services.event_emitter import RedisEventEmitter
 from app.services.feed_service import FeedService
 from app.services.incoming_request_service import IncomingRequestService
@@ -17,18 +18,18 @@ from app.services.message_service import MessageService
 from app.services.group_management_service import GroupManagementService
 from app.core.config import settings
 from app.core.exceptions import UserActionException
-from app.services.vk_api import VKAuthError, VKRateLimitError, VKAPIError
+from app.services.vk_api import VKAPI, VKAuthError, VKRateLimitError, VKAPIError
+from app.core.security import decrypt_data
 from app.tasks.base_task import AppBaseTask, AsyncSessionFactory_Celery
 import structlog
-# --- ИЗМЕНЕНИЕ: Исправлен неверный путь импорта ---
 from app.tasks.utils import run_async_from_sync
 from app.services.humanizer import Humanizer
+from app.services.scenario_service import ScenarioExecutionService
 
 log = structlog.get_logger(__name__)
 
 TASK_SERVICE_MAP = {
     "like_feed": (FeedService, "like_newsfeed"),
-    "like_friends_feed": (FeedService, "like_friends_feed"),
     "add_recommended": (OutgoingRequestService, "add_recommended_friends"),
     "accept_friends": (IncomingRequestService, "accept_friend_requests"),
     "remove_friends": (FriendManagementService, "remove_friends_by_criteria"),
@@ -37,6 +38,7 @@ TASK_SERVICE_MAP = {
     "mass_messaging": (MessageService, "send_mass_message"),
     "eternal_online": (AutomationService, "set_online_status"),
     "leave_groups": (GroupManagementService, "leave_groups_by_criteria"),
+    "join_groups": (GroupManagementService, "join_groups_by_criteria"),
 }
 
 async def _execute_task_logic(task_history_id: int, task_name_key: str, **kwargs):
@@ -79,7 +81,6 @@ async def _execute_task_logic(task_history_id: int, task_name_key: str, **kwargs
     finally:
         await redis_client.close()
 
-# --- ИЗМЕНЕНИЕ: Добавлена новая задача ---
 def _create_task(name, **kwargs):
     @celery_app.task(name=f"app.tasks.runner.{name}", bind=True, base=AppBaseTask, **kwargs)
     def task_wrapper(self: Task, task_history_id: int, **task_kwargs):
@@ -94,65 +95,66 @@ view_stories = _create_task("view_stories", max_retries=2, default_retry_delay=6
 birthday_congratulation = _create_task("birthday_congratulation", max_retries=2, default_retry_delay=120)
 mass_messaging = _create_task("mass_messaging", max_retries=2, default_retry_delay=300)
 eternal_online = _create_task("eternal_online", max_retries=5, default_retry_delay=60)
-like_friends_feed = _create_task("like_friends_feed", max_retries=3, default_retry_delay=300)
 leave_groups_by_criteria = _create_task("leave_groups", max_retries=2, default_retry_delay=60)
+join_groups_by_criteria = _create_task("join_groups", max_retries=2, default_retry_delay=60)
 
 
 @celery_app.task(bind=True, base=AppBaseTask, name="app.tasks.runner.run_scenario_from_scheduler")
 def run_scenario_from_scheduler(self: Task, scenario_id: int, user_id: int):
     async def _run_scenario_logic():
+        log.info("scenario.runner.start", scenario_id=scenario_id, user_id=user_id)
         redis_client = AsyncRedis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/2", decode_responses=True)
-        lock_key = f"lock:scenario:user:{user_id}"
+        lock_key = f"lock:scenario:{scenario_id}"
         
         if not await redis_client.set(lock_key, "1", ex=3600, nx=True):
-            log.warn("scenario.runner.already_running", scenario_id=scenario_id, user_id=user_id)
+            log.warn("scenario.runner.already_running", scenario_id=scenario_id)
             await redis_client.close()
             return
 
-        log.info("scenario.runner.start", scenario_id=scenario_id)
         try:
             async with AsyncSessionFactory_Celery() as session:
-                stmt = select(Scenario).where(Scenario.id == scenario_id).options(selectinload(Scenario.steps), selectinload(Scenario.user))
-                scenario = (await session.execute(stmt)).scalar_one_or_none()
-                
-                if not scenario or not scenario.is_active:
-                    log.warn("scenario.runner.not_found_or_inactive", scenario_id=scenario_id)
-                    return
-
-                emitter = RedisEventEmitter(redis_client)
-                emitter.set_context(user_id=user_id)
-                humanizer = Humanizer(delay_profile=scenario.user.delay_profile, logger_func=emitter.send_log)
-
-                sorted_steps = sorted(scenario.steps, key=lambda s: s.step_order)
-
-                for step in sorted_steps:
-                    ServiceClass, method_name = TASK_SERVICE_MAP[step.action_type]
-                    service_instance = ServiceClass(db=session, user=scenario.user, emitter=emitter)
-                    
-                    batch_settings = step.batch_settings or {}
-                    parts = batch_settings.get("parts", 1)
-                    total_count = step.settings.get("count", 0)
-
-                    if parts > 1 and total_count > 0:
-                        count_per_part = total_count // parts
-                        for i in range(parts):
-                            current_kwargs = step.settings.copy()
-                            current_kwargs['count'] = count_per_part
-                            if i == parts - 1:
-                                current_kwargs['count'] += total_count % parts
-
-                            log.info("scenario.step.batch_execution", scenario_id=scenario_id, step=step.action_type, batch=f"{i+1}/{parts}")
-                            await getattr(service_instance, method_name)(**current_kwargs)
-                            
-                            if i < parts - 1:
-                                await humanizer._sleep(60, 180, f"Пауза между частями шага ({i+1}/{parts})")
-                    else:
-                        await getattr(service_instance, method_name)(**step.settings)
+                executor = ScenarioExecutionService(session, scenario_id, user_id)
+                await executor.run()
         except Exception as e:
-            log.error("scenario.runner.critical_error", scenario_id=scenario_id, error=str(e))
+            log.error("scenario.runner.critical_error", scenario_id=scenario_id, error=str(e), exc_info=True)
         finally:
             await redis_client.delete(lock_key)
             await redis_client.close()
             log.info("scenario.runner.finished", scenario_id=scenario_id)
     
     return run_async_from_sync(_run_scenario_logic())
+
+
+@celery_app.task(bind=True, base=AppBaseTask, name="app.tasks.runner.publish_scheduled_post")
+def publish_scheduled_post(self: Task, post_id: int):
+    async def _publish_logic():
+        async with AsyncSessionFactory_Celery() as session:
+            post = await session.get(ScheduledPost, post_id)
+            if not post or post.status != ScheduledPostStatus.scheduled:
+                return
+
+            user = await session.get(User, post.user_id)
+            if not user:
+                post.status = ScheduledPostStatus.failed
+                post.error_message = "Пользователь не найден"
+                await session.commit()
+                return
+
+            vk_token = decrypt_data(user.encrypted_vk_token)
+            vk_api = VKAPI(access_token=vk_token)
+
+            try:
+                result = await vk_api.wall_post(
+                    owner_id=post.vk_profile_id,
+                    message=post.post_text,
+                    attachments=",".join(post.attachments or [])
+                )
+                post.status = ScheduledPostStatus.published
+                post.vk_post_id = str(result.get("post_id"))
+            except Exception as e:
+                post.status = ScheduledPostStatus.failed
+                post.error_message = str(e)
+            
+            await session.commit()
+    
+    return run_async_from_sync(_publish_logic())

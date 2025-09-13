@@ -1,7 +1,8 @@
-# backend/app/services/outgoing_request_service.py
+# --- backend/app/services/outgoing_request_service.py ---
 from typing import Dict, Any, List
 from app.services.base import BaseVKService
-from app.db.models import DailyStats
+from app.db.models import DailyStats, FriendRequestLog, FriendRequestStatus
+from sqlalchemy.dialects.postgresql import insert
 from app.core.exceptions import UserLimitReachedError
 from app.core.config import settings
 from redis.asyncio import Redis as AsyncRedis
@@ -9,7 +10,14 @@ from redis.asyncio import Redis as AsyncRedis
 redis_lock_client = AsyncRedis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/2", decode_responses=True)
 
 class OutgoingRequestService(BaseVKService):
-    async def add_recommended_friends(self, count: int, filters: Dict[str, Any], like_config: Dict[str, Any], send_message_on_add: bool, message_text: str | None, **kwargs):
+    async def add_recommended_friends(self, **kwargs):
+        settings: Dict[str, Any] = kwargs
+        count = settings.get('count', 20)
+        filters = settings.get('filters', {})
+        like_config = settings.get('like_config', {})
+        send_message_on_add = settings.get('send_message_on_add', False)
+        message_text = settings.get('message_text')
+        
         return await self._execute_logic(self._add_recommended_friends_logic, count, filters, like_config, send_message_on_add, message_text)
 
     async def _add_recommended_friends_logic(self, count: int, filters: Dict[str, Any], like_config: Dict[str, Any], send_message_on_add: bool, message_text: str | None):
@@ -39,8 +47,8 @@ class OutgoingRequestService(BaseVKService):
 
             await self.humanizer.imitate_page_view()
             
-            message = message_text.replace("{name}", profile.get("first_name", "")) if message_text else None
-            result = await self.vk_api.add_friend(user_id, message if send_message_on_add else None) 
+            message = message_text.replace("{name}", profile.get("first_name", "")) if message_text and send_message_on_add else None
+            result = await self.vk_api.add_friend(user_id, message) 
             
             name = f"{profile.get('first_name', '')} {profile.get('last_name', '')}"
             url = f"https://vk.com/id{user_id}"
@@ -48,6 +56,10 @@ class OutgoingRequestService(BaseVKService):
             if result in [1, 2, 4]:
                 processed_count += 1
                 await self._increment_stat(stats, 'friends_added_count')
+                
+                log_stmt = insert(FriendRequestLog).values(user_id=self.user.id, target_vk_id=user_id).on_conflict_do_nothing()
+                await self.db.execute(log_stmt)
+
                 log_msg = f"Отправлена заявка пользователю {name}"
                 if send_message_on_add and message_text:
                     log_msg += " с сообщением."

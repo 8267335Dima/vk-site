@@ -1,23 +1,26 @@
-// frontend/src/pages/Dashboard/components/UnifiedActionPanel.js
+// --- frontend/src/pages/Dashboard/components/UnifiedActionPanel.js ---
 import React from 'react';
 import { Paper, Typography, Stack, Switch, Tooltip, Box, CircularProgress, Skeleton, IconButton, alpha } from '@mui/material';
 import SettingsIcon from '@mui/icons-material/Settings';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import LockIcon from '@mui/icons-material/Lock';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchAutomations, updateAutomation } from 'api.js';
 import { toast } from 'react-hot-toast';
 import { content } from 'content/content';
 import { motion } from 'framer-motion';
+import { useFeatureFlag } from 'hooks/useFeatureFlag';
 
 const ActionRow = ({ action, automation, onRun, onSettings, onToggle, isToggling }) => {
-    const isAvailable = automation?.is_available ?? true;
+    const { isFeatureAvailable } = useFeatureFlag();
+    const isAutomationAvailable = isFeatureAvailable(action.id);
+    const isToggleAvailable = isFeatureAvailable('automations_center');
     const isActive = automation?.is_active ?? false;
     const isMutatingThisRow = isToggling && onToggle.variables?.automationType === action.id;
     
     const handleToggle = (event) => {
         const newIsActive = event.target.checked;
-        // --- ИЗМЕНЕНИЕ: Проверяем доступность функции ПЕРЕД отправкой мутации ---
-        if (newIsActive && !isAvailable) {
+        if (!isToggleAvailable) {
             toast.error(`Автоматизация недоступна на вашем тарифе.`);
             return;
         }
@@ -30,10 +33,9 @@ const ActionRow = ({ action, automation, onRun, onSettings, onToggle, isToggling
                 variant="outlined"
                 sx={{
                     p: 2, display: 'flex', alignItems: 'center', gap: 2,
-                    // --- ИЗМЕНЕНИЕ: Делаем недоступные функции полупрозрачными ---
-                    opacity: automation?.is_available ? 1 : 0.6,
+                    opacity: isAutomationAvailable ? 1 : 0.6,
                     transition: 'all 0.3s ease',
-                    '&:hover': isAvailable ? {
+                    '&:hover': isAutomationAvailable ? {
                         boxShadow: 3,
                         borderColor: 'primary.main',
                         bgcolor: (theme) => alpha(theme.palette.primary.main, 0.05),
@@ -46,27 +48,34 @@ const ActionRow = ({ action, automation, onRun, onSettings, onToggle, isToggling
                      <Typography variant="caption" color="text.secondary">{action.description}</Typography>
                 </Box>
                 <Stack direction="row" spacing={0.5} alignItems="center">
-                    {/* --- ИЗМЕНЕНИЕ: Новая логика кнопок --- */}
-                    <Tooltip title="Настроить и запустить вручную">
-                        <IconButton onClick={() => onRun(action.id, action.name)}><PlayArrowIcon /></IconButton>
+                    <Tooltip title={isAutomationAvailable ? "Настроить и запустить вручную" : "Недоступно на вашем тарифе"}>
+                        <span>
+                            <IconButton onClick={() => onRun(action.id, action.name)} disabled={!isAutomationAvailable}>
+                                <PlayArrowIcon />
+                            </IconButton>
+                        </span>
                     </Tooltip>
-                    <Tooltip title={isAvailable ? "Настроить автоматизацию" : "Недоступно на вашем тарифе"}>
+                    <Tooltip title={isAutomationAvailable ? "Настроить автоматизацию" : "Недоступно на вашем тарифе"}>
                          <span>
-                             <IconButton onClick={() => onSettings(automation)} disabled={!isAvailable}>
+                             <IconButton onClick={() => onSettings(automation)} disabled={!isAutomationAvailable}>
                                  <SettingsIcon fontSize="small" />
                              </IconButton>
                          </span>
                     </Tooltip>
-                    <Tooltip title={!isAvailable ? "Функция автоматизации недоступна на вашем тарифе" : (isActive ? "Выключить автоматизацию" : "Включить автоматизацию")}>
+                    <Tooltip title={!isToggleAvailable ? "Функция автоматизации недоступна на вашем тарифе" : (isActive ? "Выключить автоматизацию" : "Включить автоматизацию")}>
                         <Box sx={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 24 }}>
                             {isMutatingThisRow && <CircularProgress size={24} sx={{ position: 'absolute' }} />}
-                            <Switch
-                                checked={isActive}
-                                onChange={handleToggle}
-                                disabled={!isAvailable || isMutatingThisRow}
-                                color="success"
-                                sx={{ opacity: isMutatingThisRow ? 0 : 1 }}
-                            />
+                             {isToggleAvailable ? (
+                                <Switch
+                                    checked={isActive}
+                                    onChange={handleToggle}
+                                    disabled={isMutatingThisRow}
+                                    color="success"
+                                    sx={{ opacity: isMutatingThisRow ? 0 : 1 }}
+                                />
+                             ) : (
+                                 <LockIcon fontSize="small" sx={{color: 'text.disabled'}}/>
+                             )}
                         </Box>
                     </Tooltip>
                 </Stack>

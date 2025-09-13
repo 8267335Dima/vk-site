@@ -1,4 +1,4 @@
-# backend/app/api/endpoints/auth.py
+# --- backend/app/api/endpoints/auth.py ---
 from datetime import timedelta, datetime
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from pydantic import BaseModel
@@ -13,12 +13,12 @@ from app.services.vk_api import is_token_valid
 from app.core.security import create_access_token, encrypt_data
 from app.core.config import settings
 from app.core.plans import get_limits_for_plan
+from app.api.dependencies import get_current_manager_user
 
 router = APIRouter()
 
 class TokenRequest(BaseModel):
     vk_token: str
-
 
 async def get_request_identifier(request: Request) -> str:
     return request.client.host or "unknown"
@@ -27,7 +27,6 @@ async def get_request_identifier(request: Request) -> str:
     "/vk", 
     response_model=TokenResponse, 
     summary="Аутентификация или регистрация по токену VK",
-    # Теперь RateLimiter будет корректно вызывать нашу async-функцию
     dependencies=[Depends(RateLimiter(times=5, minutes=1, identifier=get_request_identifier))]
 )
 async def login_via_vk(
@@ -36,7 +35,6 @@ async def login_via_vk(
     db: AsyncSession = Depends(get_db),
     token_request: TokenRequest
 ) -> TokenResponse:
-    # ... остальная часть функции без изменений ...
     vk_token = token_request.vk_token
     
     vk_id = await is_token_valid(vk_token)
@@ -84,15 +82,48 @@ async def login_via_vk(
         user_agent=request.headers.get("user-agent", "unknown")
     )
     db.add(login_entry)
-
-    user_id_for_token = user.id
     
     await db.commit()
 
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     
+    # В "sub" всегда ID менеджера, profile_id по умолчанию равен ID менеджера
+    token_data = {"sub": str(user.id), "profile_id": str(user.id)}
+    
     access_token = create_access_token(
-        data={"sub": str(user_id_for_token)}, expires_delta=access_token_expires
+        data=token_data, expires_delta=access_token_expires
+    )
+
+    return TokenResponse(access_token=access_token, token_type="bearer")
+
+class SwitchProfileRequest(BaseModel):
+    profile_id: int
+
+@router.post("/switch-profile", response_model=TokenResponse, summary="Переключиться на другой управляемый профиль")
+async def switch_profile(
+    request_data: SwitchProfileRequest,
+    manager: User = Depends(get_current_manager_user),
+    db: AsyncSession = Depends(get_db)
+) -> TokenResponse:
+    
+    # Загружаем управляемые профили для менеджера
+    await db.refresh(manager, attribute_names=["managed_profiles"])
+    
+    allowed_profile_ids = {p.profile_user_id for p in manager.managed_profiles}
+    allowed_profile_ids.add(manager.id) # Менеджер всегда имеет доступ к своему профилю
+
+    if request_data.profile_id not in allowed_profile_ids:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступ к этому профилю запрещен.")
+
+    # Создаем новый токен с обновленным profile_id
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    token_data = {
+        "sub": str(manager.id),
+        "profile_id": str(request_data.profile_id)
+    }
+    
+    access_token = create_access_token(
+        data=token_data, expires_delta=access_token_expires
     )
 
     return TokenResponse(access_token=access_token, token_type="bearer")

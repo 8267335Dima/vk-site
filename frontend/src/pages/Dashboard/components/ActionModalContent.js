@@ -1,4 +1,4 @@
-// frontend/src/pages/Dashboard/components/ActionModalContent.js
+// --- frontend/src/pages/Dashboard/components/ActionModalContent.js ---
 import React from 'react';
 import { TextField, Box, FormControlLabel, Switch, Divider, Tooltip, Stack } from '@mui/material';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
@@ -69,16 +69,30 @@ const MassMessageSettings = ({ params, onChange }) => (
     </Stack>
 );
 
+const LikeFeedSettings = ({ params, onChange }) => (
+    <FormControlLabel
+        control={<Switch checked={params.filters?.only_with_photo || false} onChange={(e) => onChange('filters.only_with_photo', e.target.checked)} />}
+        label={
+             <Box display="flex" alignItems="center" component="span">
+                Лайкать только посты с фото
+                <Tooltip title="Игнорировать текстовые посты без изображений." placement="top" arrow>
+                     <InfoOutlinedIcon fontSize="small" color="secondary" sx={{ ml: 0.5, cursor: 'help' }} />
+                </Tooltip>
+            </Box>
+        }
+    />
+);
+
 const ActionModalContent = ({ actionKey, params, onParamChange, limit }) => {
     const actionConfig = content.actions[actionKey];
     if (!actionConfig) return null;
 
     const needsCount = !!actionConfig.modal_count_label;
-    const hasFilters = !['view_stories'].includes(actionKey);
+    const automationConfig = content.automations.find(a => a.id === actionKey);
+    const hasFilters = automationConfig?.has_filters ?? false;
     
     return (
         <Stack spacing={3} py={1}>
-            {/* --- ИЗМЕНЕНИЕ: Замена TextField на CountSlider --- */}
             {needsCount && (
                 <CountSlider
                     label={actionConfig.modal_count_label}
@@ -86,6 +100,10 @@ const ActionModalContent = ({ actionKey, params, onParamChange, limit }) => {
                     onChange={(val) => onParamChange('count', val)}
                     max={limit}
                 />
+            )}
+            
+            {actionKey === 'like_feed' && (
+                <LikeFeedSettings params={params} onChange={onParamChange} />
             )}
             
             {actionKey === 'add_recommended' && (

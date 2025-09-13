@@ -1,4 +1,4 @@
-// frontend/src/components/Layout.js
+// --- frontend/src/components/Layout.js ---
 import React from 'react';
 import {
     AppBar, Toolbar, Typography, Button, Container, Box, Stack,
@@ -6,19 +6,20 @@ import {
 } from '@mui/material';
 import { Link as RouterLink, useLocation, Outlet } from 'react-router-dom';
 import { useUserStore, useUserActions } from 'store/userStore';
-// --- ИЗМЕНЕНИЕ: Иконка заменена на более стильную и подходящую ---
 import HubIcon from '@mui/icons-material/Hub';
 import MenuIcon from '@mui/icons-material/Menu';
 import { content } from 'content/content';
 import NotificationsBell from './NotificationsBell';
 import Footer from './Footer';
-// --- ИЗМЕНЕНИЕ: Импортируем хук для проверки тарифа ---
 import { useFeatureFlag } from 'hooks/useFeatureFlag';
+import ProfileSwitcher from './ProfileSwitcher';
 
 const navItems = [
-    { label: content.nav.dashboard, to: "/dashboard", feature: null }, // Доступно всем
-    { label: content.nav.scenarios, to: "/scenarios", feature: "scenarios" }, // Доступно по фиче
-    { label: content.nav.billing, to: "/billing", feature: null }, // Доступно всем
+    { label: content.nav.dashboard, to: "/dashboard", feature: null }, 
+    { label: content.nav.scenarios, to: "/scenarios", feature: "scenarios" },
+    { label: content.nav.posts, to: "/posts", feature: "post_scheduler" },  
+    { label: content.nav.team, to: "/team", feature: "agency_mode" },
+    { label: content.nav.billing, to: "/billing", feature: null }, 
 ];
 
 const NavButton = ({ to, children }) => {
@@ -79,21 +80,19 @@ const MobileDrawer = ({ open, onClose, onLogout, visibleNavItems }) => (
 export default function Layout() {
     const jwtToken = useUserStore(state => state.jwtToken);
     const { logout } = useUserActions();
-    // --- ИЗМЕНЕНИЕ: Получаем функцию проверки фич ---
     const { isFeatureAvailable } = useFeatureFlag();
     
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
     const [drawerOpen, setDrawerOpen] = React.useState(false);
 
-    // --- ИЗМЕНЕНИЕ: Фильтруем навигацию на основе тарифа пользователя ---
     const visibleNavItems = navItems.filter(item => !item.feature || isFeatureAvailable(item.feature));
     
     return (
         <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
             <AppBar position="sticky" color="transparent" elevation={0} sx={{ backdropFilter: 'blur(10px)', backgroundColor: 'rgba(13, 14, 18, 0.7)', borderBottom: 1, borderColor: 'divider' }}>
-                <Container maxWidth="xl">
-                    <Toolbar sx={{ py: 1 }}>
+                <Container maxWidth={false}>
+                    <Toolbar sx={{ py: 1, px: { xs: 1, sm: 2, lg: 4 } }}>
                         <Stack direction="row" alignItems="center" spacing={1.5} component={RouterLink} to="/" sx={{textDecoration: 'none'}}>
                            <HubIcon color="primary" sx={{ fontSize: '2.5rem' }} />
                            <Typography variant="h5" sx={{ color: 'text.primary', fontWeight: 700, display: { xs: 'none', sm: 'block' } }}>
@@ -107,6 +106,7 @@ export default function Layout() {
                              <>
                                 {jwtToken ? (
                                     <>
+                                        {isFeatureAvailable('agency_mode') && <ProfileSwitcher isMobile />}
                                         <NotificationsBell />
                                         <IconButton onClick={() => setDrawerOpen(true)}><MenuIcon /></IconButton>
                                     </>
@@ -116,7 +116,7 @@ export default function Layout() {
                              </>
                         ) : (
                             <Stack direction="row" spacing={1} alignItems="center">
-                                {/* --- ИЗМЕНЕНИЕ: Отображаем только доступные пункты меню --- */}
+                                {jwtToken && isFeatureAvailable('agency_mode') && <ProfileSwitcher />}
                                 {jwtToken && visibleNavItems.map(item => <NavButton key={item.to} to={item.to}>{item.label}</NavButton>)}
                                 {jwtToken ? (
                                     <>

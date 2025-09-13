@@ -21,7 +21,7 @@ from app.api.endpoints import (
     auth_router, users_router, websockets_router,
     stats_router, automations_router, billing_router,
     analytics_router, scenarios_router, notifications_router, proxies_router,
-    tasks_router
+    tasks_router, posts_router, teams_router
 )
 from app.services.websocket_manager import redis_listener
 
@@ -88,6 +88,8 @@ api_router_v1.include_router(billing_router, prefix="/billing", tags=["Тари�
 api_router_v1.include_router(analytics_router, prefix="/analytics", tags=["Аналитика"])
 api_router_v1.include_router(scenarios_router, prefix="/scenarios", tags=["Сценарии"])
 api_router_v1.include_router(notifications_router, prefix="/notifications", tags=["Уведомления"])
+api_router_v1.include_router(posts_router, prefix="/posts", tags=["Планировщик постов"])
+api_router_v1.include_router(teams_router, prefix="/teams", tags=["Командный функционал"])
 api_router_v1.include_router(websockets_router, prefix="", tags=["WebSockets"])
 
 app.include_router(api_router_v1, prefix="/api/v1")

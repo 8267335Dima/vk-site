@@ -1,21 +1,20 @@
-// frontend/src/pages/Dashboard/components/ProfileSummaryWidget.js (НОВЫЙ ФАЙЛ)
+// --- frontend/src/pages/Dashboard/components/ProfileSummaryWidget.js ---
 import React from 'react';
 import { Grid } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
 import { fetchProfileSummary } from 'api';
 import StatCard from 'components/StatCard';
-
-// Иконки
 import GroupIcon from '@mui/icons-material/Group';
 import RssFeedIcon from '@mui/icons-material/RssFeed';
 import PhotoLibraryIcon from '@mui/icons-material/PhotoLibrary';
 import ArticleIcon from '@mui/icons-material/Article';
+import { motion } from 'framer-motion';
 
 const ProfileSummaryWidget = () => {
     const { data, isLoading } = useQuery({
         queryKey: ['profileSummary'],
         queryFn: fetchProfileSummary,
-        staleTime: 1000 * 60 * 60, // 1 час
+        staleTime: 1000 * 60 * 60,
     });
 
     const stats = [
@@ -26,9 +25,13 @@ const ProfileSummaryWidget = () => {
     ];
 
     return (
-        <Grid container spacing={2}>
+        <Grid container spacing={2} sx={{height: '100%'}}>
             {stats.map((stat, index) => (
-                <Grid item xs={12} sm={6} key={index}>
+                <Grid item xs={12} sm={6} key={index} component={motion.div}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: index * 0.1 }}
+                >
                     <StatCard
                         title={stat.title}
                         value={isLoading ? 0 : stat.value}

@@ -1,4 +1,4 @@
-// frontend/src/pages/Dashboard/components/TaskLogWidget.js
+// --- frontend/src/pages/Dashboard/components/TaskLogWidget.js ---
 import React, { useState, useRef, useCallback } from 'react';
 import {
     Paper, Typography, Box, CircularProgress, Chip, Collapse, IconButton,
@@ -16,13 +16,11 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { toast } from 'react-hot-toast';
 import TaskParametersViewer from './TaskParametersViewer';
 
-// Иконки для каждого типа задач
 import GroupAddIcon from '@mui/icons-material/GroupAdd';
 import ThumbUpIcon from '@mui/icons-material/ThumbUp';
 import RecommendIcon from '@mui/icons-material/Recommend';
 import HistoryIcon from '@mui/icons-material/History';
 import PersonRemoveIcon from '@mui/icons-material/PersonRemove';
-import FavoriteIcon from '@mui/icons-material/Favorite';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import SendIcon from '@mui/icons-material/Send';
 import GroupRemoveIcon from '@mui/icons-material/GroupRemove';
@@ -37,14 +35,13 @@ const statusMap = {
 };
 
 const taskIconMap = {
-    'Прием заявок': <GroupAddIcon fontSize="small" />,
-    'Лайки в ленте': <ThumbUpIcon fontSize="small" />,
-    'Добавить друзей': <RecommendIcon fontSize="small" />,
-    'Просмотр историй': <HistoryIcon fontSize="small" />,
-    'Чистка друзей': <PersonRemoveIcon fontSize="small" />,
-    'Лайки друзьям': <FavoriteIcon fontSize="small" />,
-    'Массовая рассылка': <SendIcon fontSize="small" />,
-    'Отписка от сообществ': <GroupRemoveIcon fontSize="small" />
+    'Прием заявок': <GroupAddIcon />,
+    'Лайкинг ленты': <ThumbUpIcon />,
+    'Добавление друзей': <RecommendIcon />,
+    'Просмотр историй': <HistoryIcon />,
+    'Чистка друзей': <PersonRemoveIcon />,
+    'Отправка сообщений': <SendIcon />,
+    'Отписка от сообществ': <GroupRemoveIcon />
 };
 
 const TaskEntry = React.memo(({ task }) => {
@@ -71,7 +68,7 @@ const TaskEntry = React.memo(({ task }) => {
     });
     
     const hasDetails = task.parameters && Object.keys(task.parameters).length > 0;
-    const TaskIcon = Object.entries(taskIconMap).find(([key]) => task.task_name.includes(key))?.[1] || <HelpOutlineIcon fontSize="small" />;
+    const TaskIcon = taskIconMap[task.task_name] || <HelpOutlineIcon />;
 
     return (
         <motion.div
@@ -80,20 +77,25 @@ const TaskEntry = React.memo(({ task }) => {
             transition={{ type: 'spring', stiffness: 300, damping: 30 }}>
             <Paper variant="outlined" sx={{ mb: 1.5, bgcolor: 'background.default', transition: 'box-shadow 0.2s', '&:hover': { boxShadow: 3, borderColor: 'primary.main' } }}>
                 <Box sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 2, cursor: hasDetails ? 'pointer' : 'default' }} onClick={() => hasDetails && setOpen(!open)}>
-                    <Box sx={{ width: 40, flexShrink: 0, display: 'flex', justifyContent: 'center' }}>
-                        {hasDetails ? <IconButton size="small">{open ? <KeyboardArrowUpIcon /> : <KeyboardArrowDownIcon />}</IconButton> : <Box sx={{width: 28}}/>}
-                    </Box>
-                    <Typography variant="body2" sx={{ width: 160, flexShrink: 0, color: 'text.secondary' }}>
-                        {format(new Date(task.created_at), 'd MMM yyyy, HH:mm', { locale: ru })}
-                    </Typography>
-                    <Stack direction="row" alignItems="center" spacing={1.5} sx={{ flexGrow: 1, overflow: 'hidden' }}>
-                        <Tooltip title={task.task_name} placement="top-start">
-                           <Box sx={{ color: 'primary.main', display: 'flex' }}>{TaskIcon}</Box>
-                        </Tooltip>
-                        <Typography sx={{ fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{task.task_name}</Typography>
+                    
+                    <Stack sx={{ width: 40, flexShrink: 0, display: 'flex', alignItems: 'center' }}>
+                         {hasDetails ? <IconButton size="small">{open ? <KeyboardArrowUpIcon /> : <KeyboardArrowDownIcon />}</IconButton> : <Box sx={{width: 28}}/>}
                     </Stack>
-                    <Stack direction="row" alignItems="center" spacing={1}>
-                        <Chip label={statusInfo.label} color={statusInfo.color} size="small" variant="outlined" />
+
+                    <Stack direction="row" alignItems="center" spacing={1.5} sx={{ flexGrow: 1, minWidth: 0 }}>
+                        <Tooltip title={task.task_name} placement="top-start">
+                           <Box sx={{ color: 'primary.main', display: 'flex', fontSize: '1.5rem' }}>{TaskIcon}</Box>
+                        </Tooltip>
+                        <Stack sx={{ minWidth: 0 }}>
+                             <Typography sx={{ fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{task.task_name}</Typography>
+                             <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                                {format(new Date(task.created_at), 'd MMM yyyy, HH:mm', { locale: ru })}
+                            </Typography>
+                        </Stack>
+                    </Stack>
+                    
+                    <Stack direction="row" alignItems="center" spacing={1} sx={{flexShrink: 0}}>
+                        <Chip label={statusInfo.label} color={statusInfo.color} size="small" variant="filled" sx={{fontWeight: 600}} />
                         {task.status === 'FAILURE' && (
                             <Tooltip title="Повторить задачу">
                                 <span>
@@ -153,6 +155,8 @@ export default function TaskLogWidget() {
         if (node) observer.current.observe(node);
     }, [isFetchingNextPage, fetchNextPage, hasNextPage, isFetching]);
 
+    const allItems = data?.pages.flatMap(page => page.items) || [];
+
     return (
         <Paper sx={{ p: 3, display: 'flex', flexDirection: 'column', height: '100%', minHeight: '500px' }}>
             <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
@@ -173,23 +177,21 @@ export default function TaskLogWidget() {
                 {status === 'error' && <Typography color="error">Ошибка: {error.message}</Typography>}
                 
                 <AnimatePresence>
-                    {data?.pages.map((page, i) => (
-                        <React.Fragment key={i}>
-                            {page.items.map((task, index) => (
-                                <div ref={page.items.length === index + 1 ? lastTaskElementRef : null} key={task.id}>
-                                    <TaskEntry task={task} />
-                                </div>
-                            ))}
-                        </React.Fragment>
+                    {allItems.map((task, index) => (
+                        <div ref={allItems.length === index + 1 ? lastTaskElementRef : null} key={task.id}>
+                            <TaskEntry task={task} />
+                        </div>
                     ))}
                 </AnimatePresence>
 
                 {isFetchingNextPage && <Box sx={{ display: 'flex', justifyContent: 'center', p: 2 }}><CircularProgress size={30} /></Box>}
-                {!hasNextPage && data?.pages[0]?.items.length > 0 &&
+                {!hasNextPage && allItems.length > 0 &&
                     <Typography textAlign="center" color="text.secondary" sx={{ mt: 2 }}>Вы загрузили всю историю.</Typography>
                 }
-                {!data?.pages[0]?.items.length && !isFetching &&
-                    <Typography textAlign="center" color="text.secondary" sx={{ mt: 4 }}>Здесь пока нет записей. Запустите задачу, и она появится в истории.</Typography>
+                {allItems.length === 0 && !isFetching &&
+                    <Typography textAlign="center" color="text.secondary" sx={{ mt: 4, p: 2 }}>
+                        Здесь пока нет записей. Запустите задачу из "Панели действий", и она появится в истории.
+                    </Typography>
                 }
             </Box>
         </Paper>

@@ -1,10 +1,11 @@
-// frontend/src/pages/Dashboard/components/AudienceAnalyticsWidget.js
+// --- frontend/src/pages/Dashboard/components/AudienceAnalyticsWidget.js ---
 import React, { useMemo } from 'react';
 import { Paper, Typography, useTheme, Grid, Skeleton, Tooltip, IconButton, Stack, alpha, Box } from '@mui/material';
-import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip as RechartsTooltip, PieChart, Pie, Cell, Legend } from 'recharts';
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip as RechartsTooltip, PieChart, Pie, Cell, Sector } from 'recharts';
 import { useQuery } from '@tanstack/react-query';
 import { fetchAudienceAnalytics } from 'api.js';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import { motion } from 'framer-motion';
 
 const CustomTooltip = ({ active, payload, label }) => {
     if (active && payload && payload.length) {
@@ -17,25 +18,39 @@ const CustomTooltip = ({ active, payload, label }) => {
     return null;
 };
 
-// --- ИЗМЕНЕНИЕ: Кастомная метка для PieChart, чтобы текст был внутри ---
-const RADIAN = Math.PI / 180;
-const renderCustomizedLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent }) => {
-    const radius = innerRadius + (outerRadius - innerRadius) * 0.5;
-    const x = cx + radius * Math.cos(-midAngle * RADIAN);
-    const y = cy + radius * Math.sin(-midAngle * RADIAN);
+const renderActiveShape = (props) => {
+  const { cx, cy, innerRadius, outerRadius, startAngle, endAngle, fill, payload, percent } = props;
 
-    if (percent < 0.05) return null; // Не показывать метку для очень маленьких секторов
-
-    return (
-        <text x={x} y={y} fill="white" textAnchor="middle" dominantBaseline="central" fontSize="0.9rem" fontWeight={600}>
-            {`${(percent * 100).toFixed(0)}%`}
-        </text>
-    );
+  return (
+    <g>
+      <text x={cx} y={cy} dy={-10} textAnchor="middle" fill={fill} fontSize="1.2rem" fontWeight={700}>
+        {`${(percent * 100).toFixed(0)}%`}
+      </text>
+      <text x={cx} y={cy} dy={12} textAnchor="middle" fill={fill} fontSize="0.9rem">
+        {payload.name}
+      </text>
+      <Sector
+        cx={cx} cy={cy}
+        innerRadius={innerRadius} outerRadius={outerRadius}
+        startAngle={startAngle} endAngle={endAngle}
+        fill={fill}
+      />
+      <Sector
+        cx={cx} cy={cy}
+        startAngle={startAngle} endAngle={endAngle}
+        innerRadius={outerRadius + 6} outerRadius={outerRadius + 10}
+        fill={fill}
+      />
+    </g>
+  );
 };
 
 export default function AudienceAnalyticsWidget() {
     const theme = useTheme();
     const { data, isLoading, isError } = useQuery({ queryKey: ['audienceAnalytics'], queryFn: fetchAudienceAnalytics, staleTime: 1000 * 60 * 60 });
+    const [activeIndex, setActiveIndex] = React.useState(0);
+
+    const onPieEnter = (_, index) => setActiveIndex(index);
 
     const chartData = useMemo(() => {
         return {
@@ -58,22 +73,23 @@ export default function AudienceAnalyticsWidget() {
                     <Typography variant="subtitle1" sx={{ fontWeight: 600, textAlign: 'center', mb: 1 }}>Пол</Typography>
                     <ResponsiveContainer width="100%" height={220}>
                         <PieChart>
-                            {/* --- ИЗМЕНЕНИЕ: Используем кастомную метку --- */}
-                            <Pie data={chartData.sex} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} labelLine={false} label={renderCustomizedLabel}>
+                            <Pie 
+                                data={chartData.sex} dataKey="value" nameKey="name" 
+                                cx="50%" cy="50%" innerRadius={60} outerRadius={90}
+                                activeIndex={activeIndex} activeShape={renderActiveShape}
+                                onMouseEnter={onPieEnter}
+                            >
                                 {chartData.sex.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
                             </Pie>
-                             <RechartsTooltip content={<CustomTooltip />} />
-                            <Legend />
                         </PieChart>
                     </ResponsiveContainer>
                 </Grid>
                  <Grid item xs={12} md={7}>
                     <Typography variant="subtitle1" sx={{ fontWeight: 600, textAlign: 'center', mb: 1 }}>Топ городов</Typography>
                      <ResponsiveContainer width="100%" height={220}>
-                        {/* --- ИЗМЕНЕНИЕ: Увеличен отступ слева для длинных названий --- */}
                         <BarChart data={chartData.city} layout="vertical" margin={{ top: 5, right: 20, left: 80, bottom: 5 }}>
                              <XAxis type="number" hide />
-                             <YAxis type="category" dataKey="name" width={80} tick={{ fill: theme.palette.text.secondary, fontSize: '0.8rem' }} tickLine={false} axisLine={false} />
+                             <YAxis type="category" dataKey="name" width={80} tick={{ fill: theme.palette.text.secondary, fontSize: '0.8rem' }} tickLine={false} axisLine={false} interval={0} />
                              <RechartsTooltip content={<CustomTooltip />} cursor={{ fill: alpha(theme.palette.primary.main, 0.1) }}/>
                              <Bar dataKey="value" barSize={20} radius={[0, 8, 8, 0]}>
                                  {chartData.city.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
@@ -86,7 +102,7 @@ export default function AudienceAnalyticsWidget() {
     };
 
     return (
-        <Paper sx={{ p: 3, height: '100%' }}>
+        <Paper sx={{ p: 3, height: '100%' }} component={motion.div} initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
              <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
                 <Typography variant="h6" sx={{ fontWeight: 600, m: 0 }}>Анализ аудитории</Typography>
                 <Tooltip title="Анализ на основе ваших друзей. Данные периодически обновляются для поддержания актуальности." arrow>

@@ -1,4 +1,4 @@
-// frontend/src/pages/Home/HomePage.js
+// --- frontend/src/pages/Home/HomePage.js ---
 import React from 'react';
 import { Box, alpha, Container } from '@mui/material';
 import HeroSection from './components/HeroSection';
@@ -9,6 +9,7 @@ import CtaSection from './components/CtaSection';
 import CaseStudiesSection from './components/CaseStudiesSection';
 import PrinciplesSection from './components/PrinciplesSection';
 import FaqSection from './components/FaqSection';
+import TargetAudienceSection from './components/TargetAudienceSection';
 
 export const SectionWrapper = ({ children, background = 'transparent', py = { xs: 8, md: 12 } }) => (
     <Box sx={{ py, backgroundColor: background, overflow: 'hidden' }}>
@@ -32,20 +33,24 @@ export default function HomePage() {
       <SectionWrapper>
         <AdvantageSection />
       </SectionWrapper>
-      
+
       <SectionWrapper background={(theme) => alpha(theme.palette.background.paper, 0.5)}>
+        <TargetAudienceSection />
+      </SectionWrapper>
+      
+      <SectionWrapper>
         <CaseStudiesSection />
       </SectionWrapper>
       
-      <SectionWrapper>
+      <SectionWrapper background={(theme) => alpha(theme.palette.background.paper, 0.5)}>
         <StepsSection />
       </SectionWrapper>
       
-      <SectionWrapper background={(theme) => alpha(theme.palette.background.paper, 0.5)}>
+      <SectionWrapper>
         <PrinciplesSection />
       </SectionWrapper>
       
-      <SectionWrapper>
+      <SectionWrapper background={(theme) => alpha(theme.palette.background.paper, 0.5)}>
         <FaqSection />
       </SectionWrapper>
       

@@ -1,19 +1,16 @@
-// frontend/src/pages/Billing/components/PlanCard.js
+// --- frontend/src/pages/Billing/components/PlanCard.js ---
 import React from 'react';
 import { Paper, Button, Box, Chip, List, ListItem, ListItemIcon, Divider, CircularProgress, Typography, Stack, alpha } from '@mui/material';
 import CheckIcon from '@mui/icons-material/Check';
 import StarIcon from '@mui/icons-material/Star';
-
-// --- ИЗМЕНЕНИЕ: Добавляем уникальные иконки для каждого тарифа ---
 import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import RocketLaunchOutlinedIcon from '@mui/icons-material/RocketLaunchOutlined';
 import DiamondOutlinedIcon from '@mui/icons-material/DiamondOutlined';
 
-// --- ИЗМЕНЕНИЕ: Компонент теперь принимает selectedMonths и periodInfo для динамического рендера ---
 const PlanCard = ({ plan, isCurrent, onChoose, isLoading, selectedMonths, periodInfo }) => {
 
-    // --- ИЗМЕНЕНИЕ: Логика расчета финальной цены с учетом скидки ---
-    const finalPrice = plan.price === 0 ? 0 : Math.round(plan.price * selectedMonths * (1 - (periodInfo?.discount_percent || 0) / 100));
+    const originalPrice = plan.price * selectedMonths;
+    const finalPrice = plan.price === 0 ? 0 : Math.round(originalPrice * (1 - (periodInfo?.discount_percent || 0) / 100));
     const pricePerMonth = finalPrice > 0 ? Math.round(finalPrice / selectedMonths) : 0;
 
     const planMeta = {
@@ -29,7 +26,6 @@ const PlanCard = ({ plan, isCurrent, onChoose, isLoading, selectedMonths, period
             p: 4, display: 'flex', flexDirection: 'column', height: '100%',
             position: 'relative', overflow: 'hidden',
             boxShadow: plan.is_popular ? (theme) => `0 16px 48px -16px ${alpha(theme.palette[meta.color].main, 0.4)}` : 'inherit',
-            // --- ИЗМЕНЕНИЕ: Стильная обводка для популярных и текущих тарифов ---
             '&:before': {
                 content: '""', position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
                 borderRadius: 'inherit', padding: '2px',
@@ -56,10 +52,16 @@ const PlanCard = ({ plan, isCurrent, onChoose, isLoading, selectedMonths, period
                  {finalPrice > 0 && <Typography variant="h6" component="span" color="text.secondary">₽</Typography>}
             </Box>
             
-            {/* --- ИЗМЕНЕНИЕ: Динамический показ скидки и цены за месяц --- */}
             <Stack direction="row" spacing={1} alignItems="center" sx={{minHeight: 40}}>
-                {selectedMonths > 1 && plan.price > 0 && <Chip label={`~${pricePerMonth.toLocaleString('ru-RU')} ₽ / мес.`} size="small" />}
-                {periodInfo?.discount_percent > 0 && <Chip label={`Выгода ${periodInfo.discount_percent}%`} color="success" variant="outlined" size="small" />}
+                 {periodInfo?.discount_percent > 0 && (
+                     <>
+                        <Typography variant="body2" color="text.secondary" sx={{ textDecoration: 'line-through' }}>
+                            {originalPrice.toLocaleString('ru-RU')} ₽
+                        </Typography>
+                        <Chip label={`Выгода ${periodInfo.discount_percent}%`} color="success" variant="outlined" size="small" sx={{ fontWeight: 600 }} />
+                     </>
+                 )}
+                 {selectedMonths > 1 && plan.price > 0 && <Chip label={`~${pricePerMonth.toLocaleString('ru-RU')} ₽ / мес.`} size="small" />}
             </Stack>
             
             <Divider sx={{ my: 2 }} />

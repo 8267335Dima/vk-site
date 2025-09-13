@@ -1,11 +1,12 @@
-// frontend/src/pages/Dashboard/components/ActivityChartWidget.js
+// --- frontend/src/pages/Dashboard/components/ActivityChartWidget.js ---
 import React, { useState, useMemo } from 'react';
 import { Paper, Typography, Box, useTheme, ButtonGroup, Button, Skeleton } from '@mui/material';
-import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
+import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, Legend } from 'recharts';
 import { useQuery } from '@tanstack/react-query';
 import { fetchActivityStats } from 'api.js';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
+import { motion } from 'framer-motion';
 
 const CustomTooltip = ({ active, payload, label }) => {
     if (active && payload && payload.length) {
@@ -77,16 +78,17 @@ export default function ActivityChartWidget() {
                     <YAxis stroke={theme.palette.text.secondary} fontSize="0.8rem" />
                     <CartesianGrid strokeDasharray="3 3" stroke={theme.palette.divider} />
                     <Tooltip content={<CustomTooltip />} />
-                    <Area type="monotone" dataKey="Лайки" stroke={theme.palette.primary.main} fillOpacity={1} fill="url(#colorLikes)" strokeWidth={2} />
-                    <Area type="monotone" dataKey="Отправлено заявок" stroke={theme.palette.success.main} fillOpacity={1} fill="url(#colorRequests)" strokeWidth={2} />
-                    <Area type="monotone" dataKey="Принято заявок" stroke={theme.palette.warning.main} fillOpacity={1} fill="url(#colorAccepted)" strokeWidth={2} />
+                    <Legend />
+                    <Area type="monotone" dataKey="Лайки" stroke={theme.palette.primary.main} fillOpacity={1} fill="url(#colorLikes)" strokeWidth={2.5} activeDot={{ r: 6 }} />
+                    <Area type="monotone" dataKey="Отправлено заявок" stroke={theme.palette.success.main} fillOpacity={1} fill="url(#colorRequests)" strokeWidth={2.5} activeDot={{ r: 6 }}/>
+                    <Area type="monotone" dataKey="Принято заявок" stroke={theme.palette.warning.main} fillOpacity={1} fill="url(#colorAccepted)" strokeWidth={2.5} activeDot={{ r: 6 }}/>
                 </AreaChart>
             </ResponsiveContainer>
         );
     }
 
     return (
-        <Paper sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column' }}>
+        <Paper sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column' }} component={motion.div} initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
                 <Typography variant="h6" sx={{ fontWeight: 600 }}>Статистика активности</Typography>
                 <ButtonGroup size="small">
@@ -100,3 +102,6 @@ export default function ActivityChartWidget() {
         </Paper>
     );
 }
+
+
+

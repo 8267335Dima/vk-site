@@ -1,4 +1,4 @@
-// frontend/src/components/NotificationsBell.js (ЗНАЧИТЕЛЬНЫЕ ИЗМЕНЕНИЯ)
+// --- frontend/src/components/NotificationsBell.js ---
 import React, { useState } from 'react';
 import {
     IconButton, Badge, Popover, List, ListItem, ListItemText,
@@ -12,6 +12,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchNotifications, markNotificationsAsRead } from 'api';
 import { formatDistanceToNow } from 'date-fns';
 import { ru } from 'date-fns/locale';
+import { motion, AnimatePresence } from 'framer-motion';
 
 const levelConfig = {
     error: { color: 'error', icon: <ErrorOutlineIcon /> },
@@ -33,6 +34,10 @@ function NotificationItem({ notification }) {
                     bgcolor: (theme) => alpha(theme.palette.text.primary, 0.05)
                 }
             }}
+            component={motion.div}
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.3 }}
         >
             <ListItemAvatar sx={{ minWidth: 40, mt: 0.5 }}>
                 <Avatar sx={{ bgcolor: `${config.color}.main`, width: 32, height: 32 }}>
@@ -104,20 +109,26 @@ export default function NotificationsBell() {
                 open={open}
                 anchorEl={anchorEl}
                 onClose={handleClose}
-                // --- ИЗМЕНЕНИЕ: Позиционирование ближе к краю и стилизация ---
                 anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
                 transformOrigin={{ vertical: 'top', horizontal: 'right' }}
-                slotProps={{ paper: { sx: { 
-                    width: 380, 
-                    maxHeight: 500, 
-                    display: 'flex', 
-                    flexDirection: 'column', 
-                    borderRadius: 3, 
-                    mt: 1.5,
-                    // --- ИЗМЕНЕНИЕ: Добавляем полупрозрачность и размытие фона ---
-                    backgroundColor: 'rgba(22, 22, 24, 0.8)',
-                    backdropFilter: 'blur(10px)',
-                } } }}
+                PaperProps={{
+                    component: motion.div,
+                    initial: { opacity: 0, y: -10 },
+                    animate: { opacity: 1, y: 0 },
+                    exit: { opacity: 0, y: -10 },
+                    sx: { 
+                        width: 380, 
+                        maxHeight: 500, 
+                        display: 'flex', 
+                        flexDirection: 'column', 
+                        borderRadius: 3, 
+                        mt: 1.5,
+                        backgroundColor: 'rgba(22, 22, 24, 0.85)',
+                        backdropFilter: 'blur(12px)',
+                        border: '1px solid',
+                        borderColor: 'divider',
+                    }
+                }}
             >
                 <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
                     <Typography variant="h6" component="div">Уведомления</Typography>
@@ -127,18 +138,22 @@ export default function NotificationsBell() {
                     <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}><CircularProgress /></Box>
                 ) : (
                     <List sx={{ p: 0, overflow: 'auto' }}>
-                        {data?.items?.length > 0 ? (
-                            data.items.map((notif, index) => (
-                                <React.Fragment key={notif.id}>
-                                    <NotificationItem notification={notif} />
-                                    {index < data.items.length - 1 && <Divider component="li" variant="inset" />}
-                                </React.Fragment>
-                            ))
-                        ) : (
-                            <Typography sx={{ p: 3, textAlign: 'center', color: 'text.secondary' }}>
-                                Здесь пока пусто
-                            </Typography>
-                        )}
+                        <AnimatePresence>
+                            {data?.items?.length > 0 ? (
+                                data.items.map((notif, index) => (
+                                    <React.Fragment key={notif.id}>
+                                        <NotificationItem notification={notif} />
+                                        {index < data.items.length - 1 && <Divider component="li" variant="inset" />}
+                                    </React.Fragment>
+                                ))
+                            ) : (
+                                <Box p={3} component={motion.div} initial={{opacity: 0}} animate={{opacity: 1}}>
+                                    <Typography sx={{ textAlign: 'center', color: 'text.secondary' }}>
+                                        Здесь пока пусто
+                                    </Typography>
+                                </Box>
+                            )}
+                        </AnimatePresence>
                     </List>
                 )}
             </Popover>

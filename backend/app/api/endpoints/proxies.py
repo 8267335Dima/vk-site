@@ -7,7 +7,7 @@ import datetime
 
 from app.db.session import get_db
 from app.db.models import User, Proxy
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_active_profile
 from app.api.schemas.proxies import ProxyCreate, ProxyRead
 from app.core.security import encrypt_data, decrypt_data
 from app.services.proxy_service import ProxyService
@@ -17,7 +17,7 @@ from app.core.plans import is_feature_available_for_plan
 router = APIRouter()
 
 # --- НОВАЯ ЗАВИСИМОСТЬ ДЛЯ ПРОВЕРКИ ПРАВ ---
-async def check_proxy_feature_access(current_user: User = Depends(get_current_user)):
+async def check_proxy_feature_access(current_user: User = Depends(get_current_active_profile)):
     if not is_feature_available_for_plan(current_user.plan, "proxy_management"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

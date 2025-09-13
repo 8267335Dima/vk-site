@@ -1,21 +1,24 @@
-# backend/app/api/schemas/scenarios.py
+# --- backend/app/api/schemas/scenarios.py ---
+import enum
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
-# --- Схемы для шагов ---
-class ScenarioStepBase(BaseModel):
-    action_type: str
-    settings: Dict[str, Any]
+class ScenarioStepType(str, enum.Enum):
+    action = "action"
+    condition = "condition"
 
-class ScenarioStepCreate(ScenarioStepBase):
-    step_order: int
+# Схемы для шагов (теперь это "узлы" графа)
+class ScenarioStepNode(BaseModel):
+    id: str # Фронтенд-ID узла (например, 'node_1')
+    step_type: ScenarioStepType
+    details: Dict[str, Any]
+    position: Dict[str, float]
 
-class ScenarioStep(ScenarioStepBase):
-    id: int
-    step_order: int
-
-    class Config:
-        from_attributes = True
+class ScenarioEdge(BaseModel):
+    id: str
+    source: str
+    target: str
+    sourceHandle: Optional[str] = None # 'next', 'on_success', 'on_failure'
 
 # --- Схемы для сценариев ---
 class ScenarioBase(BaseModel):
@@ -24,14 +27,28 @@ class ScenarioBase(BaseModel):
     is_active: bool = False
 
 class ScenarioCreate(ScenarioBase):
-    steps: List[ScenarioStepCreate]
+    nodes: List[ScenarioStepNode]
+    edges: List[ScenarioEdge]
 
-class ScenarioUpdate(ScenarioBase):
-    steps: List[ScenarioStepCreate]
+class ScenarioUpdate(ScenarioCreate):
+    pass
 
 class Scenario(ScenarioBase):
     id: int
-    steps: List[ScenarioStep]
+    nodes: List[ScenarioStepNode]
+    edges: List[ScenarioEdge]
 
     class Config:
         from_attributes = True
+
+# Схема для нового эндпоинта
+class ConditionOption(BaseModel):
+    value: str
+    label: str
+
+class AvailableCondition(BaseModel):
+    key: str
+    label: str
+    type: str # 'number', 'select', 'time'
+    operators: List[str]
+    options: Optional[List[ConditionOption]] = None

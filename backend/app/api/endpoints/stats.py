@@ -7,7 +7,7 @@ from fastapi_cache.decorator import cache
 
 from app.db.session import get_db
 from app.db.models import User, DailyStats
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_active_profile
 from app.api.schemas.stats import (
     FriendsAnalyticsResponse, ActivityStatsResponse, DailyActivity,
     FriendsDynamicResponse, FriendsDynamicItem
@@ -19,7 +19,7 @@ router = APIRouter()
 
 @router.get("/friends-analytics", response_model=FriendsAnalyticsResponse)
 @cache(expire=3600) # Кешируем на 1 час
-async def get_friends_analytics(current_user: User = Depends(get_current_user)):
+async def get_friends_analytics(current_user: User = Depends(get_current_active_profile)):
     """Возвращает гендерное распределение друзей. Результат кэшируется."""
     vk_token = decrypt_data(current_user.encrypted_vk_token)
     # Прокси для этого запроса не так важен, но можно добавить при необходимости
@@ -46,7 +46,7 @@ async def get_friends_analytics(current_user: User = Depends(get_current_user)):
 async def get_activity_stats(
     days: int = 7,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_active_profile)
 ):
     """Возвращает статистику по действиям за последние N дней."""
     end_date = datetime.date.today()

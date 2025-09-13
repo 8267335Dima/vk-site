@@ -1,4 +1,4 @@
-# backend/app/celery_worker.py
+# --- backend/app/celery_worker.py ---
 from celery.schedules import crontab
 from app.celery_app import celery_app
 
@@ -24,6 +24,18 @@ celery_app.add_periodic_task(
     crontab(hour=4, minute=0),
     maintenance.clear_old_task_history.s(),
     name='clear-old-task-history'
+)
+
+celery_app.add_periodic_task(
+    crontab(hour='*/4', minute=0),
+    cron.update_friend_request_statuses.s(),
+    name='update-friend-request-statuses'
+)
+
+celery_app.add_periodic_task(
+    crontab(hour=5, minute=0), # Раз в сутки в 5 утра
+    cron.generate_all_heatmaps.s(),
+    name='generate-all-post-activity-heatmaps'
 )
 
 celery_app.add_periodic_task(

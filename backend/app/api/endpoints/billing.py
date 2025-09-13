@@ -8,7 +8,7 @@ from fastapi_cache.decorator import cache
 
 from app.db.session import get_db
 from app.db.models import User, Payment
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_active_profile
 from app.api.schemas.billing import CreatePaymentRequest, CreatePaymentResponse, AvailablePlansResponse, PlanDetail
 from app.core.config_loader import PLAN_CONFIG
 import structlog
@@ -44,7 +44,7 @@ async def get_available_plans():
 @router.post("/create-payment", response_model=CreatePaymentResponse)
 async def create_payment(
     request: CreatePaymentRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db),
 ):
     """

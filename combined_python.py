@@ -136,7 +136,7 @@ celery_app.conf.update(
 
 # --- backend/app\celery_worker.py ---
 
-# backend/app/celery_worker.py
+# --- backend/app/celery_worker.py ---
 from celery.schedules import crontab
 from app.celery_app import celery_app
 
@@ -162,6 +162,18 @@ celery_app.add_periodic_task(
     crontab(hour=4, minute=0),
     maintenance.clear_old_task_history.s(),
     name='clear-old-task-history'
+)
+
+celery_app.add_periodic_task(
+    crontab(hour='*/4', minute=0),
+    cron.update_friend_request_statuses.s(),
+    name='update-friend-request-statuses'
+)
+
+celery_app.add_periodic_task(
+    crontab(hour=5, minute=0), # Раз в сутки в 5 утра
+    cron.generate_all_heatmaps.s(),
+    name='generate-all-post-activity-heatmaps'
 )
 
 celery_app.add_periodic_task(
@@ -207,7 +219,7 @@ from app.api.endpoints import (
     auth_router, users_router, websockets_router,
     stats_router, automations_router, billing_router,
     analytics_router, scenarios_router, notifications_router, proxies_router,
-    tasks_router
+    tasks_router, posts_router, teams_router
 )
 from app.services.websocket_manager import redis_listener
 
@@ -274,6 +286,8 @@ api_router_v1.include_router(billing_router, prefix="/billing", tags=["Тари�
 api_router_v1.include_router(analytics_router, prefix="/analytics", tags=["Аналитика"])
 api_router_v1.include_router(scenarios_router, prefix="/scenarios", tags=["Сценарии"])
 api_router_v1.include_router(notifications_router, prefix="/notifications", tags=["Уведомления"])
+api_router_v1.include_router(posts_router, prefix="/posts", tags=["Планировщик постов"])
+api_router_v1.include_router(teams_router, prefix="/teams", tags=["Командный функционал"])
 api_router_v1.include_router(websockets_router, prefix="", tags=["WebSockets"])
 
 app.include_router(api_router_v1, prefix="/api/v1")
@@ -288,16 +302,18 @@ async def health_check():
 
 # --- backend/app\api\dependencies.py ---
 
-# backend/app/api/dependencies.py
-from typing import Annotated
+# --- backend/app/api/dependencies.py ---
+from typing import Annotated, Dict, Any
 from fastapi import Depends, HTTPException, status, Query
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from pydantic import ValidationError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload, joinedload
 
 from app.core.config import settings
-from app.db.models import User
+from app.db.models import User, ManagedProfile, TeamMember, TeamProfileAccess
 from app.db.session import get_db, AsyncSessionFactory
 from app.repositories.user import UserRepository
 
@@ -309,38 +325,83 @@ credentials_exception = HTTPException(
     headers={"WWW-Authenticate": "Bearer"},
 )
 
-async def get_user_from_token(token: str, db: AsyncSession) -> User:
-    """Общая логика извлечения пользователя из токена."""
-    user_repo = UserRepository(db)
+async def get_payload_from_token(token: str) -> Dict[str, Any]:
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        user_id_str: str | None = payload.get("sub")
-        if user_id_str is None:
-            raise credentials_exception
-        user_id = int(user_id_str)
-    except (JWTError, ValidationError, ValueError):
+        return payload
+    except (JWTError, ValidationError):
         raise credentials_exception
-    
-    user = await user_repo.get(User, user_id)
-    if user is None:
-        raise credentials_exception
-    return user
 
-async def get_current_user(
-    token: Annotated[str, Depends(oauth2_scheme)],
+async def get_current_manager_user(
+    payload: Dict[str, Any] = Depends(get_payload_from_token),
     db: AsyncSession = Depends(get_db)
 ) -> User:
-    """Зависимость для HTTP-запросов."""
-    return await get_user_from_token(token, db)
+    """Возвращает управляющего пользователя (менеджера) из токена."""
+    user_repo = UserRepository(db)
+    manager_id_str: str | None = payload.get("sub")
+    if manager_id_str is None:
+        raise credentials_exception
+    
+    manager = await user_repo.get(User, int(manager_id_str))
+    if manager is None:
+        raise credentials_exception
+    return manager
+
+async def get_current_active_profile(
+    payload: Dict[str, Any] = Depends(get_payload_from_token),
+    db: AsyncSession = Depends(get_db)
+) -> User:
+    """
+    Новая, "умная" зависимость. Проверяет все возможные сценарии доступа.
+    """
+    logged_in_user_id = int(payload.get("sub"))
+    active_profile_id = int(payload.get("profile_id") or logged_in_user_id)
+
+    # Сценарий 1: Пользователь работает со своим собственным профилем
+    if logged_in_user_id == active_profile_id:
+        profile = await db.get(User, active_profile_id)
+        if profile is None: raise credentials_exception
+        return profile
+
+    # Сценарий 2: Менеджер работает с одним из своих подключенных профилей
+    # Проверяем, является ли logged_in_user менеджером для active_profile_id
+    manager_check = await db.execute(
+        select(ManagedProfile).where(
+            ManagedProfile.manager_user_id == logged_in_user_id,
+            ManagedProfile.profile_user_id == active_profile_id
+        )
+    )
+    if manager_check.scalar_one_or_none():
+        profile = await db.get(User, active_profile_id)
+        if profile is None: raise credentials_exception
+        return profile
+
+    # Сценарий 3: Сотрудник команды работает с профилем, к которому ему дали доступ
+    member_check_stmt = (
+        select(TeamMember)
+        .join(TeamProfileAccess)
+        .where(
+            TeamMember.user_id == logged_in_user_id,
+            TeamProfileAccess.profile_user_id == active_profile_id
+        )
+    )
+    member_access = await db.execute(member_check_stmt)
+    if member_access.scalar_one_or_none():
+        profile = await db.get(User, active_profile_id)
+        if profile is None: raise credentials_exception
+        return profile
+    
+    # Если ни одно из условий не выполнено - доступ запрещен
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступ к этому профилю запрещен.")
 
 async def get_current_user_from_ws(token: str = Query(...)) -> User:
-    """
-    Зависимость для аутентификации WebSocket-соединений.
-    Создает собственную сессию БД, т.к. Depends(get_db) не работает в WS.
-    """
     async with AsyncSessionFactory() as session:
-        return await get_user_from_token(token, session)
-
+        payload = await get_payload_from_token(token)
+        profile_id = int(payload.get("profile_id") or payload.get("sub"))
+        user = await session.get(User, profile_id)
+        if not user:
+            raise credentials_exception
+        return user
 
 # --- backend/app\api\__init__.py ---
 
@@ -348,7 +409,7 @@ async def get_current_user_from_ws(token: str = Query(...)) -> User:
 
 # --- backend/app\api\endpoints\analytics.py ---
 
-# backend/app/api/endpoints/analytics.py
+# --- backend/app/api/endpoints/analytics.py ---
 import datetime
 from collections import Counter
 from fastapi import APIRouter, Depends, Query
@@ -356,27 +417,22 @@ from fastapi_cache.decorator import cache
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import FriendsHistory, User, DailyStats, ProfileMetric
-from app.api.dependencies import get_current_user
+from app.db.models import FriendsHistory, User, DailyStats, ProfileMetric, FriendRequestLog, FriendRequestStatus
+from app.api.dependencies import get_current_active_profile
 from app.db.session import get_db
 from app.api.schemas.analytics import (
     AudienceAnalyticsResponse, AudienceStatItem, 
-    FriendsDynamicItem, FriendsDynamicResponse,
-    ActionSummaryResponse, ActionSummaryItem,
     SexDistributionResponse,
-    ProfileGrowthResponse, ProfileGrowthItem 
+    ProfileGrowthResponse, ProfileGrowthItem,
+    ProfileSummaryResponse, FriendRequestConversionResponse
 )
 from app.services.vk_api import VKAPI
 from app.core.security import decrypt_data
-from pydantic import BaseModel
+from app.db.models import PostActivityHeatmap
+from app.api.schemas.analytics import PostActivityHeatmapResponse
 
 router = APIRouter()
 
-class ProfileSummaryResponse(BaseModel):
-    friends: int
-    followers: int
-    photos: int
-    wall_posts: int
 
 def calculate_age(bdate: str) -> int | None:
     try:
@@ -399,7 +455,7 @@ def get_age_group(age: int) -> str:
 
 @router.get("/audience", response_model=AudienceAnalyticsResponse)
 @cache(expire=21600)
-async def get_audience_analytics(current_user: User = Depends(get_current_user)):
+async def get_audience_analytics(current_user: User = Depends(get_current_active_profile)):
     vk_token = decrypt_data(current_user.encrypted_vk_token)
     vk_api = VKAPI(access_token=vk_token)
 
@@ -407,7 +463,6 @@ async def get_audience_analytics(current_user: User = Depends(get_current_user))
     if not friends:
         return AudienceAnalyticsResponse(city_distribution=[], age_distribution=[], sex_distribution=[])
 
-    # --- Анализ по городам ---
     city_counter = Counter(
         friend['city']['title']
         for friend in friends
@@ -418,7 +473,6 @@ async def get_audience_analytics(current_user: User = Depends(get_current_user))
         for city, count in city_counter.most_common(5)
     ]
 
-    # --- Анализ по возрасту ---
     ages = [calculate_age(friend['bdate']) for friend in friends if friend.get('bdate') and not friend.get('deactivated')]
     age_groups = [get_age_group(age) for age in ages if age is not None]
     age_counter = Counter(age_groups)
@@ -428,7 +482,6 @@ async def get_audience_analytics(current_user: User = Depends(get_current_user))
         for group, count in sorted(age_counter.items())
     ]
 
-    # --- Анализ по полу ---
     sex_counter = Counter(
         'Мужчины' if f.get('sex') == 2 else ('Женщины' if f.get('sex') == 1 else 'Не указан')
         for f in friends if not f.get('deactivated')
@@ -442,21 +495,19 @@ async def get_audience_analytics(current_user: User = Depends(get_current_user))
     )
 
 @router.get("/profile-summary", response_model=ProfileSummaryResponse)
-@cache(expire=3600) # Кеш на 1 час
-async def get_profile_summary(current_user: User = Depends(get_current_user)):
-    """Возвращает сводную информацию по профилю пользователя."""
+@cache(expire=3600)
+async def get_profile_summary(current_user: User = Depends(get_current_active_profile)):
     vk_token = decrypt_data(current_user.encrypted_vk_token)
     vk_api = VKAPI(access_token=vk_token)
     
-    # Получаем основную информацию, включая счетчики
-    user_info = await vk_api.get_user_info(user_ids=str(current_user.vk_id), fields="counters")
+    user_info_list = await vk_api.get_user_info(user_ids=str(current_user.vk_id), fields="counters")
+    user_info = user_info_list[0] if user_info_list else {}
     
-    friends = user_info[0].get('counters', {}).get('friends', 0) if user_info else 0
-    followers = user_info[0].get('counters', {}).get('followers', 0) if user_info else 0
-    photos = user_info[0].get('counters', {}).get('photos', 0) if user_info else 0
+    friends = user_info.get('counters', {}).get('friends', 0)
+    followers = user_info.get('counters', {}).get('followers', 0)
+    photos = user_info.get('counters', {}).get('photos', 0)
     
-    # Количество постов на стене нужно запрашивать отдельно
-    wall_info = await vk_api.get_wall(owner_id=current_user.vk_id, count=1)
+    wall_info = await vk_api.get_wall(owner_id=current_user.vk_id, count=0)
     wall_posts = wall_info.get('count', 0) if wall_info else 0
     
     return ProfileSummaryResponse(
@@ -469,7 +520,7 @@ async def get_profile_summary(current_user: User = Depends(get_current_user)):
 @router.get("/profile-growth", response_model=ProfileGrowthResponse)
 async def get_profile_growth_analytics(
     days: int = Query(30, ge=7, le=90),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
     end_date = datetime.date.today()
@@ -496,75 +547,47 @@ async def get_profile_growth_analytics(
 
     return ProfileGrowthResponse(data=response_data)
 
-@router.get("/friends-dynamic", response_model=FriendsDynamicResponse)
-async def get_friends_dynamic(
-    days: int = Query(30, ge=7, le=90),
-    current_user: User = Depends(get_current_user),
+@router.get("/friend-request-conversion", response_model=FriendRequestConversionResponse)
+async def get_friend_request_conversion_stats(
+    current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    end_date = datetime.date.today()
-    start_date = end_date - datetime.timedelta(days=days - 1)
-
     stmt = (
-        select(FriendsHistory.date, FriendsHistory.friends_count)
-        .where(
-            FriendsHistory.user_id == current_user.id,
-            FriendsHistory.date.between(start_date, end_date)
-        )
-        .order_by(FriendsHistory.date)
+        select(FriendRequestLog.status, func.count(FriendRequestLog.id))
+        .where(FriendRequestLog.user_id == current_user.id)
+        .group_by(FriendRequestLog.status)
+    )
+    result = await db.execute(stmt)
+    stats = {status.name: count for status, count in result.all()}
+
+    sent_total = stats.get('pending', 0) + stats.get('accepted', 0)
+    accepted_total = stats.get('accepted', 0)
+    
+    conversion_rate = (accepted_total / sent_total * 100) if sent_total > 0 else 0
+
+    return FriendRequestConversionResponse(
+        sent_total=sent_total,
+        accepted_total=accepted_total,
+        conversion_rate=conversion_rate
     )
 
-    result = await db.execute(stmt)
-    data = result.all()
-
-    response_data = [
-        FriendsDynamicItem(date=row.date, total_friends=row.friends_count)
-        for row in data
-    ]
-
-    return FriendsDynamicResponse(data=response_data)
-
-@router.get("/actions-summary", response_model=ActionSummaryResponse)
-async def get_actions_summary(
-    days: int = Query(30, ge=7, le=90),
-    current_user: User = Depends(get_current_user),
+@router.get("/post-activity-heatmap", response_model=PostActivityHeatmapResponse)
+async def get_post_activity_heatmap(
+    current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    end_date = datetime.date.today()
-    start_date = end_date - datetime.timedelta(days=days - 1)
-
-    stmt = (
-        select(
-            DailyStats.date,
-            (
-                DailyStats.likes_count +
-                DailyStats.friends_added_count +
-                DailyStats.friend_requests_accepted_count +
-                DailyStats.stories_viewed_count +
-                DailyStats.like_friends_feed_count +
-                DailyStats.friends_removed_count
-            ).label("total_actions")
-        )
-        .where(
-            DailyStats.user_id == current_user.id,
-            DailyStats.date.between(start_date, end_date)
-        )
-        .order_by(DailyStats.date)
-    )
-
+    stmt = select(PostActivityHeatmap).where(PostActivityHeatmap.user_id == current_user.id)
     result = await db.execute(stmt)
-    data = result.all()
-
-    response_data = [
-        ActionSummaryItem(date=row.date, total_actions=row.total_actions)
-        for row in data
-    ]
-
-    return ActionSummaryResponse(data=response_data)
+    heatmap_data = result.scalar_one_or_none()
+    
+    if not heatmap_data:
+        return PostActivityHeatmapResponse(data=[[0]*24]*7) # Возвращаем пустую матрицу
+        
+    return PostActivityHeatmapResponse(data=heatmap_data.heatmap_data.get("data", [[0]*24]*7))
 
 # --- backend/app\api\endpoints\auth.py ---
 
-# backend/app/api/endpoints/auth.py
+# --- backend/app/api/endpoints/auth.py ---
 from datetime import timedelta, datetime
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from pydantic import BaseModel
@@ -579,12 +602,12 @@ from app.services.vk_api import is_token_valid
 from app.core.security import create_access_token, encrypt_data
 from app.core.config import settings
 from app.core.plans import get_limits_for_plan
+from app.api.dependencies import get_current_manager_user
 
 router = APIRouter()
 
 class TokenRequest(BaseModel):
     vk_token: str
-
 
 async def get_request_identifier(request: Request) -> str:
     return request.client.host or "unknown"
@@ -593,7 +616,6 @@ async def get_request_identifier(request: Request) -> str:
     "/vk", 
     response_model=TokenResponse, 
     summary="Аутентификация или регистрация по токену VK",
-    # Теперь RateLimiter будет корректно вызывать нашу async-функцию
     dependencies=[Depends(RateLimiter(times=5, minutes=1, identifier=get_request_identifier))]
 )
 async def login_via_vk(
@@ -602,7 +624,6 @@ async def login_via_vk(
     db: AsyncSession = Depends(get_db),
     token_request: TokenRequest
 ) -> TokenResponse:
-    # ... остальная часть функции без изменений ...
     vk_token = token_request.vk_token
     
     vk_id = await is_token_valid(vk_token)
@@ -650,15 +671,48 @@ async def login_via_vk(
         user_agent=request.headers.get("user-agent", "unknown")
     )
     db.add(login_entry)
-
-    user_id_for_token = user.id
     
     await db.commit()
 
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     
+    # В "sub" всегда ID менеджера, profile_id по умолчанию равен ID менеджера
+    token_data = {"sub": str(user.id), "profile_id": str(user.id)}
+    
     access_token = create_access_token(
-        data={"sub": str(user_id_for_token)}, expires_delta=access_token_expires
+        data=token_data, expires_delta=access_token_expires
+    )
+
+    return TokenResponse(access_token=access_token, token_type="bearer")
+
+class SwitchProfileRequest(BaseModel):
+    profile_id: int
+
+@router.post("/switch-profile", response_model=TokenResponse, summary="Переключиться на другой управляемый профиль")
+async def switch_profile(
+    request_data: SwitchProfileRequest,
+    manager: User = Depends(get_current_manager_user),
+    db: AsyncSession = Depends(get_db)
+) -> TokenResponse:
+    
+    # Загружаем управляемые профили для менеджера
+    await db.refresh(manager, attribute_names=["managed_profiles"])
+    
+    allowed_profile_ids = {p.profile_user_id for p in manager.managed_profiles}
+    allowed_profile_ids.add(manager.id) # Менеджер всегда имеет доступ к своему профилю
+
+    if request_data.profile_id not in allowed_profile_ids:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступ к этому профилю запрещен.")
+
+    # Создаем новый токен с обновленным profile_id
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    token_data = {
+        "sub": str(manager.id),
+        "profile_id": str(request_data.profile_id)
+    }
+    
+    access_token = create_access_token(
+        data=token_data, expires_delta=access_token_expires
     )
 
     return TokenResponse(access_token=access_token, token_type="bearer")
@@ -674,7 +728,7 @@ from sqlalchemy.future import select
 
 from app.db.session import get_db
 from app.db.models import User, Automation
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_active_profile
 from app.core.config_loader import AUTOMATIONS_CONFIG
 from app.core.plans import is_feature_available_for_plan
 
@@ -694,7 +748,7 @@ class AutomationUpdateRequest(BaseModel):
 
 @router.get("", response_model=List[AutomationStatus])
 async def get_automations_status(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
     """Возвращает статусы всех автоматизаций, указывая, доступны ли они по тарифу."""
@@ -725,7 +779,7 @@ async def get_automations_status(
 async def update_automation(
     automation_type: str,
     request_data: AutomationUpdateRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
     """Включает, выключает или настраивает автоматизацию с проверкой прав доступа."""
@@ -788,7 +842,7 @@ from fastapi_cache.decorator import cache
 
 from app.db.session import get_db
 from app.db.models import User, Payment
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_active_profile
 from app.api.schemas.billing import CreatePaymentRequest, CreatePaymentResponse, AvailablePlansResponse, PlanDetail
 from app.core.config_loader import PLAN_CONFIG
 import structlog
@@ -824,7 +878,7 @@ async def get_available_plans():
 @router.post("/create-payment", response_model=CreatePaymentResponse)
 async def create_payment(
     request: CreatePaymentRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -942,14 +996,14 @@ from sqlalchemy import select, update, func
 
 from app.db.session import get_db
 from app.db.models import User, Notification
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_active_profile
 from app.api.schemas.notifications import NotificationsResponse
 
 router = APIRouter()
 
 @router.get("", response_model=NotificationsResponse)
 async def get_notifications(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
     """Возвращает последние 50 уведомлений и количество непрочитанных."""
@@ -976,7 +1030,7 @@ async def get_notifications(
 
 @router.post("/read", status_code=status.HTTP_204_NO_CONTENT)
 async def mark_notifications_as_read(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
     """Отмечает все уведомления пользователя как прочитанные."""
@@ -987,6 +1041,66 @@ async def mark_notifications_as_read(
     )
     await db.execute(stmt)
     await db.commit()
+
+# --- backend/app\api\endpoints\posts.py ---
+
+# --- backend/app/api/endpoints/posts.py ---
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
+from sqlalchemy.ext.asyncio import AsyncSession
+from typing import List, Optional
+
+from app.db.session import get_db
+from app.db.models import User, ScheduledPost
+from app.api.dependencies import get_current_active_profile
+from app.api.schemas.posts import PostCreate, PostRead, PostUpdate, UploadedImageResponse
+from app.celery_app import celery_app
+from app.tasks.runner import publish_scheduled_post
+from app.services.vk_api import VKAPI
+from app.core.security import decrypt_data
+import structlog
+
+log = structlog.get_logger(__name__)
+router = APIRouter()
+
+@router.post("/upload-image", response_model=UploadedImageResponse)
+async def upload_image_for_post(
+    current_user: User = Depends(get_current_active_profile),
+    image: UploadFile = File(...)
+):
+    vk_token = decrypt_data(current_user.encrypted_vk_token)
+    vk_api = VKAPI(access_token=vk_token)
+    try:
+        image_bytes = await image.read()
+        attachment_id = await vk_api.upload_photo_for_wall(image_bytes)
+        return UploadedImageResponse(attachment_id=attachment_id)
+    except Exception as e:
+        log.error("post.upload_image.failed", user_id=current_user.id, error=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Не удалось загрузить изображение.")
+
+@router.post("", response_model=PostRead)
+async def schedule_post(
+    post_data: PostCreate,
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
+    new_post = ScheduledPost(
+        user_id=current_user.id,
+        vk_profile_id=current_user.vk_id,
+        **post_data.model_dump()
+    )
+    db.add(new_post)
+    await db.flush()
+
+    task = publish_scheduled_post.apply_async(
+        args=[new_post.id],
+        eta=post_data.publish_at
+    )
+    new_post.celery_task_id = task.id
+    await db.commit()
+    await db.refresh(new_post)
+    return new_post
+
+# ... (Здесь будут эндпоинты GET, PUT, DELETE, реализованные аналогичным образом) ...
 
 # --- backend/app\api\endpoints\proxies.py ---
 
@@ -999,7 +1113,7 @@ import datetime
 
 from app.db.session import get_db
 from app.db.models import User, Proxy
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_active_profile
 from app.api.schemas.proxies import ProxyCreate, ProxyRead
 from app.core.security import encrypt_data, decrypt_data
 from app.services.proxy_service import ProxyService
@@ -1009,7 +1123,7 @@ from app.core.plans import is_feature_available_for_plan
 router = APIRouter()
 
 # --- НОВАЯ ЗАВИСИМОСТЬ ДЛЯ ПРОВЕРКИ ПРАВ ---
-async def check_proxy_feature_access(current_user: User = Depends(get_current_user)):
+async def check_proxy_feature_access(current_user: User = Depends(get_current_active_profile)):
     if not is_feature_available_for_plan(current_user.plan, "proxy_management"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -1086,7 +1200,7 @@ async def delete_proxy(
 
 # --- backend/app\api\endpoints\scenarios.py ---
 
-# backend/app/api/endpoints/scenarios.py
+# --- backend/app/api/endpoints/scenarios.py ---
 import json
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1094,10 +1208,14 @@ from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 from typing import List
 from croniter import croniter
+
 from app.db.session import get_db
 from app.db.models import User, Scenario, ScenarioStep
-from app.api.dependencies import get_current_user
-from app.api.schemas.scenarios import Scenario as ScenarioSchema, ScenarioCreate, ScenarioUpdate
+from app.api.dependencies import get_current_active_profile
+from app.api.schemas.scenarios import (
+    Scenario as ScenarioSchema, ScenarioCreate, ScenarioUpdate, AvailableCondition,
+    ConditionOption, ScenarioStepNode, ScenarioEdge
+)
 from sqlalchemy_celery_beat.models import PeriodicTask, CrontabSchedule
 from app.tasks.runner import run_scenario_from_scheduler
 
@@ -1115,11 +1233,7 @@ async def _create_or_update_periodic_task(db: AsyncSession, scenario: Scenario):
             periodic_task.enabled = False
         return
 
-    try:
-        # croniter проверяет валидность, здесь мы просто разделяем строку
-        minute, hour, day_of_month, month_of_year, day_of_week = scenario.schedule.split(' ')
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Неверный формат CRON-строки. Ожидается 5 полей.")
+    minute, hour, day_of_month, month_of_year, day_of_week = scenario.schedule.split(' ')
 
     crontab_stmt = select(CrontabSchedule).where(
         CrontabSchedule.minute == minute, CrontabSchedule.hour == hour,
@@ -1136,7 +1250,7 @@ async def _create_or_update_periodic_task(db: AsyncSession, scenario: Scenario):
         db.add(crontab)
         await db.flush()
 
-    task_args = json.dumps([scenario.id])
+    task_args = json.dumps([scenario.id, scenario.user_id])
 
     if periodic_task:
         periodic_task.crontab = crontab
@@ -1152,32 +1266,156 @@ async def _create_or_update_periodic_task(db: AsyncSession, scenario: Scenario):
         )
         db.add(new_task)
 
+@router.get("/available-conditions", response_model=List[AvailableCondition])
+async def get_available_conditions():
+    return [
+        {
+            "key": "friends_count", "label": "Количество друзей", "type": "number",
+            "operators": ["==", "!=", ">", "<", ">=", "<="]
+        },
+        {
+            "key": "conversion_rate", "label": "Конверсия заявок (%)", "type": "number",
+            "operators": [">", "<", ">=", "<="]
+        },
+        {
+            "key": "day_of_week", "label": "День недели", "type": "select", "operators": ["==", "!="],
+            "options": [
+                {"value": "1", "label": "Понедельник"}, {"value": "2", "label": "Вторник"},
+                {"value": "3", "label": "Среда"}, {"value": "4", "label": "Четверг"},
+                {"value": "5", "label": "Пятница"}, {"value": "6", "label": "Суббота"},
+                {"value": "7", "label": "Воскресенье"},
+            ]
+        }
+    ]
+
+def _db_to_graph(scenario: Scenario) -> tuple[List[ScenarioStepNode], List[ScenarioEdge]]:
+    nodes = []
+    edges = []
+    if not scenario.steps:
+        return nodes, edges
+    
+    # Создаем временное отображение ID из БД на frontend ID (который хранится в details)
+    db_id_to_frontend_id = {step.id: str(step.details.get('id', step.id)) for step in scenario.steps}
+
+    for step in scenario.steps:
+        node_id_str = db_id_to_frontend_id[step.id]
+        node_type = step.step_type.value
+        
+        # Особый случай для узла "Старт"
+        if node_type == 'action' and step.details.get('action_type') == 'start':
+            node_type = 'start'
+
+        nodes.append(ScenarioStepNode(
+            id=node_id_str,
+            type=node_type,
+            data=step.details.get('data', {}),
+            position={"x": step.position_x, "y": step.position_y}
+        ))
+        
+        source_id_str = db_id_to_frontend_id[step.id]
+        if step.next_step_id and step.next_step_id in db_id_to_frontend_id:
+            target_id_str = db_id_to_frontend_id[step.next_step_id]
+            edges.append(ScenarioEdge(id=f"e{source_id_str}-{target_id_str}", source=source_id_str, target=target_id_str))
+        if step.on_success_next_step_id and step.on_success_next_step_id in db_id_to_frontend_id:
+            target_id_str = db_id_to_frontend_id[step.on_success_next_step_id]
+            edges.append(ScenarioEdge(id=f"e{source_id_str}-{target_id_str}-success", source=source_id_str, target=target_id_str, sourceHandle='on_success'))
+        if step.on_failure_next_step_id and step.on_failure_next_step_id in db_id_to_frontend_id:
+            target_id_str = db_id_to_frontend_id[step.on_failure_next_step_id]
+            edges.append(ScenarioEdge(id=f"e{source_id_str}-{target_id_str}-failure", source=source_id_str, target=str(target_id_str), sourceHandle='on_failure'))
+
+    return nodes, edges
+
+async def _graph_to_db(db: AsyncSession, scenario: Scenario, data: ScenarioCreate):
+    # Удаляем старые шаги, если они есть
+    if scenario.steps:
+        for step in scenario.steps:
+            await db.delete(step)
+        await db.flush()
+
+    node_map = {}  # {frontend_id: db_step_object}
+    start_node_frontend_id = None
+
+    for node_data in data.nodes:
+        step_type = node_data.type
+        details_data = {'id': node_data.id, 'data': node_data.data}
+        
+        if node_data.type == 'start':
+            step_type = 'action'
+            details_data['action_type'] = 'start'
+            start_node_frontend_id = node_data.id
+
+        new_step = ScenarioStep(
+            scenario_id=scenario.id,
+            step_type=step_type,
+            details=details_data,
+            position_x=node_data.position.get('x', 0),
+            position_y=node_data.position.get('y', 0)
+        )
+        db.add(new_step)
+        await db.flush()
+        node_map[node_data.id] = new_step
+    
+    for edge_data in data.edges:
+        source_node = node_map.get(edge_data.source)
+        target_node = node_map.get(edge_data.target)
+        if not source_node or not target_node: continue
+
+        if source_node.step_type.value == 'action':
+            source_node.next_step_id = target_node.id
+        elif source_node.step_type.value == 'condition':
+            if edge_data.sourceHandle == 'on_success':
+                source_node.on_success_next_step_id = target_node.id
+            elif edge_data.sourceHandle == 'on_failure':
+                source_node.on_failure_next_step_id = target_node.id
+
+    if start_node_frontend_id:
+        start_step_db = node_map.get(start_node_frontend_id)
+        if start_step_db:
+            scenario.first_step_id = start_step_db.id
+
 @router.get("", response_model=List[ScenarioSchema])
-async def get_user_scenarios(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    # --- ИСПРАВЛЕНИЕ: Добавлено selectinload для предотвращения N+1 запросов ---
+async def get_user_scenarios(current_user: User = Depends(get_current_active_profile), db: AsyncSession = Depends(get_db)):
     stmt = select(Scenario).where(Scenario.user_id == current_user.id).options(selectinload(Scenario.steps))
     result = await db.execute(stmt)
-    return result.scalars().all()
+    scenarios_db = result.scalars().unique().all()
+    
+    response_list = []
+    for s in scenarios_db:
+        nodes, edges = _db_to_graph(s)
+        response_list.append(ScenarioSchema(id=s.id, name=s.name, schedule=s.schedule, is_active=s.is_active, nodes=nodes, edges=edges))
+    return response_list
+
+@router.get("/{scenario_id}", response_model=ScenarioSchema)
+async def get_scenario(scenario_id: int, current_user: User = Depends(get_current_active_profile), db: AsyncSession = Depends(get_db)):
+    stmt = select(Scenario).where(Scenario.id == scenario_id, Scenario.user_id == current_user.id).options(selectinload(Scenario.steps))
+    result = await db.execute(stmt)
+    scenario = result.scalar_one_or_none()
+    if not scenario:
+        raise HTTPException(status_code=404, detail="Сценарий не найден.")
+    
+    nodes, edges = _db_to_graph(scenario)
+    return ScenarioSchema(id=scenario.id, name=scenario.name, schedule=scenario.schedule, is_active=scenario.is_active, nodes=nodes, edges=edges)
 
 @router.post("", response_model=ScenarioSchema, status_code=status.HTTP_201_CREATED)
-async def create_scenario(scenario_data: ScenarioCreate, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def create_scenario(scenario_data: ScenarioCreate, current_user: User = Depends(get_current_active_profile), db: AsyncSession = Depends(get_db)):
     if not croniter.is_valid(scenario_data.schedule):
         raise HTTPException(status_code=400, detail="Неверный формат CRON-строки.")
-
+    
     new_scenario = Scenario(user_id=current_user.id, name=scenario_data.name, schedule=scenario_data.schedule, is_active=scenario_data.is_active)
     db.add(new_scenario)
     await db.flush()
 
-    new_steps = [ScenarioStep(scenario_id=new_scenario.id, **step.model_dump()) for step in scenario_data.steps]
-    db.add_all(new_steps)
-    
+    await _graph_to_db(db, new_scenario, scenario_data)
     await _create_or_update_periodic_task(db, new_scenario)
+    
     await db.commit()
     await db.refresh(new_scenario)
-    return new_scenario
+    
+    nodes, edges = _db_to_graph(new_scenario)
+    return ScenarioSchema(id=new_scenario.id, name=new_scenario.name, schedule=new_scenario.schedule, is_active=new_scenario.is_active, nodes=nodes, edges=edges)
 
 @router.put("/{scenario_id}", response_model=ScenarioSchema)
-async def update_scenario(scenario_id: int, scenario_data: ScenarioUpdate, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def update_scenario(scenario_id: int, scenario_data: ScenarioUpdate, current_user: User = Depends(get_current_active_profile), db: AsyncSession = Depends(get_db)):
     stmt = select(Scenario).where(Scenario.id == scenario_id, Scenario.user_id == current_user.id).options(selectinload(Scenario.steps))
     result = await db.execute(stmt)
     db_scenario = result.scalar_one_or_none()
@@ -1185,26 +1423,22 @@ async def update_scenario(scenario_id: int, scenario_data: ScenarioUpdate, curre
         raise HTTPException(status_code=404, detail="Сценарий не найден.")
     if not croniter.is_valid(scenario_data.schedule):
         raise HTTPException(status_code=400, detail="Неверный формат CRON-строки.")
-
+    
     db_scenario.name = scenario_data.name
     db_scenario.schedule = scenario_data.schedule
     db_scenario.is_active = scenario_data.is_active
-    
-    # Полное удаление и создание шагов - самый простой и надежный способ
-    for step in db_scenario.steps:
-        await db.delete(step)
-    await db.flush()
 
-    new_steps = [ScenarioStep(scenario_id=db_scenario.id, **step.model_dump()) for step in scenario_data.steps]
-    db.add_all(new_steps)
-    
+    await _graph_to_db(db, db_scenario, scenario_data)
     await _create_or_update_periodic_task(db, db_scenario)
+
     await db.commit()
     await db.refresh(db_scenario)
-    return db_scenario
+    nodes, edges = _db_to_graph(db_scenario)
+    return ScenarioSchema(id=db_scenario.id, name=db_scenario.name, schedule=db_scenario.schedule, is_active=db_scenario.is_active, nodes=nodes, edges=edges)
+
 
 @router.delete("/{scenario_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_scenario(scenario_id: int, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def delete_scenario(scenario_id: int, current_user: User = Depends(get_current_active_profile), db: AsyncSession = Depends(get_db)):
     stmt = select(Scenario).where(Scenario.id == scenario_id, Scenario.user_id == current_user.id)
     result = await db.execute(stmt)
     db_scenario = result.scalar_one_or_none()
@@ -1232,7 +1466,7 @@ from fastapi_cache.decorator import cache
 
 from app.db.session import get_db
 from app.db.models import User, DailyStats
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_active_profile
 from app.api.schemas.stats import (
     FriendsAnalyticsResponse, ActivityStatsResponse, DailyActivity,
     FriendsDynamicResponse, FriendsDynamicItem
@@ -1244,7 +1478,7 @@ router = APIRouter()
 
 @router.get("/friends-analytics", response_model=FriendsAnalyticsResponse)
 @cache(expire=3600) # Кешируем на 1 час
-async def get_friends_analytics(current_user: User = Depends(get_current_user)):
+async def get_friends_analytics(current_user: User = Depends(get_current_active_profile)):
     """Возвращает гендерное распределение друзей. Результат кэшируется."""
     vk_token = decrypt_data(current_user.encrypted_vk_token)
     # Прокси для этого запроса не так важен, но можно добавить при необходимости
@@ -1271,7 +1505,7 @@ async def get_friends_analytics(current_user: User = Depends(get_current_user)):
 async def get_activity_stats(
     days: int = 7,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_active_profile)
 ):
     """Возвращает статистику по действиям за последние N дней."""
     end_date = datetime.date.today()
@@ -1319,7 +1553,7 @@ from typing import Optional
 from pydantic import BaseModel
 
 from app.db.models import User, TaskHistory
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_active_profile
 from app.db.session import get_db
 from app.celery_app import celery_app # <-- НОВЫЙ ИМПОРТ
 from app.api.schemas.actions import (
@@ -1403,7 +1637,7 @@ async def _enqueue_task(
 async def run_any_task(
     task_key: str,
     request: dict,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
     """Единый эндпоинт для запуска любой задачи."""
@@ -1421,7 +1655,7 @@ async def run_any_task(
 
 @router.get("/history", response_model=PaginatedTasksResponse)
 async def get_user_task_history(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db),
     page: int = Query(1, ge=1),
     size: int = Query(25, ge=1, le=100),
@@ -1450,7 +1684,7 @@ async def get_user_task_history(
 @router.post("/{task_history_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
 async def cancel_task(
     task_history_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db),
 ):
     """Отменяет задачу, находящуюся в очереди или в процессе выполнения."""
@@ -1472,7 +1706,7 @@ async def cancel_task(
 @router.post("/{task_history_id}/retry", response_model=ActionResponse)
 async def retry_task(
     task_history_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db),
 ):
     """Повторно запускает задачу, которая завершилась с ошибкой."""
@@ -1496,25 +1730,187 @@ async def retry_task(
     
     return await _enqueue_task(current_user, db, task_key, validated_data, original_task_name=task.task_name)
 
+# --- backend/app\api\endpoints\teams.py ---
+
+# --- backend/app/api/endpoints/teams.py ---
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload, joinedload
+from sqlalchemy import select, delete
+from typing import List
+
+from app.db.session import get_db
+from app.db.models import User, Team, TeamMember, ManagedProfile, TeamProfileAccess, TeamMemberRole
+from app.api.dependencies import get_current_manager_user
+from app.api.schemas.teams import TeamRead, TeamCreate, InviteMemberRequest, UpdateAccessRequest, TeamMemberRead, ProfileInfo, TeamMemberAccess
+from app.core.plans import is_feature_available_for_plan, get_plan_config
+from app.services.vk_api import VKAPI
+from app.core.security import decrypt_data
+import structlog
+
+log = structlog.get_logger(__name__)
+router = APIRouter()
+
+async def check_agency_plan(manager: User = Depends(get_current_manager_user)):
+    if not is_feature_available_for_plan(manager.plan, "agency_mode"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Управление командой доступно только на тарифе 'Agency'."
+        )
+    return manager
+
+async def get_team_owner(manager: User = Depends(check_agency_plan), db: AsyncSession = Depends(get_db)):
+    # Используем joinedload для эффективности
+    stmt = select(Team).options(joinedload(Team.members)).where(Team.owner_id == manager.id)
+    team = (await db.execute(stmt)).scalar_one_or_none()
+    if not team:
+        # Если команды нет, создаем ее автоматически
+        team = Team(name=f"Команда {manager.id}", owner_id=manager.id)
+        db.add(team)
+        await db.commit()
+        await db.refresh(team)
+    return manager, team
+
+@router.get("/my-team", response_model=TeamRead)
+async def get_my_team(
+    manager_and_team: tuple = Depends(get_team_owner),
+    db: AsyncSession = Depends(get_db)
+):
+    manager, team = manager_and_team
+    # Глубокая загрузка всех связанных данных
+    stmt = (
+        select(Team)
+        .options(
+            selectinload(Team.members).selectinload(TeamMember.user),
+            selectinload(Team.members).selectinload(TeamMember.profile_accesses)
+        )
+        .where(Team.id == team.id)
+    )
+    team_details = (await db.execute(stmt)).scalar_one()
+
+    # Получаем все управляемые профили менеджера один раз
+    managed_profiles_db = (await db.execute(
+        select(ManagedProfile).options(selectinload(ManagedProfile.profile)).where(ManagedProfile.manager_user_id == manager.id)
+    )).scalars().all()
+    
+    all_profiles_map = {mp.profile.id: mp.profile for mp in managed_profiles_db}
+
+    members_response = []
+    for member in team_details.members:
+        member_vk_info = await VKAPI(decrypt_data(member.user.encrypted_vk_token)).get_user_info(fields="photo_50")
+        
+        accesses = []
+        member_access_map = {pa.profile_user_id for pa in member.profile_accesses}
+        
+        for profile in all_profiles_map.values():
+            profile_vk_info = await VKAPI(decrypt_data(profile.encrypted_vk_token)).get_user_info(fields="photo_50")
+            accesses.append(TeamMemberAccess(
+                profile=ProfileInfo(
+                    id=profile.id, vk_id=profile.vk_id,
+                    first_name=profile_vk_info.get("first_name", ""),
+                    last_name=profile_vk_info.get("last_name", ""),
+                    photo_50=profile_vk_info.get("photo_50", "")
+                ),
+                has_access=profile.id in member_access_map
+            ))
+            
+        members_response.append(TeamMemberRead(
+            id=member.id, user_id=member.user_id, role=member.role.value,
+            user_info=ProfileInfo(
+                id=member.user.id, vk_id=member.user.vk_id,
+                first_name=member_vk_info.get("first_name", ""),
+                last_name=member_vk_info.get("last_name", ""),
+                photo_50=member_vk_info.get("photo_50", "")
+            ),
+            accesses=accesses
+        ))
+    
+    return TeamRead(id=team.id, name=team.name, owner_id=team.owner_id, members=members_response)
+
+@router.post("/my-team/members", status_code=status.HTTP_201_CREATED)
+async def invite_member(
+    invite_data: InviteMemberRequest,
+    manager_and_team: tuple = Depends(get_team_owner),
+    db: AsyncSession = Depends(get_db)
+):
+    manager, team = manager_and_team
+    plan_config = get_plan_config(manager.plan)
+    max_members = plan_config.get("limits", {}).get("max_team_members", 1)
+    if len(team.members) >= max_members:
+        raise HTTPException(status_code=403, detail=f"Достигнут лимит на количество участников в команде ({max_members}).")
+
+    invited_user = (await db.execute(select(User).where(User.vk_id == invite_data.user_vk_id))).scalar_one_or_none()
+    if not invited_user:
+        raise HTTPException(status_code=404, detail="Пользователь с таким VK ID не найден в системе Zenith.")
+    if invited_user.team_membership or invited_user.owned_team:
+        raise HTTPException(status_code=409, detail="Этот пользователь уже состоит в команде или является владельцем.")
+
+    new_member = TeamMember(team_id=team.id, user_id=invited_user.id)
+    db.add(new_member)
+    await db.commit()
+    return {"message": "Пользователь успешно добавлен в команду."}
+
+@router.delete("/my-team/members/{member_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_member(
+    member_id: int,
+    manager_and_team: tuple = Depends(get_team_owner),
+    db: AsyncSession = Depends(get_db)
+):
+    _, team = manager_and_team
+    member = (await db.execute(select(TeamMember).where(TeamMember.id == member_id, TeamMember.team_id == team.id))).scalar_one_or_none()
+    if not member:
+        raise HTTPException(status_code=404, detail="Участник команды не найден.")
+    if member.user_id == team.owner_id:
+        raise HTTPException(status_code=400, detail="Нельзя удалить владельца команды.")
+        
+    await db.delete(member)
+    await db.commit()
+
+@router.put("/my-team/members/{member_id}/access")
+async def update_member_access(
+    member_id: int,
+    access_data: List[UpdateAccessRequest],
+    manager_and_team: tuple = Depends(get_team_owner),
+    db: AsyncSession = Depends(get_db)
+):
+    _, team = manager_and_team
+    member = (await db.execute(select(TeamMember).where(TeamMember.id == member_id, TeamMember.team_id == team.id))).scalar_one_or_none()
+    if not member:
+        raise HTTPException(status_code=404, detail="Участник команды не найден.")
+
+    # Оптимизированное обновление: сначала удаляем все, потом добавляем нужные
+    await db.execute(delete(TeamProfileAccess).where(TeamProfileAccess.team_member_id == member_id))
+    
+    accesses_to_add = []
+    for access in access_data:
+        if access.has_access:
+            accesses_to_add.append(TeamProfileAccess(team_member_id=member_id, profile_user_id=access.profile_user_id))
+    
+    if accesses_to_add:
+        db.add_all(accesses_to_add)
+        
+    await db.commit()
+    return {"message": "Права доступа обновлены."}
+
 # --- backend/app\api\endpoints\users.py ---
 
-# backend/app/api/endpoints/users.py - ПОЛНАЯ ИСПРАВЛЕННАЯ ВЕРСЯ
-
-from fastapi import APIRouter, Depends, HTTPException, status, Query # <-- Добавлен Query
+# --- backend/app/api/endpoints/users.py ---
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, delete
+from sqlalchemy.orm import selectinload
+from sqlalchemy.exc import IntegrityError
 from app.db.session import get_db
-from app.db.models import User, DelayProfile
-from app.api.dependencies import get_current_user
+from app.db.models import ManagedProfile, User, DelayProfile, FilterPreset
+from app.api.dependencies import get_current_active_profile, get_current_manager_user
 from app.services.vk_api import VKAPI, VKAPIError
 from app.core.security import decrypt_data
 from app.repositories.stats import StatsRepository
 from app.core.plans import get_features_for_plan, is_feature_available_for_plan
-# --- НОВЫЙ ИМПОРТ ---
-from app.api.schemas.users import TaskInfoResponse
-
+from app.api.schemas.users import TaskInfoResponse, FilterPresetCreate, FilterPresetRead
 
 router = APIRouter()
 
@@ -1542,8 +1938,7 @@ class UpdateDelayProfileRequest(BaseModel):
     delay_profile: DelayProfile
 
 @router.get("/me", response_model=UserMeResponse)
-async def read_users_me(current_user: User = Depends(get_current_user)):
-    """Получает полную информацию о текущем пользователе из VK и нашей БД."""
+async def read_users_me(current_user: User = Depends(get_current_active_profile)):
     vk_token = decrypt_data(current_user.encrypted_vk_token)
     if not vk_token:
         raise HTTPException(
@@ -1554,7 +1949,8 @@ async def read_users_me(current_user: User = Depends(get_current_user)):
     vk_api = VKAPI(access_token=vk_token)
     
     try:
-        user_info_vk = await vk_api.get_user_info()
+        user_info_vk_list = await vk_api.get_user_info(fields="photo_200,status,counters")
+        user_info_vk = user_info_vk_list[0] if user_info_vk_list else {}
     except VKAPIError as e:
          raise HTTPException(
              status_code=status.HTTP_424_FAILED_DEPENDENCY, 
@@ -1584,10 +1980,9 @@ async def read_users_me(current_user: User = Depends(get_current_user)):
 
 @router.get("/me/limits", response_model=DailyLimitsResponse)
 async def get_daily_limits(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    """Возвращает текущие дневные лимиты и использование."""
     stats_repo = StatsRepository(db)
     today_stats = await stats_repo.get_or_create_today_stats(current_user.id)
 
@@ -1601,29 +1996,24 @@ async def get_daily_limits(
 @router.put("/me/delay-profile", response_model=UserMeResponse)
 async def update_user_delay_profile(
     request_data: UpdateDelayProfileRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    """Обновляет профиль задержек (скорость работы) пользователя."""
     feature_key = 'fast_slow_delay_profile'
     if request_data.delay_profile != DelayProfile.normal and not is_feature_available_for_plan(current_user.plan, feature_key):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Смена скорости доступна только на PRO тарифе.")
         
     current_user.delay_profile = request_data.delay_profile
     await db.commit()
+    await db.refresh(current_user)
+    # Refreshing user info from VK to return the most up-to-date data
     return await read_users_me(current_user)
 
-# --- НОВЫЙ ЭНДПОИНТ ---
 @router.get("/task-info", response_model=TaskInfoResponse)
 async def get_task_info(
     task_key: str = Query(...),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_active_profile)
 ):
-    """
-    Возвращает дополнительную информацию для модального окна задачи.
-    - Для 'accept_friends': количество входящих заявок.
-    - Для 'remove_friends': общее количество друзей.
-    """
     vk_token = decrypt_data(current_user.encrypted_vk_token)
     vk_api = VKAPI(access_token=vk_token)
     count = 0
@@ -1631,22 +2021,117 @@ async def get_task_info(
     try:
         if task_key == "accept_friends":
             response = await vk_api.get_incoming_friend_requests()
-            if response and "items" in response:
-                count = len(response["items"])
+            count = response.get("count", 0) if response else 0
         
         elif task_key == "remove_friends":
-            # Используем get_user_info, так как это эффективнее
-            user_info = await vk_api.get_user_info(user_ids=str(current_user.vk_id))
-            if user_info and "counters" in user_info:
-                count = user_info["counters"].get("friends", 0)
+            user_info_list = await vk_api.get_user_info(user_ids=str(current_user.vk_id), fields="counters")
+            if user_info_list:
+                user_info = user_info_list[0]
+                count = user_info.get("counters", {}).get("friends", 0)
 
     except VKAPIError as e:
-        # Не блокируем фронтенд, если VK API недоступен, просто вернем 0
-        # В реальном приложении можно добавить логирование
         print(f"Could not fetch task info for {task_key} due to VK API error: {e}")
         count = 0
 
     return TaskInfoResponse(count=count)
+
+@router.get("/me/filter-presets", response_model=List[FilterPresetRead])
+async def get_filter_presets(
+    action_type: str = Query(...),
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
+    stmt = select(FilterPreset).where(
+        FilterPreset.user_id == current_user.id,
+        FilterPreset.action_type == action_type
+    ).order_by(FilterPreset.name)
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+@router.post("/me/filter-presets", response_model=FilterPresetRead, status_code=status.HTTP_201_CREATED)
+async def create_filter_preset(
+    preset_data: FilterPresetCreate,
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
+    new_preset = FilterPreset(user_id=current_user.id, **preset_data.model_dump())
+    db.add(new_preset)
+    try:
+        await db.commit()
+        await db.refresh(new_preset)
+        return new_preset
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Пресет с таким названием для данного действия уже существует."
+        )
+
+@router.delete("/me/filter-presets/{preset_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_filter_preset(
+    preset_id: int,
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
+    stmt = delete(FilterPreset).where(
+        FilterPreset.id == preset_id,
+        FilterPreset.user_id == current_user.id
+    )
+    result = await db.execute(stmt)
+    if result.rowcount == 0:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пресет не найден.")
+    await db.commit()
+
+
+class ManagedProfileRead(BaseModel):
+    id: int
+    vk_id: int
+    first_name: str
+    last_name: str
+    photo_50: str
+    
+    class Config:
+        from_attributes = True
+
+@router.get("/me/managed-profiles", response_model=List[ManagedProfileRead], summary="Получить список профилей для переключения")
+async def get_managed_profiles(
+    manager: User = Depends(get_current_manager_user),
+    db: AsyncSession = Depends(get_db)
+):
+    # Загружаем связи с профилями и сами профили
+    result = await db.execute(
+        select(User)
+        .options(selectinload(User.managed_profiles).selectinload(ManagedProfile.profile))
+        .where(User.id == manager.id)
+    )
+    manager_with_profiles = result.scalar_one()
+
+    # Собираем информацию о всех профилях, включая самого менеджера
+    profiles_info = []
+    
+    # 1. Добавляем самого менеджера
+    manager_info_vk = await VKAPI(access_token=decrypt_data(manager.encrypted_vk_token)).get_user_info(fields="photo_50")
+    profiles_info.append({
+        "id": manager.id,
+        "vk_id": manager.vk_id,
+        "first_name": manager_info_vk.get("first_name", ""),
+        "last_name": manager_info_vk.get("last_name", ""),
+        "photo_50": manager_info_vk.get("photo_50", "")
+    })
+    
+    # 2. Добавляем управляемые профили
+    for managed_rel in manager_with_profiles.managed_profiles:
+        profile = managed_rel.profile
+        profile_info_vk = await VKAPI(access_token=decrypt_data(profile.encrypted_vk_token)).get_user_info(fields="photo_50")
+        profiles_info.append({
+            "id": profile.id,
+            "vk_id": profile.vk_id,
+            "first_name": profile_info_vk.get("first_name", ""),
+            "last_name": profile_info_vk.get("last_name", ""),
+            "photo_50": profile_info_vk.get("photo_50", "")
+        })
+
+    return profiles_info
 
 # --- backend/app\api\endpoints\websockets.py ---
 
@@ -1714,24 +2199,21 @@ from .users import router as users_router
 
 # --- backend/app\api\schemas\actions.py ---
 
-# backend/app/api/schemas/actions.py
-
+# --- backend/app/api/schemas/actions.py ---
 from pydantic import BaseModel, Field
 from typing import Optional, Literal, List
 
 class ActionFilters(BaseModel):
-    """Общая модель для всех фильтров задач."""
     sex: Optional[Literal[0, 1, 2]] = 0 
     is_online: Optional[bool] = False
     last_seen_hours: Optional[int] = Field(None, ge=1)
     allow_closed_profiles: bool = False
-    status_keyword: Optional[str] = Field(None, max_length=100) # <-- НОВЫЙ ФИЛЬТР
-
-    # Фильтры для чистки друзей
+    status_keyword: Optional[str] = Field(None, max_length=100)
+    only_with_photo: Optional[bool] = Field(False, description="Применять действие только к постам с фотографиями")
+    
     remove_banned: Optional[bool] = True
     last_seen_days: Optional[int] = Field(None, ge=1)
 
-    # Гибкие поля для количества друзей/подписчиков
     min_friends: Optional[int] = Field(None, ge=0)
     max_friends: Optional[int] = Field(None, ge=0)
     min_followers: Optional[int] = Field(None, ge=0)
@@ -1765,12 +2247,19 @@ class MassMessagingRequest(BaseCountRequest):
     message_text: str = Field(..., min_length=1, max_length=1000)
     only_new_dialogs: bool = Field(False, description="Отправлять только тем, с кем еще не было переписки.")
 
+class LeaveGroupsRequest(BaseCountRequest):
+    filters: ActionFilters = Field(default_factory=ActionFilters)
+
+class JoinGroupsRequest(BaseCountRequest):
+    count: int = Field(20, ge=1)
+    filters: ActionFilters = Field(default_factory=ActionFilters)
+
 class EmptyRequest(BaseModel):
     pass
 
 # --- backend/app\api\schemas\analytics.py ---
 
-# backend/app/api/schemas/analytics.py
+# --- backend/app/api/schemas/analytics.py ---
 from pydantic import BaseModel, Field
 from typing import List
 from datetime import date
@@ -1788,19 +2277,11 @@ class AudienceAnalyticsResponse(BaseModel):
     age_distribution: List[AudienceStatItem]
     sex_distribution: List[SexDistributionResponse]
 
-class FriendsDynamicItem(BaseModel):
-    date: date
-    total_friends: int
-
-class FriendsDynamicResponse(BaseModel):
-    data: List[FriendsDynamicItem]
-
-class ActionSummaryItem(BaseModel):
-    date: date
-    total_actions: int
-
-class ActionSummaryResponse(BaseModel):
-    data: List[ActionSummaryItem]
+class ProfileSummaryResponse(BaseModel):
+    friends: int
+    followers: int
+    photos: int
+    wall_posts: int
 
 class ProfileGrowthItem(BaseModel):
     date: date
@@ -1809,6 +2290,14 @@ class ProfileGrowthItem(BaseModel):
 
 class ProfileGrowthResponse(BaseModel):
     data: List[ProfileGrowthItem]
+
+class FriendRequestConversionResponse(BaseModel):
+    sent_total: int
+    accepted_total: int
+    conversion_rate: float = Field(..., ge=0, le=100)
+
+class PostActivityHeatmapResponse(BaseModel):
+    data: List[List[int]] = Field(..., description="Матрица 7x24, где data[day][hour] = уровень активности от 0 до 100")
 
 # --- backend/app\api\schemas\auth.py ---
 
@@ -1871,6 +2360,37 @@ class NotificationsResponse(BaseModel):
     items: List[Notification]
     unread_count: int
 
+# --- backend/app\api\schemas\posts.py ---
+
+# --- backend/app/api/schemas/posts.py --- (НОВЫЙ ФАЙЛ)
+from pydantic import BaseModel, Field
+from datetime import datetime
+from typing import List, Optional
+
+class PostBase(BaseModel):
+    post_text: Optional[str] = None
+    attachments: Optional[List[str]] = Field(default_factory=list)
+    publish_at: datetime
+
+class PostCreate(PostBase):
+    pass
+
+class PostUpdate(PostBase):
+    pass
+
+class PostRead(PostBase):
+    id: int
+    vk_profile_id: int
+    status: str
+    vk_post_id: Optional[str] = None
+    error_message: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+class UploadedImageResponse(BaseModel):
+    attachment_id: str
+
 # --- backend/app\api\schemas\proxies.py ---
 
 # backend/app/api/schemas/proxies.py
@@ -1898,24 +2418,27 @@ class ProxyTestResponse(BaseModel):
 
 # --- backend/app\api\schemas\scenarios.py ---
 
-# backend/app/api/schemas/scenarios.py
+# --- backend/app/api/schemas/scenarios.py ---
+import enum
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
-# --- Схемы для шагов ---
-class ScenarioStepBase(BaseModel):
-    action_type: str
-    settings: Dict[str, Any]
+class ScenarioStepType(str, enum.Enum):
+    action = "action"
+    condition = "condition"
 
-class ScenarioStepCreate(ScenarioStepBase):
-    step_order: int
+# Схемы для шагов (теперь это "узлы" графа)
+class ScenarioStepNode(BaseModel):
+    id: str # Фронтенд-ID узла (например, 'node_1')
+    step_type: ScenarioStepType
+    details: Dict[str, Any]
+    position: Dict[str, float]
 
-class ScenarioStep(ScenarioStepBase):
-    id: int
-    step_order: int
-
-    class Config:
-        from_attributes = True
+class ScenarioEdge(BaseModel):
+    id: str
+    source: str
+    target: str
+    sourceHandle: Optional[str] = None # 'next', 'on_success', 'on_failure'
 
 # --- Схемы для сценариев ---
 class ScenarioBase(BaseModel):
@@ -1924,17 +2447,31 @@ class ScenarioBase(BaseModel):
     is_active: bool = False
 
 class ScenarioCreate(ScenarioBase):
-    steps: List[ScenarioStepCreate]
+    nodes: List[ScenarioStepNode]
+    edges: List[ScenarioEdge]
 
-class ScenarioUpdate(ScenarioBase):
-    steps: List[ScenarioStepCreate]
+class ScenarioUpdate(ScenarioCreate):
+    pass
 
 class Scenario(ScenarioBase):
     id: int
-    steps: List[ScenarioStep]
+    nodes: List[ScenarioStepNode]
+    edges: List[ScenarioEdge]
 
     class Config:
         from_attributes = True
+
+# Схема для нового эндпоинта
+class ConditionOption(BaseModel):
+    value: str
+    label: str
+
+class AvailableCondition(BaseModel):
+    key: str
+    label: str
+    type: str # 'number', 'select', 'time'
+    operators: List[str]
+    options: Optional[List[ConditionOption]] = None
 
 # --- backend/app\api\schemas\stats.py ---
 
@@ -2000,36 +2537,71 @@ class PaginatedTasksResponse(BaseModel):
     size: int
     has_more: bool
 
+# --- backend/app\api\schemas\teams.py ---
+
+# --- backend/app/api/schemas/teams.py --- (НОВЫЙ ФАЙЛ)
+from pydantic import BaseModel, Field
+from typing import List
+
+class ProfileInfo(BaseModel):
+    id: int
+    vk_id: int
+    first_name: str
+    last_name: str
+    photo_50: str
+
+class TeamMemberAccess(BaseModel):
+    profile: ProfileInfo
+    has_access: bool
+
+class TeamMemberRead(BaseModel):
+    id: int
+    user_id: int
+    user_info: ProfileInfo
+    role: str
+    accesses: List[TeamMemberAccess]
+
+class TeamRead(BaseModel):
+    id: int
+    name: str
+    owner_id: int
+    members: List[TeamMemberRead]
+
+class TeamCreate(BaseModel):
+    name: str = Field(..., min_length=3, max_length=50)
+
+class InviteMemberRequest(BaseModel):
+    user_vk_id: int
+
+class UpdateAccessRequest(BaseModel):
+    profile_user_id: int
+    has_access: bool
+
 # --- backend/app\api\schemas\users.py ---
 
-# backend/app/api/schemas/users.py
+# --- backend/app/api/schemas/users.py ---
 from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional, Dict, Any, Literal
-from datetime import datetime
+from typing import Optional, Dict, Any
 
 class UserBase(BaseModel):
     id: int
     vk_id: int
     model_config = ConfigDict(from_attributes=True)
 
-class ProxyUpdateRequest(BaseModel):
-    proxy: Optional[str] = Field(None, description="Строка прокси, например http://user:pass@host:port")
-
-class UserMeResponse(BaseModel):
-    id: int
-    first_name: str
-    last_name: str
-    photo_200: str
-    status: str = ""
-    counters: Optional[Dict[str, Any]] = None
-    plan: str
-    plan_expires_at: Optional[datetime] = None
-    is_admin: bool
-    delay_profile: str
-    proxy: Optional[str] = None
-
 class TaskInfoResponse(BaseModel):
     count: int
+
+class FilterPresetBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=50)
+    action_type: str
+    filters: Dict[str, Any]
+
+class FilterPresetCreate(FilterPresetBase):
+    pass
+
+class FilterPresetRead(FilterPresetBase):
+    id: int
+    model_config = ConfigDict(from_attributes=True)
 
 # --- backend/app\api\schemas\__init__.py ---
 
@@ -2357,7 +2929,7 @@ Base = declarative_base()
 
 # --- backend/app\db\models.py ---
 
-# backend/app/db/models.py
+# --- backend/app/db/models.py ---
 import datetime
 import enum
 from sqlalchemy import (
@@ -2372,6 +2944,47 @@ class DelayProfile(enum.Enum):
     normal = "normal"
     fast = "fast"
 
+class FriendRequestStatus(enum.Enum):
+    pending = "pending"
+    accepted = "accepted"
+
+class ScenarioStepType(enum.Enum):
+    action = "action"
+    condition = "condition"
+
+class PostActivityHeatmap(Base):
+    __tablename__ = "post_activity_heatmaps"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True, unique=True)
+    heatmap_data = Column(JSON, nullable=False) # Хранит матрицу 7x24
+    last_updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    user = relationship("User", back_populates="heatmap")
+
+class ScheduledPostStatus(enum.Enum):
+    scheduled = "scheduled"
+    published = "published"
+    failed = "failed"
+
+class ScheduledPost(Base):
+    __tablename__ = "scheduled_posts"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    vk_profile_id = Column(BigInteger, nullable=False, index=True) # ID профиля, на стену которого публикуем
+    post_text = Column(Text, nullable=True)
+    attachments = Column(JSON, nullable=True) # Хранит список attachment_id
+    publish_at = Column(DateTime, nullable=False, index=True)
+    status = Column(Enum(ScheduledPostStatus), nullable=False, default=ScheduledPostStatus.scheduled, index=True)
+    celery_task_id = Column(String, nullable=True, unique=True)
+    vk_post_id = Column(String, nullable=True) # ID опубликованного поста
+    error_message = Column(Text, nullable=True)
+
+    user = relationship("User")
+
+class TeamMemberRole(enum.Enum):
+    admin = "admin"
+    member = "member"
+
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
@@ -2385,11 +2998,10 @@ class User(Base):
 
     daily_likes_limit = Column(Integer, nullable=False, server_default=text('0'))
     daily_add_friends_limit = Column(Integer, nullable=False, server_default=text('0'))
-    daily_message_limit = Column(Integer, nullable=False, server_default=text('0')) # <-- НОВОЕ ПОЛЕ
+    daily_message_limit = Column(Integer, nullable=False, server_default=text('0'))
     
     delay_profile = Column(Enum(DelayProfile), nullable=False, server_default=DelayProfile.normal.name)
 
-    # Relationships
     proxies = relationship("Proxy", back_populates="user", cascade="all, delete-orphan", lazy="selectin")
     task_history = relationship("TaskHistory", back_populates="user", cascade="all, delete-orphan")
     daily_stats = relationship("DailyStats", back_populates="user", cascade="all, delete-orphan")
@@ -2397,6 +3009,87 @@ class User(Base):
     notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
     scenarios = relationship("Scenario", back_populates="user", cascade="all, delete-orphan")
     profile_metrics = relationship("ProfileMetric", back_populates="user", cascade="all, delete-orphan")
+    filter_presets = relationship("FilterPreset", back_populates="user", cascade="all, delete-orphan")
+    friend_requests = relationship("FriendRequestLog", back_populates="user", cascade="all, delete-orphan")
+    heatmap = relationship("PostActivityHeatmap", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    managed_profiles = relationship("ManagedProfile", foreign_keys="[ManagedProfile.manager_user_id]", back_populates="manager", cascade="all, delete-orphan")
+    scenarios = relationship("Scenario", back_populates="user", cascade="all, delete-orphan")
+    scheduled_posts = relationship("ScheduledPost", back_populates="user", cascade="all, delete-orphan", foreign_keys="[ScheduledPost.user_id]")
+
+    owned_team = relationship("Team", back_populates="owner", uselist=False, cascade="all, delete-orphan")
+    team_membership = relationship("TeamMember", back_populates="user", uselist=False, cascade="all, delete-orphan")
+
+class Team(Base):
+    __tablename__ = "teams"
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
+
+    owner = relationship("User", back_populates="owned_team")
+    members = relationship("TeamMember", back_populates="team", cascade="all, delete-orphan")
+
+class TeamMember(Base):
+    __tablename__ = "team_members"
+    id = Column(Integer, primary_key=True)
+    team_id = Column(Integer, ForeignKey("teams.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
+    role = Column(Enum(TeamMemberRole), nullable=False, default=TeamMemberRole.member)
+
+    team = relationship("Team", back_populates="members")
+    user = relationship("User", back_populates="team_membership")
+    profile_accesses = relationship("TeamProfileAccess", back_populates="team_member", cascade="all, delete-orphan")
+    
+    __table_args__ = (UniqueConstraint('team_id', 'user_id', name='_team_user_uc'),)
+
+class TeamProfileAccess(Base):
+    __tablename__ = "team_profile_access"
+    id = Column(Integer, primary_key=True)
+    team_member_id = Column(Integer, ForeignKey("team_members.id", ondelete="CASCADE"), nullable=False)
+    # ID управляемого профиля (ссылается на User, т.к. профили - это тоже юзеры)
+    profile_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    
+    team_member = relationship("TeamMember", back_populates="profile_accesses")
+    profile = relationship("User")
+
+class ManagedProfile(Base):
+    __tablename__ = "managed_profiles"
+    id = Column(Integer, primary_key=True)
+    manager_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    profile_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    
+    manager = relationship("User", foreign_keys=[manager_user_id], back_populates="managed_profiles")
+    profile = relationship("User", foreign_keys=[profile_user_id])
+    
+    __table_args__ = (
+        UniqueConstraint('manager_user_id', 'profile_user_id', name='_manager_profile_uc'),
+    )
+
+class FriendRequestLog(Base):
+    __tablename__ = "friend_request_logs"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    target_vk_id = Column(BigInteger, nullable=False, index=True)
+    status = Column(Enum(FriendRequestStatus), nullable=False, default=FriendRequestStatus.pending, index=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, index=True)
+    resolved_at = Column(DateTime, nullable=True)
+
+    user = relationship("User", back_populates="friend_requests")
+    __table_args__ = (
+        UniqueConstraint('user_id', 'target_vk_id', name='_user_target_uc'),
+    )
+
+class FilterPreset(Base):
+    __tablename__ = "filter_presets"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    action_type = Column(String, nullable=False, index=True)
+    filters = Column(JSON, nullable=False)
+
+    user = relationship("User", back_populates="filter_presets")
+    __table_args__ = (
+        UniqueConstraint('user_id', 'name', 'action_type', name='_user_name_action_uc'),
+    )
 
 class LoginHistory(Base):
     __tablename__ = "login_history"
@@ -2407,7 +3100,6 @@ class LoginHistory(Base):
     user_agent = Column(Text, nullable=True)
 
     user = relationship("User")
-
 
 class Proxy(Base):
     __tablename__ = "proxies"
@@ -2490,21 +3182,32 @@ class Scenario(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     name = Column(String, nullable=False)
-    schedule = Column(String, nullable=False)
+    schedule = Column(String, nullable=False) # CRON-строка остается для планировщика
     is_active = Column(Boolean, default=False, nullable=False)
-    
+    first_step_id = Column(Integer, ForeignKey("scenario_steps.id", use_alter=True, name="fk_scenario_first_step"), nullable=True)
+
     user = relationship("User", back_populates="scenarios")
-    steps = relationship("ScenarioStep", back_populates="scenario", cascade="all, delete-orphan", lazy="selectin", order_by="ScenarioStep.step_order")
+    steps = relationship("ScenarioStep", back_populates="scenario", cascade="all, delete-orphan", foreign_keys="[ScenarioStep.scenario_id]")
 
 class ScenarioStep(Base):
     __tablename__ = "scenario_steps"
     id = Column(Integer, primary_key=True)
     scenario_id = Column(Integer, ForeignKey("scenarios.id"), nullable=False, index=True)
-    step_order = Column(Integer, nullable=False)
-    action_type = Column(String, nullable=False)
-    settings = Column(JSON, nullable=False)
-    batch_settings = Column(JSON, nullable=True) # <-- НОВОЕ ПОЛЕ
-    scenario = relationship("Scenario", back_populates="steps")
+    
+    # Новые поля для графа
+    step_type = Column(Enum(ScenarioStepType), nullable=False)
+    details = Column(JSON, nullable=False) # Хранит тип действия/условия и их параметры
+    
+    # Указатели на следующие шаги
+    next_step_id = Column(Integer, ForeignKey("scenario_steps.id"), nullable=True) # Для 'action'
+    on_success_next_step_id = Column(Integer, ForeignKey("scenario_steps.id"), nullable=True) # Для 'condition'
+    on_failure_next_step_id = Column(Integer, ForeignKey("scenario_steps.id"), nullable=True) # Для 'condition'
+
+    # UI-координаты для React Flow
+    position_x = Column(Float, default=0)
+    position_y = Column(Float, default=0)
+
+    scenario = relationship("Scenario", back_populates="steps", foreign_keys=[scenario_id])
 
 class Notification(Base):
     __tablename__ = "notifications"
@@ -2534,7 +3237,7 @@ class WeeklyStats(Base):
     __tablename__ = "weekly_stats"
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    week_identifier = Column(String, nullable=False)  # Например, '2024-35'
+    week_identifier = Column(String, nullable=False)
     likes_count = Column(Integer, default=0, nullable=False)
     friends_added_count = Column(Integer, default=0, nullable=False)
     friend_requests_accepted_count = Column(Integer, default=0, nullable=False)
@@ -2548,7 +3251,7 @@ class MonthlyStats(Base):
     __tablename__ = "monthly_stats"
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    month_identifier = Column(String, nullable=False) # Например, '2024-09'
+    month_identifier = Column(String, nullable=False)
     likes_count = Column(Integer, default=0, nullable=False)
     friends_added_count = Column(Integer, default=0, nullable=False)
     friend_requests_accepted_count = Column(Integer, default=0, nullable=False)
@@ -2564,7 +3267,7 @@ class ActionLog(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     action_type = Column(String, nullable=False, index=True)
     message = Column(Text, nullable=False)
-    status = Column(String, nullable=False) # e.g., 'SUCCESS', 'ERROR'
+    status = Column(String, nullable=False)
     timestamp = Column(DateTime, default=datetime.datetime.utcnow, index=True)
 
     user = relationship("User")
@@ -2593,6 +3296,11 @@ class FriendsHistory(Base):
         UniqueConstraint('user_id', 'date', name='_user_date_friends_uc'),
         Index('ix_friends_history_user_date', 'user_id', 'date'),
     )
+
+
+
+
+
 
 # --- backend/app\db\scheduler_models.py ---
 
@@ -2745,35 +3453,78 @@ class UserRepository(BaseRepository):
 
 # --- backend/app\services\analytics_service.py ---
 
-# backend/app/services/analytics_service.py
+# --- backend/app/services/analytics_service.py ---
 import datetime
+import pytz
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from app.services.base import BaseVKService
-from app.db.models import FriendsHistory
+from app.db.models import PostActivityHeatmap
+from app.services.vk_api import VKAPIError
+import structlog
+
+log = structlog.get_logger(__name__)
 
 class AnalyticsService(BaseVKService):
 
-    async def snapshot_friends_count(self):
+    async def generate_post_activity_heatmap(self):
         await self._initialize_vk_api()
         
-        user_info = await self.vk_api.get_user_info(user_ids=str(self.user.vk_id))
-        if not user_info or 'counters' not in user_info:
+        try:
+            friends = await self.vk_api.get_user_friends(self.user.vk_id, fields="last_seen")
+        except VKAPIError as e:
+            log.error("heatmap.vk_error", user_id=self.user.id, error=str(e))
+            return
+        
+        if not friends:
             return
 
-        friends_count = user_info['counters'].get('friends', 0)
-        today = datetime.date.today()
+        # Инициализируем матрицу 7 дней x 24 часа нулями
+        heatmap = [[0 for _ in range(24)] for _ in range(7)]
+        
+        now = datetime.datetime.utcnow()
+        # Анализируем активность за последние 2 недели
+        two_weeks_ago = now - datetime.timedelta(weeks=2)
 
-        stmt = insert(FriendsHistory).values(
+        for friend in friends:
+            last_seen_data = friend.get("last_seen")
+            if not last_seen_data:
+                continue
+            
+            seen_timestamp = last_seen_data.get("time")
+            if not seen_timestamp:
+                continue
+            
+            seen_time = datetime.datetime.fromtimestamp(seen_timestamp, tz=pytz.UTC)
+            
+            if seen_time > two_weeks_ago:
+                day_of_week = seen_time.weekday() # 0 = Понедельник, 6 = Воскресенье
+                hour_of_day = seen_time.hour
+                heatmap[day_of_week][hour_of_day] += 1
+        
+        # Нормализуем данные, чтобы получить значения от 0 до 100 для удобства фронтенда
+        max_activity = max(max(row) for row in heatmap)
+        if max_activity > 0:
+            normalized_heatmap = [
+                [int((count / max_activity) * 100) for count in row]
+                for row in heatmap
+            ]
+        else:
+            normalized_heatmap = heatmap
+        
+        stmt = insert(PostActivityHeatmap).values(
             user_id=self.user.id,
-            date=today,
-            friends_count=friends_count
+            heatmap_data={"data": normalized_heatmap},
         ).on_conflict_do_update(
-            index_elements=['user_id', 'date'],
-            set_={'friends_count': friends_count}
+            index_elements=['user_id'],
+            set_={
+                "heatmap_data": {"data": normalized_heatmap},
+                "last_updated_at": datetime.datetime.utcnow()
+            }
         )
-
         await self.db.execute(stmt)
         await self.db.commit()
+        log.info("heatmap.generated", user_id=self.user.id)
 
 # --- backend/app\services\automation_service.py ---
 
@@ -3021,7 +3772,7 @@ class RedisEventEmitter:
 
 # --- backend/app\services\feed_service.py ---
 
-# backend/app/services/feed_service.py
+# --- backend/app/services/feed_service.py ---
 import random
 from typing import Dict, Any, List
 from app.services.base import BaseVKService
@@ -3029,22 +3780,28 @@ from app.core.exceptions import UserLimitReachedError
 
 class FeedService(BaseVKService):
 
-    async def like_newsfeed(self, count: int, filters: Dict[str, Any], **kwargs):
+    async def like_newsfeed(self, **kwargs):
+        settings: Dict[str, Any] = kwargs
+        count = settings.get('count', 50)
+        filters = settings.get('filters', {})
         return await self._execute_logic(self._like_newsfeed_logic, count, filters)
 
     async def _like_newsfeed_logic(self, count: int, filters: Dict[str, Any]):
         await self.emitter.send_log(f"Запуск задачи: поставить {count} лайков в ленте новостей.", "info")
         stats = await self._get_today_stats()
-        filters['allow_closed_profiles'] = True
+        
+        newsfeed_filter = "post"
+        if filters.get("only_with_photo"):
+            newsfeed_filter = "photo"
 
         await self.humanizer.imitate_page_view()
-        response = await self.vk_api.get_newsfeed(count=count * 2)
+        response = await self.vk_api.get_newsfeed(count=count * 2, filters=newsfeed_filter)
 
         if not response or not response.get('items'):
             await self.emitter.send_log("Посты в ленте не найдены.", "warning")
             return
 
-        posts = [p for p in response['items'] if p.get('type') == 'post']
+        posts = [p for p in response['items'] if p.get('type') in ['post', 'photo']]
         author_ids = [abs(p['source_id']) for p in posts if p.get('source_id') and p['source_id'] > 0]
         filtered_author_ids = set(author_ids)
 
@@ -3054,20 +3811,24 @@ class FeedService(BaseVKService):
             filtered_author_ids = {a['id'] for a in filtered_authors}
 
         processed_count = 0
-        for post in posts:
+        for item in posts:
             if processed_count >= count:
                 break
             if stats.likes_count >= self.user.daily_likes_limit:
                 raise UserLimitReachedError(f"Достигнут дневной лимит лайков ({self.user.daily_likes_limit}).")
 
-            owner_id = post.get('source_id')
-            if not owner_id or post.get('likes', {}).get('user_likes') == 1:
+            owner_id = item.get('source_id')
+            item_id = item.get('post_id') or item.get('id')
+            item_type = item.get('type')
+            
+            if not all([owner_id, item_id, item_type]) or item.get('likes', {}).get('user_likes') == 1:
                 continue
+                
             if owner_id > 0 and owner_id not in filtered_author_ids:
                 continue
 
             await self.humanizer.imitate_simple_action()
-            result = await self.vk_api.add_like('post', owner_id, post['post_id'])
+            result = await self.vk_api.add_like(item_type, owner_id, item_id)
             
             if result and 'likes' in result:
                 processed_count += 1
@@ -3075,63 +3836,10 @@ class FeedService(BaseVKService):
                 if processed_count % 10 == 0:
                      await self.emitter.send_log(f"Поставлено лайков: {processed_count}/{count}", "info")
             else:
-                url = f"https://vk.com/wall{owner_id}_{post['post_id']}"
+                url = f"https://vk.com/wall{owner_id}_{item_id}"
                 await self.emitter.send_log(f"Не удалось поставить лайк. Ответ VK: {result}", "error", target_url=url)
 
         await self.emitter.send_log(f"Задача завершена. Поставлено лайков: {processed_count}.", "success")
-
-    async def like_friends_feed(self, count: int, filters: Dict[str, Any], **kwargs):
-        return await self._execute_logic(self._like_friends_feed_logic, count, filters)
-
-    async def _like_friends_feed_logic(self, count: int, filters: Dict[str, Any]):
-        await self.emitter.send_log(f"Запуск задачи: поставить {count} лайков на стенах друзей.", "info")
-        stats = await self._get_today_stats()
-        filters['allow_closed_profiles'] = True
-
-        friends_response = await self.vk_api.get_user_friends(self.user.vk_id, fields="sex,online,last_seen")
-        if not friends_response:
-            await self.emitter.send_log("Не удалось получить список друзей.", "error")
-            return
-
-        filtered_friends = self._apply_filters_to_profiles(friends_response, filters)
-        if not filtered_friends:
-            await self.emitter.send_log("После применения фильтров не осталось друзей для обработки.", "warning")
-            return
-
-        processed_likes = 0
-        random.shuffle(filtered_friends)
-        for friend in filtered_friends:
-            if processed_likes >= count:
-                break
-            if stats.likes_count >= self.user.daily_likes_limit:
-                raise UserLimitReachedError(f"Достигнут дневной лимит лайков ({self.user.daily_likes_limit}).")
-
-            friend_id = friend['id']
-            await self.humanizer.imitate_page_view()
-            wall = await self.vk_api.get_wall(owner_id=friend_id, count=5)
-            if not wall or not wall.get('items'):
-                continue
-
-            posts_to_like = [p for p in wall['items'] if p.get('likes', {}).get('user_likes') == 0]
-            if not posts_to_like:
-                continue
-
-            post_to_like = random.choice(posts_to_like)
-            await self.humanizer.imitate_simple_action()
-            result = await self.vk_api.add_like('post', friend_id, post_to_like['id'])
-            
-            if result and 'likes' in result:
-                processed_likes += 1
-                await self._increment_stat(stats, 'likes_count')
-                await self._increment_stat(stats, 'like_friends_feed_count')
-                name = f"{friend.get('first_name', '')} {friend.get('last_name', '')}"
-                url = f"https://vk.com/wall{friend_id}_{post_to_like['id']}"
-                await self.emitter.send_log(f"Поставлен лайк другу {name} ({processed_likes}/{count})", "success", target_url=url)
-            else:
-                url = f"https://vk.com/wall{friend_id}_{post_to_like['id']}"
-                await self.emitter.send_log(f"Не удалось поставить лайк другу. Ответ VK: {result}", "error", target_url=url)
-
-        await self.emitter.send_log(f"Задача завершена. Поставлено лайков друзьям: {processed_likes}.", "success")
         
     async def _get_user_profiles(self, user_ids: List[int]) -> List[Dict[str, Any]]:
         if not user_ids:
@@ -3148,28 +3856,12 @@ class FeedService(BaseVKService):
     def _apply_filters_to_profiles(self, profiles: List[Dict[str, Any]], filters: Dict[str, Any]) -> List[Dict[str, Any]]:
         import datetime
         filtered_profiles = []
-        now_ts = datetime.datetime.now().timestamp()
-
         for profile in profiles:
-            if not filters.get('allow_closed_profiles', False) and profile.get('is_closed', True):
+            if filters.get('sex') is not None and filters.get('sex') != 0 and profile.get('sex') != filters['sex']:
                 continue
-            
-            if filters.get('sex') and profile.get('sex') != filters['sex']:
-                continue
-            
             if filters.get('is_online', False) and not profile.get('online', 0):
                 continue
-            
-            last_seen_ts = profile.get('last_seen', {}).get('time', 0)
-            if last_seen_ts == 0:
-                continue
-
-            last_seen_days = filters.get('last_seen_days')
-            if last_seen_days and (now_ts - last_seen_ts) > (last_seen_days * 86400):
-                continue
-
             filtered_profiles.append(profile)
-            
         return filtered_profiles
 
 # --- backend/app\services\friend_management_service.py ---
@@ -3265,7 +3957,7 @@ class FriendManagementService(BaseVKService):
 
 # --- backend/app\services\group_management_service.py ---
 
-# backend/app/services/group_management_service.py
+# --- backend/app/services/group_management_service.py ---
 from typing import Dict, Any
 import asyncio
 from app.services.base import BaseVKService
@@ -3273,21 +3965,24 @@ from app.core.exceptions import UserLimitReachedError
 
 class GroupManagementService(BaseVKService):
 
-    async def leave_groups_by_criteria(self, count: int, filters: Dict[str, Any], **kwargs):
-        return await self._execute_logic(self._leave_groups_logic, count, filters)
+    async def leave_groups_by_criteria(self, **kwargs):
+        settings: Dict[str, Any] = kwargs
+        return await self._execute_logic(self._leave_groups_logic, settings)
 
-    async def _leave_groups_logic(self, count: int, filters: Dict[str, Any]):
+    async def _leave_groups_logic(self, settings: Dict[str, Any]):
+        count = settings.get('count', 50)
+        filters = settings.get('filters', {})
+        
         await self.emitter.send_log(f"Запуск задачи: отписаться от {count} сообществ.", "info")
-        stats = await self._get_today_stats()
 
         response = await self.vk_api.get_groups(user_id=self.user.vk_id)
         if not response or not response.get('items'):
-            await self.emitter.send_log("Не удалось получить список сообществ.", "warning")
+            await self.emitter.send_log("Не удалось получить список сообществ или вы не состоите в группах.", "warning")
             return
         
-        all_groups = response['items']
+        all_groups = [g for g in response['items'] if g.get('type') != 'event']
         
-        groups_to_leave = []
+        groups_to_leave = all_groups
         keyword = filters.get('status_keyword', '').lower().strip()
 
         if keyword:
@@ -3295,8 +3990,6 @@ class GroupManagementService(BaseVKService):
                 group for group in all_groups if keyword in group.get('name', '').lower()
             ]
             await self.emitter.send_log(f"Найдено {len(groups_to_leave)} сообществ по ключевому слову '{keyword}'.", "info")
-        else:
-            groups_to_leave = all_groups # Если нет ключевого слова, отписываемся от всех подряд
         
         if not groups_to_leave:
             await self.emitter.send_log("Сообществ для отписки по заданным критериям не найдено.", "success")
@@ -3315,12 +4008,60 @@ class GroupManagementService(BaseVKService):
 
             if result == 1:
                 processed_count += 1
-                # Можно добавить новую колонку в DailyStats для отписок, если нужно
                 await self.emitter.send_log(f"Вы успешно покинули сообщество: {group_name}", "success", target_url=url)
             else:
                 await self.emitter.send_log(f"Не удалось покинуть сообщество {group_name}. Ответ VK: {result}", "error", target_url=url)
 
         await self.emitter.send_log(f"Задача завершена. Покинуто сообществ: {processed_count}.", "success")
+
+    async def join_groups_by_criteria(self, **kwargs):
+        settings: Dict[str, Any] = kwargs
+        return await self._execute_logic(self._join_groups_logic, settings)
+
+    async def _join_groups_logic(self, settings: Dict[str, Any]):
+        count = settings.get('count', 20)
+        filters = settings.get('filters', {})
+        keyword = filters.get('status_keyword', '').strip()
+
+        if not keyword:
+            await self.emitter.send_log("Не указано ключевое слово для поиска групп.", "error")
+            return
+
+        await self.emitter.send_log(f"Запуск задачи: вступить в {count} сообществ по запросу '{keyword}'.", "info")
+
+        response = await self.vk_api.search_groups(query=keyword, count=count * 2)
+        if not response or not response.get('items'):
+            await self.emitter.send_log("Не найдено сообществ по вашему запросу.", "warning")
+            return
+
+        user_groups_response = await self.vk_api.get_groups(user_id=self.user.vk_id)
+        user_group_ids = set(user_groups_response.get('items', []) if user_groups_response else [])
+
+        groups_to_join = [
+            g for g in response['items'] 
+            if g['id'] not in user_group_ids and g.get('is_closed', 1) == 0
+        ][:count]
+
+        if not groups_to_join:
+            await self.emitter.send_log("Новых открытых сообществ для вступления не найдено.", "success")
+            return
+        
+        processed_count = 0
+        for group in groups_to_join:
+            group_id = group['id']
+            group_name = group['name']
+            url = f"https://vk.com/public{group_id}"
+
+            await self.humanizer.imitate_simple_action()
+            result = await self.vk_api.join_group(group_id)
+
+            if result == 1:
+                processed_count += 1
+                await self.emitter.send_log(f"Успешное вступление в сообщество: {group_name}", "success", target_url=url)
+            else:
+                await self.emitter.send_log(f"Не удалось вступить в сообщество {group_name}. Ответ VK: {result}", "error", target_url=url)
+
+        await self.emitter.send_log(f"Задача завершена. Вступлений в сообщества: {processed_count}.", "success")
 
 # --- backend/app\services\humanizer.py ---
 
@@ -3589,10 +4330,11 @@ class MessageService(BaseVKService):
 
 # --- backend/app\services\outgoing_request_service.py ---
 
-# backend/app/services/outgoing_request_service.py
+# --- backend/app/services/outgoing_request_service.py ---
 from typing import Dict, Any, List
 from app.services.base import BaseVKService
-from app.db.models import DailyStats
+from app.db.models import DailyStats, FriendRequestLog, FriendRequestStatus
+from sqlalchemy.dialects.postgresql import insert
 from app.core.exceptions import UserLimitReachedError
 from app.core.config import settings
 from redis.asyncio import Redis as AsyncRedis
@@ -3600,7 +4342,14 @@ from redis.asyncio import Redis as AsyncRedis
 redis_lock_client = AsyncRedis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/2", decode_responses=True)
 
 class OutgoingRequestService(BaseVKService):
-    async def add_recommended_friends(self, count: int, filters: Dict[str, Any], like_config: Dict[str, Any], send_message_on_add: bool, message_text: str | None, **kwargs):
+    async def add_recommended_friends(self, **kwargs):
+        settings: Dict[str, Any] = kwargs
+        count = settings.get('count', 20)
+        filters = settings.get('filters', {})
+        like_config = settings.get('like_config', {})
+        send_message_on_add = settings.get('send_message_on_add', False)
+        message_text = settings.get('message_text')
+        
         return await self._execute_logic(self._add_recommended_friends_logic, count, filters, like_config, send_message_on_add, message_text)
 
     async def _add_recommended_friends_logic(self, count: int, filters: Dict[str, Any], like_config: Dict[str, Any], send_message_on_add: bool, message_text: str | None):
@@ -3630,8 +4379,8 @@ class OutgoingRequestService(BaseVKService):
 
             await self.humanizer.imitate_page_view()
             
-            message = message_text.replace("{name}", profile.get("first_name", "")) if message_text else None
-            result = await self.vk_api.add_friend(user_id, message if send_message_on_add else None) 
+            message = message_text.replace("{name}", profile.get("first_name", "")) if message_text and send_message_on_add else None
+            result = await self.vk_api.add_friend(user_id, message) 
             
             name = f"{profile.get('first_name', '')} {profile.get('last_name', '')}"
             url = f"https://vk.com/id{user_id}"
@@ -3639,6 +4388,10 @@ class OutgoingRequestService(BaseVKService):
             if result in [1, 2, 4]:
                 processed_count += 1
                 await self._increment_stat(stats, 'friends_added_count')
+                
+                log_stmt = insert(FriendRequestLog).values(user_id=self.user.id, target_vk_id=user_id).on_conflict_do_nothing()
+                await self.db.execute(log_stmt)
+
                 log_msg = f"Отправлена заявка пользователю {name}"
                 if send_message_on_add and message_text:
                     log_msg += " с сообщением."
@@ -3791,6 +4544,107 @@ class ProxyService:
         except Exception as e:
             return False, f"Неизвестная ошибка: {e}"
 
+# --- backend/app\services\scenario_service.py ---
+
+# --- backend/app/services/scenario_service.py ---
+import datetime
+import structlog
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+from redis.asyncio import Redis
+
+from app.db.models import Scenario, ScenarioStep, User
+from app.services.vk_api import VKAPI
+from app.core.security import decrypt_data
+from app.tasks.runner import TASK_SERVICE_MAP
+from app.services.event_emitter import RedisEventEmitter
+from app.core.config import settings
+
+log = structlog.get_logger(__name__)
+
+class ScenarioExecutionService:
+    def __init__(self, db: AsyncSession, scenario_id: int, user_id: int):
+        self.db = db
+        self.scenario_id = scenario_id
+        self.user_id = user_id
+        self.user: User | None = None
+        self.scenario: Scenario | None = None
+        self.steps_map: dict[int, ScenarioStep] = {}
+        self.vk_api: VKAPI | None = None
+
+    async def _initialize(self):
+        stmt = select(Scenario).where(Scenario.id == self.scenario_id).options(selectinload(Scenario.steps), selectinload(Scenario.user))
+        self.scenario = (await self.db.execute(stmt)).scalar_one_or_none()
+        
+        if not self.scenario or not self.scenario.is_active:
+            log.warn("scenario.executor.inactive_or_not_found", scenario_id=self.scenario_id)
+            return False
+            
+        self.user = self.scenario.user
+        if not self.user:
+            log.error("scenario.executor.user_not_found", user_id=self.user_id)
+            return False
+
+        self.steps_map = {step.id: step for step in self.scenario.steps}
+        vk_token = decrypt_data(self.user.encrypted_vk_token)
+        self.vk_api = VKAPI(access_token=vk_token)
+        return True
+
+    async def _evaluate_condition(self, step: ScenarioStep) -> bool:
+        details = step.details
+        metric = details.get("metric")
+        operator = details.get("operator")
+        value = details.get("value")
+
+        if metric == "friends_count":
+            user_info_list = await self.vk_api.get_user_info(fields="counters")
+            current_value = user_info_list[0].get("counters", {}).get("friends", 0) if user_info_list else 0
+        elif metric == "day_of_week":
+            current_value = datetime.datetime.utcnow().isoweekday()
+        else:
+            return False
+
+        if operator == ">": return current_value > value
+        if operator == "<": return current_value < value
+        if operator == "==": return current_value == value
+        return False
+
+    async def run(self):
+        if not await self._initialize(): return
+        
+        current_step_id = self.scenario.first_step_id
+        step_limit = 50 
+        executed_steps = 0
+
+        while current_step_id and executed_steps < step_limit:
+            executed_steps += 1
+            current_step = self.steps_map.get(current_step_id)
+            if not current_step:
+                log.error("scenario.executor.step_not_found", step_id=current_step_id)
+                break
+
+            if current_step.step_type == 'action':
+                action_type = current_step.details.get("action_type")
+                ServiceClass, method_name = TASK_SERVICE_MAP.get(action_type)
+                
+                redis_client = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/1", decode_responses=True)
+                emitter = RedisEventEmitter(redis_client)
+                emitter.set_context(self.user.id)
+                
+                service_instance = ServiceClass(db=self.db, user=self.user, emitter=emitter)
+                await getattr(service_instance, method_name)(**current_step.details.get("settings", {}))
+                
+                await redis_client.close()
+                current_step_id = current_step.next_step_id
+
+            elif current_step.step_type == 'condition':
+                result = await self._evaluate_condition(current_step)
+                if result:
+                    current_step_id = current_step.on_success_next_step_id
+                else:
+                    current_step_id = current_step.on_failure_next_step_id
+
 # --- backend/app\services\story_service.py ---
 
 # backend/app/services/story_service.py
@@ -3823,7 +4677,7 @@ class StoryService(BaseVKService):
 
 # --- backend/app\services\vk_api.py ---
 
-# backend/app/services/vk_api.py
+# --- backend/app/services/vk_api.py ---
 import aiohttp
 import random
 import json
@@ -3894,7 +4748,7 @@ class VKAPI:
         return None
     
     async def get_user_friends(self, user_id: int, fields: str = "sex,bdate,city,online,last_seen,is_closed,deactivated") -> Optional[List[Dict[str, Any]]]:
-        params = {"user_id": user_id, "fields": fields}
+        params = {"user_id": user_id, "fields": fields, "order": "random"}
         response = await self._make_request("friends.get", params=params)
         return response.get("items") if response else None
 
@@ -3911,7 +4765,6 @@ class VKAPI:
         return await self._make_request("stories.get", params={})
 
     async def get_incoming_friend_requests(self, count: int = 1000, **kwargs) -> Optional[Dict[str, Any]]:
-        # --- ИСПРАВЛЕНИЕ: Убираем need_viewed, используем extended для получения профилей ---
         params = {"count": count, **kwargs}
         if 'extended' in params and params['extended'] == 1:
             params['fields'] = "sex,online,last_seen,is_closed,status,counters"
@@ -3921,10 +4774,10 @@ class VKAPI:
         return await self._make_request("friends.add", params={"user_id": user_id})
 
     async def get_recommended_friends(self, count: int = 100) -> Optional[Dict[str, Any]]:
-        return await self._make_request("friends.getSuggestions", params={"count": count, "filter": "mutual"})
+        return await self._make_request("friends.getSuggestions", params={"count": count, "filter": "mutual", "fields": "sex,online,last_seen,is_closed,photo_id"})
         
-    async def get_newsfeed(self, count: int = 100) -> Optional[Dict[str, Any]]:
-        return await self._make_request("newsfeed.get", params={"filters": "post", "count": count})
+    async def get_newsfeed(self, count: int = 100, filters: str = "post,photo") -> Optional[Dict[str, Any]]:
+        return await self._make_request("newsfeed.get", params={"filters": filters, "count": count})
 
     async def add_like(self, item_type: str, owner_id: int, item_id: int) -> Optional[Dict[str, Any]]:
         return await self._make_request("likes.add", params={"type": item_type, "owner_id": owner_id, "item_id": item_id})
@@ -3943,6 +4796,18 @@ class VKAPI:
 
     async def set_online(self) -> Optional[int]:
         return await self._make_request("account.setOnline")
+    
+    async def get_groups(self, user_id: int, extended: int = 1, fields: str = "members_count", count: int = 1000) -> Optional[Dict[str, Any]]:
+        return await self._make_request("groups.get", params={"user_id": user_id, "extended": extended, "fields": fields, "count": count})
+
+    async def leave_group(self, group_id: int) -> Optional[int]:
+        return await self._make_request("groups.leave", params={"group_id": group_id})
+
+    async def search_groups(self, query: str, count: int = 100, sort: int = 6) -> Optional[Dict[str, Any]]:
+        return await self._make_request("groups.search", params={"q": query, "count": count, "sort": sort})
+    
+    async def join_group(self, group_id: int) -> Optional[int]:
+        return await self._make_request("groups.join", params={"group_id": group_id})
 
 async def is_token_valid(vk_token: str) -> Optional[int]:
     vk_api = VKAPI(access_token=vk_token)
@@ -3951,12 +4816,6 @@ async def is_token_valid(vk_token: str) -> Optional[int]:
         return user_info.get('id') if user_info else None
     except VKAPIError:
         return None
-    
-async def get_groups(self, user_id: int, extended: int = 1, fields: str = "members_count", count: int = 1000) -> Optional[Dict[str, Any]]:
-        return await self._make_request("groups.get", params={"user_id": user_id, "extended": extended, "fields": fields, "count": count})
-
-async def leave_group(self, group_id: int) -> Optional[int]:
-        return await self._make_request("groups.leave", params={"group_id": group_id})
 
 # --- backend/app\services\websocket_manager.py ---
 
@@ -4069,7 +4928,7 @@ class AppBaseTask(Task):
 
 # --- backend/app\tasks\cron.py ---
 
-# backend/app/tasks/cron.py
+# --- backend/app/tasks/cron.py ---
 import asyncio
 import datetime
 import structlog
@@ -4082,14 +4941,17 @@ from app.celery_app import celery_app
 from app.core.config import settings
 from app.db.session import AsyncSessionFactory
 from app.db.models import (
-    DailyStats, WeeklyStats, MonthlyStats, Automation, TaskHistory, User, Notification
+    DailyStats, WeeklyStats, MonthlyStats, Automation, TaskHistory, User, Notification, FriendRequestLog, FriendRequestStatus
 )
+from app.services.vk_api import VKAPI, VKAuthError
+from app.core.security import decrypt_data
 from app.tasks.runner import (
     like_feed, add_recommended_friends, accept_friend_requests, 
-    remove_friends_by_criteria, view_stories, like_friends_feed, eternal_online,
-    birthday_congratulation
+    remove_friends_by_criteria, view_stories, eternal_online,
+    birthday_congratulation, leave_groups_by_criteria
 )
-from app.core.config_loader import PLAN_CONFIG
+from app.services.analytics_service import AnalyticsService
+from app.core.config_loader import PLAN_CONFIG, AUTOMATIONS_CONFIG
 from app.core.plans import get_limits_for_plan
 from app.tasks.utils import run_async_from_sync
 import pytz
@@ -4103,8 +4965,8 @@ TASK_FUNC_MAP = {
     "accept_friends": accept_friend_requests,
     "remove_friends": remove_friends_by_criteria,
     "view_stories": view_stories,
-    "like_friends_feed": like_friends_feed,
     "eternal_online": eternal_online,
+    "leave_groups": leave_groups_by_criteria,
 }
 
 async def _create_and_run_task(session, user_id, task_name, settings):
@@ -4112,12 +4974,15 @@ async def _create_and_run_task(session, user_id, task_name, settings):
     if not task_func:
         log.warn("cron.task_not_found", task_name=task_name)
         return
+    
+    task_config = next((item for item in AUTOMATIONS_CONFIG if item['id'] == task_name), {})
+    display_name = task_config.get('name', "Неизвестная задача")
 
     task_kwargs = settings.copy() if settings else {}
     if 'task_history_id' in task_kwargs:
         del task_kwargs['task_history_id']
 
-    task_history = TaskHistory(user_id=user_id, task_name=task_name, status="PENDING", parameters=task_kwargs)
+    task_history = TaskHistory(user_id=user_id, task_name=display_name, status="PENDING", parameters=task_kwargs)
     session.add(task_history)
     await session.flush()
 
@@ -4169,14 +5034,9 @@ async def _aggregate_daily_stats_async():
         log.info("aggregate_daily_stats.success", users_count=len(daily_sums), date=yesterday.isoformat())
 
 async def _run_daily_automations_async(automation_group: str):
-    """
-    Основная логика для запуска периодических автоматизаций.
-    Безопасно для многопроцессной среды Celery.
-    """
     redis_client = Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, db=2, decode_responses=True)
     lock_key = f"lock:task:run_automations:{automation_group}"
     
-    # Пытаемся установить блокировку на 4 минуты. Если не удалось - значит, задача уже выполняется.
     if not await redis_client.set(lock_key, "1", ex=240, nx=True):
         log.warn("run_daily_automations.already_running", group=automation_group)
         await redis_client.close()
@@ -4185,15 +5045,10 @@ async def _run_daily_automations_async(automation_group: str):
     try:
         async with AsyncSessionFactory() as session:
             now_utc = datetime.datetime.utcnow()
-            # Устанавливаем часовой пояс Москвы для проверки кастомного расписания
             moscow_tz = pytz.timezone("Europe/Moscow")
             now_moscow = now_utc.astimezone(moscow_tz)
 
-            automation_ids_in_group = []
-            if automation_group == 'standard':
-                automation_ids_in_group = ["like_feed", "add_recommended", "accept_friends", "remove_friends", "like_friends_feed", "view_stories", "birthday_congratulation"]
-            elif automation_group == 'online':
-                automation_ids_in_group = ["eternal_online"]
+            automation_ids_in_group = [item['id'] for item in AUTOMATIONS_CONFIG if item.get('group') == automation_group]
 
             if not automation_ids_in_group:
                 log.warn("run_daily_automations.unknown_group", group=automation_group)
@@ -4225,7 +5080,6 @@ async def _run_daily_automations_async(automation_group: str):
             log.info("run_daily_automations.start", count=len(active_automations), group=automation_group)
             
             for automation in active_automations:
-                # Специальная логика для "Вечного онлайна" с кастомным расписанием
                 if automation.automation_type == "eternal_online":
                     settings = automation.settings or {}
                     if settings.get("schedule_type") == "custom":
@@ -4233,40 +5087,35 @@ async def _run_daily_automations_async(automation_group: str):
                         start_time_str = settings.get("start_time")
                         end_time_str = settings.get("end_time")
                         
-                        # Проверяем день недели (0=Понедельник, ..., 6=Воскресенье в Python)
                         if now_moscow.weekday() not in days_of_week:
-                            continue # Пропускаем, если сегодня не рабочий день
+                            continue
                         
-                        # Проверяем время
                         if start_time_str and end_time_str:
                             try:
                                 start_time = datetime.datetime.strptime(start_time_str, "%H:%M").time()
                                 end_time = datetime.datetime.strptime(end_time_str, "%H:%M").time()
                                 
-                                # Корректная обработка интервала через полночь (например, 22:00 - 02:00)
                                 if start_time <= end_time:
                                     if not (start_time <= now_moscow.time() <= end_time):
-                                        continue # Пропускаем, если не попадаем в интервал
-                                else: # Интервал проходит через полночь
+                                        continue
+                                else:
                                     if not (now_moscow.time() >= start_time or now_moscow.time() <= end_time):
                                         continue
                             except ValueError:
                                 log.warn("run_daily_automations.invalid_time_format", user_id=automation.user_id)
-                                continue # Пропускаем при неверном формате времени
+                                continue
                 
                 automation.last_run_at = now_utc
                 await _create_and_run_task(session, user_id=automation.user_id, task_name=automation.automation_type, settings=automation.settings)
             
             await session.commit()
     finally:
-        # Гарантированно освобождаем блокировку и закрываем соединение
         await redis_client.delete(lock_key)
         await redis_client.close()
 
 async def _check_expired_plans_async():
     async with AsyncSessionFactory() as session:
         now = datetime.datetime.utcnow()
-        # <-- ИЗМЕНЕНИЕ: Упрощенная и более эффективная логика для поиска истекших планов
         stmt = select(User).where(
             User.plan != 'Expired',
             User.plan_expires_at != None,
@@ -4301,6 +5150,76 @@ async def _check_expired_plans_async():
         await session.commit()
         log.info("plans.expired_processed_and_deactivated", count=len(user_ids_to_deactivate))
 
+async def _update_friend_request_statuses_async():
+    async with AsyncSessionFactory() as session:
+        stmt = select(User).where(User.friend_requests.any(FriendRequestLog.status == FriendRequestStatus.pending))
+        users_with_pending = (await session.execute(stmt)).scalars().unique().all()
+        
+        if not users_with_pending:
+            return
+            
+        log.info("conversion_tracker.start", users_count=len(users_with_pending))
+        
+        for user in users_with_pending:
+            try:
+                vk_token = decrypt_data(user.encrypted_vk_token)
+                if not vk_token: continue
+                
+                vk_api = VKAPI(access_token=vk_token)
+                
+                pending_reqs_stmt = select(FriendRequestLog).where(
+                    FriendRequestLog.user_id == user.id,
+                    FriendRequestLog.status == FriendRequestStatus.pending
+                )
+                pending_reqs = (await session.execute(pending_reqs_stmt)).scalars().all()
+                
+                friends_response = await vk_api.get_user_friends(user_id=user.vk_id)
+                if friends_response is None: continue
+                
+                friend_ids = set(friends_response)
+                
+                accepted_req_ids = [req.id for req in pending_reqs if req.target_vk_id in friend_ids]
+                
+                if accepted_req_ids:
+                    update_stmt = update(FriendRequestLog).where(FriendRequestLog.id.in_(accepted_req_ids)).values(
+                        status=FriendRequestStatus.accepted,
+                        resolved_at=datetime.datetime.utcnow()
+                    )
+                    await session.execute(update_stmt)
+                    log.info("conversion_tracker.updated", user_id=user.id, count=len(accepted_req_ids))
+            
+            except VKAuthError:
+                log.warn("conversion_tracker.auth_error", user_id=user.id)
+            except Exception as e:
+                log.error("conversion_tracker.user_error", user_id=user.id, error=str(e))
+
+        await session.commit()
+
+async def _generate_all_heatmaps_async():
+    async with AsyncSessionFactory() as session:
+        now = datetime.datetime.utcnow()
+        # Выбираем активных пользователей с платными тарифами
+        stmt = select(User).where(
+            User.plan.in_(['Plus', 'PRO', 'Agency']),
+            or_(User.plan_expires_at.is_(None), User.plan_expires_at > now)
+        )
+        users = (await session.execute(stmt)).scalars().all()
+        
+        if not users:
+            log.info("heatmap_generator.no_active_users")
+            return
+            
+        log.info("heatmap_generator.start", users_count=len(users))
+        for user in users:
+            try:
+                service = AnalyticsService(db=session, user=user, emitter=None)
+                await service.generate_post_activity_heatmap()
+            except Exception as e:
+                log.error("heatmap_generator.user_error", user_id=user.id, error=str(e))
+
+@celery_app.task(name="app.tasks.cron.generate_all_heatmaps")
+def generate_all_heatmaps():
+    run_async_from_sync(_generate_all_heatmaps_async())
 
 @celery_app.task(name="app.tasks.cron.aggregate_daily_stats")
 def aggregate_daily_stats():
@@ -4313,6 +5232,10 @@ def run_daily_automations(automation_group: str):
 @celery_app.task(name="app.tasks.cron.check_expired_plans")
 def check_expired_plans():
     run_async_from_sync(_check_expired_plans_async())
+
+@celery_app.task(name="app.tasks.cron.update_friend_request_statuses")
+def update_friend_request_statuses():
+    run_async_from_sync(_update_friend_request_statuses_async())
 
 # --- backend/app\tasks\maintenance.py ---
 
@@ -4413,6 +5336,7 @@ def snapshot_all_users_metrics():
 
 # --- backend/app\tasks\runner.py ---
 
+# --- backend/app/tasks/runner.py ---
 from app.celery_app import celery_app
 from celery import Task
 from redis.asyncio import Redis as AsyncRedis
@@ -4420,7 +5344,7 @@ import asyncio
 from sqlalchemy.future import select
 import random
 from sqlalchemy.orm import selectinload
-from app.db.models import Scenario, User, TaskHistory
+from app.db.models import Scenario, User, TaskHistory, ScheduledPost, ScheduledPostStatus
 from app.services.event_emitter import RedisEventEmitter
 from app.services.feed_service import FeedService
 from app.services.incoming_request_service import IncomingRequestService
@@ -4432,18 +5356,18 @@ from app.services.message_service import MessageService
 from app.services.group_management_service import GroupManagementService
 from app.core.config import settings
 from app.core.exceptions import UserActionException
-from app.services.vk_api import VKAuthError, VKRateLimitError, VKAPIError
+from app.services.vk_api import VKAPI, VKAuthError, VKRateLimitError, VKAPIError
+from app.core.security import decrypt_data
 from app.tasks.base_task import AppBaseTask, AsyncSessionFactory_Celery
 import structlog
-# --- ИЗМЕНЕНИЕ: Исправлен неверный путь импорта ---
 from app.tasks.utils import run_async_from_sync
 from app.services.humanizer import Humanizer
+from app.services.scenario_service import ScenarioExecutionService
 
 log = structlog.get_logger(__name__)
 
 TASK_SERVICE_MAP = {
     "like_feed": (FeedService, "like_newsfeed"),
-    "like_friends_feed": (FeedService, "like_friends_feed"),
     "add_recommended": (OutgoingRequestService, "add_recommended_friends"),
     "accept_friends": (IncomingRequestService, "accept_friend_requests"),
     "remove_friends": (FriendManagementService, "remove_friends_by_criteria"),
@@ -4452,6 +5376,7 @@ TASK_SERVICE_MAP = {
     "mass_messaging": (MessageService, "send_mass_message"),
     "eternal_online": (AutomationService, "set_online_status"),
     "leave_groups": (GroupManagementService, "leave_groups_by_criteria"),
+    "join_groups": (GroupManagementService, "join_groups_by_criteria"),
 }
 
 async def _execute_task_logic(task_history_id: int, task_name_key: str, **kwargs):
@@ -4494,7 +5419,6 @@ async def _execute_task_logic(task_history_id: int, task_name_key: str, **kwargs
     finally:
         await redis_client.close()
 
-# --- ИЗМЕНЕНИЕ: Добавлена новая задача ---
 def _create_task(name, **kwargs):
     @celery_app.task(name=f"app.tasks.runner.{name}", bind=True, base=AppBaseTask, **kwargs)
     def task_wrapper(self: Task, task_history_id: int, **task_kwargs):
@@ -4509,68 +5433,69 @@ view_stories = _create_task("view_stories", max_retries=2, default_retry_delay=6
 birthday_congratulation = _create_task("birthday_congratulation", max_retries=2, default_retry_delay=120)
 mass_messaging = _create_task("mass_messaging", max_retries=2, default_retry_delay=300)
 eternal_online = _create_task("eternal_online", max_retries=5, default_retry_delay=60)
-like_friends_feed = _create_task("like_friends_feed", max_retries=3, default_retry_delay=300)
 leave_groups_by_criteria = _create_task("leave_groups", max_retries=2, default_retry_delay=60)
+join_groups_by_criteria = _create_task("join_groups", max_retries=2, default_retry_delay=60)
 
 
 @celery_app.task(bind=True, base=AppBaseTask, name="app.tasks.runner.run_scenario_from_scheduler")
 def run_scenario_from_scheduler(self: Task, scenario_id: int, user_id: int):
     async def _run_scenario_logic():
+        log.info("scenario.runner.start", scenario_id=scenario_id, user_id=user_id)
         redis_client = AsyncRedis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/2", decode_responses=True)
-        lock_key = f"lock:scenario:user:{user_id}"
+        lock_key = f"lock:scenario:{scenario_id}"
         
         if not await redis_client.set(lock_key, "1", ex=3600, nx=True):
-            log.warn("scenario.runner.already_running", scenario_id=scenario_id, user_id=user_id)
+            log.warn("scenario.runner.already_running", scenario_id=scenario_id)
             await redis_client.close()
             return
 
-        log.info("scenario.runner.start", scenario_id=scenario_id)
         try:
             async with AsyncSessionFactory_Celery() as session:
-                stmt = select(Scenario).where(Scenario.id == scenario_id).options(selectinload(Scenario.steps), selectinload(Scenario.user))
-                scenario = (await session.execute(stmt)).scalar_one_or_none()
-                
-                if not scenario or not scenario.is_active:
-                    log.warn("scenario.runner.not_found_or_inactive", scenario_id=scenario_id)
-                    return
-
-                emitter = RedisEventEmitter(redis_client)
-                emitter.set_context(user_id=user_id)
-                humanizer = Humanizer(delay_profile=scenario.user.delay_profile, logger_func=emitter.send_log)
-
-                sorted_steps = sorted(scenario.steps, key=lambda s: s.step_order)
-
-                for step in sorted_steps:
-                    ServiceClass, method_name = TASK_SERVICE_MAP[step.action_type]
-                    service_instance = ServiceClass(db=session, user=scenario.user, emitter=emitter)
-                    
-                    batch_settings = step.batch_settings or {}
-                    parts = batch_settings.get("parts", 1)
-                    total_count = step.settings.get("count", 0)
-
-                    if parts > 1 and total_count > 0:
-                        count_per_part = total_count // parts
-                        for i in range(parts):
-                            current_kwargs = step.settings.copy()
-                            current_kwargs['count'] = count_per_part
-                            if i == parts - 1:
-                                current_kwargs['count'] += total_count % parts
-
-                            log.info("scenario.step.batch_execution", scenario_id=scenario_id, step=step.action_type, batch=f"{i+1}/{parts}")
-                            await getattr(service_instance, method_name)(**current_kwargs)
-                            
-                            if i < parts - 1:
-                                await humanizer._sleep(60, 180, f"Пауза между частями шага ({i+1}/{parts})")
-                    else:
-                        await getattr(service_instance, method_name)(**step.settings)
+                executor = ScenarioExecutionService(session, scenario_id, user_id)
+                await executor.run()
         except Exception as e:
-            log.error("scenario.runner.critical_error", scenario_id=scenario_id, error=str(e))
+            log.error("scenario.runner.critical_error", scenario_id=scenario_id, error=str(e), exc_info=True)
         finally:
             await redis_client.delete(lock_key)
             await redis_client.close()
             log.info("scenario.runner.finished", scenario_id=scenario_id)
     
     return run_async_from_sync(_run_scenario_logic())
+
+
+@celery_app.task(bind=True, base=AppBaseTask, name="app.tasks.runner.publish_scheduled_post")
+def publish_scheduled_post(self: Task, post_id: int):
+    async def _publish_logic():
+        async with AsyncSessionFactory_Celery() as session:
+            post = await session.get(ScheduledPost, post_id)
+            if not post or post.status != ScheduledPostStatus.scheduled:
+                return
+
+            user = await session.get(User, post.user_id)
+            if not user:
+                post.status = ScheduledPostStatus.failed
+                post.error_message = "Пользователь не найден"
+                await session.commit()
+                return
+
+            vk_token = decrypt_data(user.encrypted_vk_token)
+            vk_api = VKAPI(access_token=vk_token)
+
+            try:
+                result = await vk_api.wall_post(
+                    owner_id=post.vk_profile_id,
+                    message=post.post_text,
+                    attachments=",".join(post.attachments or [])
+                )
+                post.status = ScheduledPostStatus.published
+                post.vk_post_id = str(result.get("post_id"))
+            except Exception as e:
+                post.status = ScheduledPostStatus.failed
+                post.error_message = str(e)
+            
+            await session.commit()
+    
+    return run_async_from_sync(_publish_logic())
 
 # --- backend/app\tasks\utils.py ---
 

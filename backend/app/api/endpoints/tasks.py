@@ -6,7 +6,7 @@ from typing import Optional
 from pydantic import BaseModel
 
 from app.db.models import User, TaskHistory
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_active_profile
 from app.db.session import get_db
 from app.celery_app import celery_app # <-- НОВЫЙ ИМПОРТ
 from app.api.schemas.actions import (
@@ -90,7 +90,7 @@ async def _enqueue_task(
 async def run_any_task(
     task_key: str,
     request: dict,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
     """Единый эндпоинт для запуска любой задачи."""
@@ -108,7 +108,7 @@ async def run_any_task(
 
 @router.get("/history", response_model=PaginatedTasksResponse)
 async def get_user_task_history(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db),
     page: int = Query(1, ge=1),
     size: int = Query(25, ge=1, le=100),
@@ -137,7 +137,7 @@ async def get_user_task_history(
 @router.post("/{task_history_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
 async def cancel_task(
     task_history_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db),
 ):
     """Отменяет задачу, находящуюся в очереди или в процессе выполнения."""
@@ -159,7 +159,7 @@ async def cancel_task(
 @router.post("/{task_history_id}/retry", response_model=ActionResponse)
 async def retry_task(
     task_history_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db),
 ):
     """Повторно запускает задачу, которая завершилась с ошибкой."""
