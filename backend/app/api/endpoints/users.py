@@ -1,4 +1,4 @@
-# --- backend/app/api/endpoints/users.py ---
+# backend/app/api/endpoints/users.py
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
@@ -15,11 +15,13 @@ from app.core.security import decrypt_data
 from app.repositories.stats import StatsRepository
 from app.core.plans import get_features_for_plan, is_feature_available_for_plan
 from app.api.schemas.users import TaskInfoResponse, FilterPresetCreate, FilterPresetRead
+from app.core.constants import PlanName, FeatureKey
 
 router = APIRouter()
 
 class UserMeResponse(BaseModel):
     id: int
+    vk_id: int
     first_name: str
     last_name: str
     photo_200: str
@@ -68,12 +70,14 @@ async def read_users_me(current_user: User = Depends(get_current_active_profile)
     plan_name = current_user.plan
     if current_user.plan_expires_at and current_user.plan_expires_at < datetime.utcnow():
         is_plan_active = False
-        plan_name = "Expired"
+        plan_name = PlanName.EXPIRED
 
     features = get_features_for_plan(plan_name)
     
     return {
         **user_info_vk,
+        "id": current_user.id,
+        "vk_id": current_user.vk_id,
         "plan": current_user.plan,
         "plan_expires_at": current_user.plan_expires_at,
         "is_admin": current_user.is_admin,
@@ -103,14 +107,12 @@ async def update_user_delay_profile(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    feature_key = 'fast_slow_delay_profile'
-    if request_data.delay_profile != DelayProfile.normal and not is_feature_available_for_plan(current_user.plan, feature_key):
+    if request_data.delay_profile != DelayProfile.normal and not is_feature_available_for_plan(current_user.plan, FeatureKey.FAST_SLOW_DELAY_PROFILE):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Смена скорости доступна только на PRO тарифе.")
         
     current_user.delay_profile = request_data.delay_profile
     await db.commit()
     await db.refresh(current_user)
-    # Refreshing user info from VK to return the most up-to-date data
     return await read_users_me(current_user)
 
 @router.get("/task-info", response_model=TaskInfoResponse)
@@ -134,6 +136,7 @@ async def get_task_info(
                 count = user_info.get("counters", {}).get("friends", 0)
 
     except VKAPIError as e:
+        # Логируем ошибку, но не прерываем работу, возвращаем 0
         print(f"Could not fetch task info for {task_key} due to VK API error: {e}")
         count = 0
 
@@ -202,7 +205,6 @@ async def get_managed_profiles(
     manager: User = Depends(get_current_manager_user),
     db: AsyncSession = Depends(get_db)
 ):
-    # Загружаем связи с профилями и сами профили
     result = await db.execute(
         select(User)
         .options(selectinload(User.managed_profiles).selectinload(ManagedProfile.profile))
@@ -210,29 +212,27 @@ async def get_managed_profiles(
     )
     manager_with_profiles = result.scalar_one()
 
-    # Собираем информацию о всех профилях, включая самого менеджера
+    all_users_map = {manager.id: manager}
+    for rel in manager_with_profiles.managed_profiles:
+        all_users_map[rel.profile.id] = rel.profile
+
+    all_vk_ids = [user.vk_id for user in all_users_map.values()]
+    vk_info_map = {}
+    if all_vk_ids:
+        vk_api = VKAPI(decrypt_data(manager.encrypted_vk_token))
+        user_infos = await vk_api.get_user_info(user_ids=",".join(map(str, all_vk_ids)), fields="photo_50")
+        if user_infos:
+            vk_info_map = {info['id']: info for info in user_infos}
+
     profiles_info = []
-    
-    # 1. Добавляем самого менеджера
-    manager_info_vk = await VKAPI(access_token=decrypt_data(manager.encrypted_vk_token)).get_user_info(fields="photo_50")
-    profiles_info.append({
-        "id": manager.id,
-        "vk_id": manager.vk_id,
-        "first_name": manager_info_vk.get("first_name", ""),
-        "last_name": manager_info_vk.get("last_name", ""),
-        "photo_50": manager_info_vk.get("photo_50", "")
-    })
-    
-    # 2. Добавляем управляемые профили
-    for managed_rel in manager_with_profiles.managed_profiles:
-        profile = managed_rel.profile
-        profile_info_vk = await VKAPI(access_token=decrypt_data(profile.encrypted_vk_token)).get_user_info(fields="photo_50")
+    for user in all_users_map.values():
+        vk_info = vk_info_map.get(user.vk_id, {})
         profiles_info.append({
-            "id": profile.id,
-            "vk_id": profile.vk_id,
-            "first_name": profile_info_vk.get("first_name", ""),
-            "last_name": profile_info_vk.get("last_name", ""),
-            "photo_50": profile_info_vk.get("photo_50", "")
+            "id": user.id,
+            "vk_id": user.vk_id,
+            "first_name": vk_info.get("first_name", "N/A"),
+            "last_name": vk_info.get("last_name", ""),
+            "photo_50": vk_info.get("photo_50", "")
         })
 
-    return profiles_info
+    return sorted(profiles_info, key=lambda p: p['id'] != manager.id)

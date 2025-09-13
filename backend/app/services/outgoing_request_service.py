@@ -1,11 +1,12 @@
-# --- backend/app/services/outgoing_request_service.py ---
-from typing import Dict, Any, List
+# backend/app/services/outgoing_request_service.py
+from typing import Dict, Any
 from app.services.base import BaseVKService
-from app.db.models import DailyStats, FriendRequestLog, FriendRequestStatus
+from app.db.models import DailyStats, FriendRequestLog
 from sqlalchemy.dialects.postgresql import insert
 from app.core.exceptions import UserLimitReachedError
 from app.core.config import settings
 from redis.asyncio import Redis as AsyncRedis
+from app.services.vk_user_filter import apply_filters_to_profiles
 
 redis_lock_client = AsyncRedis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/2", decode_responses=True)
 
@@ -29,8 +30,8 @@ class OutgoingRequestService(BaseVKService):
             await self.emitter.send_log("Рекомендации не найдены.", "warning")
             return
 
-        filtered_profiles = self._apply_filters_to_profiles(response['items'], filters)
-        await self.emitter.send_log(f"Найдено {len(response['items'])} рекомендаций. После фильтрации осталось: {len(filtered_profiles)}.", "info")
+        filtered_profiles = apply_filters_to_profiles(response.get('items', []), filters)
+        await self.emitter.send_log(f"Найдено {len(response.get('items', []))} рекомендаций. После фильтрации осталось: {len(filtered_profiles)}.", "info")
         
         processed_count = 0
         for profile in filtered_profiles:
@@ -38,7 +39,9 @@ class OutgoingRequestService(BaseVKService):
             if stats.friends_added_count >= self.user.daily_add_friends_limit:
                 raise UserLimitReachedError(f"Достигнут дневной лимит на отправку заявок ({self.user.daily_add_friends_limit}).")
             
-            user_id = profile['id']
+            user_id = profile.get('id')
+            if not user_id:
+                continue
             
             lock_key = f"lock:add_friend:{self.user.id}:{user_id}"
             if not await redis_lock_client.set(lock_key, "1", ex=3600, nx=True):
@@ -81,7 +84,7 @@ class OutgoingRequestService(BaseVKService):
         targets = config.get('targets', [])
         
         if 'avatar' in targets and profile.get('photo_id'):
-            photo_id_parts = profile['photo_id'].split('_')
+            photo_id_parts = profile.get('photo_id', '').split('_')
             if len(photo_id_parts) == 2:
                 photo_id = int(photo_id_parts[1])
                 await self.humanizer.imitate_simple_action()
@@ -93,28 +96,10 @@ class OutgoingRequestService(BaseVKService):
         if 'wall' in targets:
             wall = await self.vk_api.get_wall(owner_id=user_id, count=config.get('count', 1))
             if wall and wall.get('items'):
-                for post in wall['items']:
+                for post in wall.get('items', []):
                     if stats.likes_count >= self.user.daily_likes_limit: return
                     await self.humanizer.imitate_simple_action()
-                    res = await self.vk_api.add_like('post', user_id, post['id'])
+                    res = await self.vk_api.add_like('post', user_id, post.get('id'))
                     if res and 'likes' in res:
                         await self._increment_stat(stats, 'likes_count')
-                        await self.emitter.send_log(f"Поставлен лайк на пост на стене.", "success", target_url=f"https://vk.com/wall{user_id}_{post['id']}")
-
-    def _apply_filters_to_profiles(self, profiles: List[Dict[str, Any]], filters: Dict[str, Any]) -> List[Dict[str, Any]]:
-        import datetime
-        filtered_profiles = []
-        now_ts = datetime.datetime.now().timestamp()
-        for profile in profiles:
-            if not filters.get('allow_closed_profiles', False) and profile.get('is_closed', True): continue
-            if filters.get('sex') is not None and filters.get('sex') != 0 and profile.get('sex') != filters['sex']: continue
-            if filters.get('is_online', False) and not profile.get('online', 0): continue
-            
-            last_seen_ts = profile.get('last_seen', {}).get('time', 0)
-            if last_seen_ts:
-                last_seen_hours = filters.get('last_seen_hours')
-                if last_seen_hours and (now_ts - last_seen_ts) > (last_seen_hours * 3600):
-                    continue
-            
-            filtered_profiles.append(profile)
-        return filtered_profiles
+                        await self.emitter.send_log(f"Поставлен лайк на пост на стене.", "success", target_url=f"https://vk.com/wall{user_id}_{post.get('id')}")

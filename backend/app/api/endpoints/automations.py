@@ -30,7 +30,6 @@ async def get_automations_status(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    """Возвращает статусы всех автоматизаций, указывая, доступны ли они по тарифу."""
     query = select(Automation).where(Automation.user_id == current_user.id)
     result = await db.execute(query)
     user_automations_db = {auto.automation_type: auto for auto in result.scalars().all()}
@@ -40,13 +39,12 @@ async def get_automations_status(
         auto_type = config_item['id']
         db_item = user_automations_db.get(auto_type)
         
-        # --- ИЗМЕНЕНИЕ: Используем новую, правильную функцию ---
         is_available = is_feature_available_for_plan(current_user.plan, auto_type)
         
         response_list.append(AutomationStatus(
             automation_type=auto_type,
             is_active=db_item.is_active if db_item else False,
-            settings=db_item.settings if db_item else {},
+            settings=db_item.settings if db_item else config_item.get('default_settings', {}),
             name=config_item['name'],
             description=config_item['description'],
             is_available=is_available
@@ -61,8 +59,6 @@ async def update_automation(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    """Включает, выключает или настраивает автоматизацию с проверкой прав доступа."""
-    # --- ИЗМЕНЕНИЕ: Используем новую, правильную функцию ---
     if request_data.is_active and not is_feature_available_for_plan(current_user.plan, automation_type):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -85,16 +81,15 @@ async def update_automation(
             user_id=current_user.id,
             automation_type=automation_type,
             is_active=request_data.is_active,
-            settings=request_data.settings
+            settings=request_data.settings or config_item.get('default_settings', {})
         )
         db.add(automation)
     else:
         automation.is_active = request_data.is_active
         if request_data.settings is not None:
-            # Обновляем настройки, если они пришли, а не просто заменяем
-            current_settings = automation.settings or {}
-            current_settings.update(request_data.settings)
-            automation.settings = current_settings
+            # Полностью заменяем настройки, а не обновляем.
+            # Это позволяет фронтенду удалять ключи, отправляя объект без них.
+            automation.settings = request_data.settings
     
     await db.commit()
     await db.refresh(automation)
@@ -105,6 +100,5 @@ async def update_automation(
         settings=automation.settings,
         name=config_item['name'],
         description=config_item['description'],
-        # Если мы дошли сюда, значит проверка прав прошла успешно
         is_available=is_feature_available_for_plan(current_user.plan, automation_type)
     )

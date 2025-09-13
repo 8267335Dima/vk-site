@@ -3,6 +3,7 @@ import random
 from typing import Dict, Any, List
 from app.services.base import BaseVKService
 from app.core.exceptions import UserLimitReachedError
+from app.services.vk_user_filter import apply_filters_to_profiles
 
 class FeedService(BaseVKService):
 
@@ -16,9 +17,7 @@ class FeedService(BaseVKService):
         await self.emitter.send_log(f"Запуск задачи: поставить {count} лайков в ленте новостей.", "info")
         stats = await self._get_today_stats()
         
-        newsfeed_filter = "post"
-        if filters.get("only_with_photo"):
-            newsfeed_filter = "photo"
+        newsfeed_filter = "photo" if filters.get("only_with_photo") else "post"
 
         await self.humanizer.imitate_page_view()
         response = await self.vk_api.get_newsfeed(count=count * 2, filters=newsfeed_filter)
@@ -27,14 +26,14 @@ class FeedService(BaseVKService):
             await self.emitter.send_log("Посты в ленте не найдены.", "warning")
             return
 
-        posts = [p for p in response['items'] if p.get('type') in ['post', 'photo']]
-        author_ids = [abs(p['source_id']) for p in posts if p.get('source_id') and p['source_id'] > 0]
+        posts = [p for p in response.get('items', []) if p.get('type') in ['post', 'photo']]
+        author_ids = [abs(p['source_id']) for p in posts if p.get('source_id', 0) > 0]
+        
         filtered_author_ids = set(author_ids)
-
         if author_ids:
             author_profiles = await self._get_user_profiles(list(set(author_ids)))
-            filtered_authors = self._apply_filters_to_profiles(author_profiles, filters)
-            filtered_author_ids = {a['id'] for a in filtered_authors}
+            filtered_authors = apply_filters_to_profiles(author_profiles, filters)
+            filtered_author_ids = {a.get('id') for a in filtered_authors}
 
         processed_count = 0
         for item in posts:
@@ -60,7 +59,7 @@ class FeedService(BaseVKService):
                 processed_count += 1
                 await self._increment_stat(stats, 'likes_count')
                 if processed_count % 10 == 0:
-                     await self.emitter.send_log(f"Поставлено лайков: {processed_count}/{count}", "info")
+                    await self.emitter.send_log(f"Поставлено лайков: {processed_count}/{count}", "info")
             else:
                 url = f"https://vk.com/wall{owner_id}_{item_id}"
                 await self.emitter.send_log(f"Не удалось поставить лайк. Ответ VK: {result}", "error", target_url=url)
@@ -70,22 +69,13 @@ class FeedService(BaseVKService):
     async def _get_user_profiles(self, user_ids: List[int]) -> List[Dict[str, Any]]:
         if not user_ids:
             return []
-        user_profiles = []
+        
+        all_profiles = []
+        # Разделение на чанки по 1000 ID, как требует VK API
         for i in range(0, len(user_ids), 1000):
             chunk = user_ids[i:i + 1000]
             ids_str = ",".join(map(str, chunk))
             profiles = await self.vk_api.get_user_info(user_ids=ids_str)
             if profiles:
-                user_profiles.extend(profiles)
-        return user_profiles
-
-    def _apply_filters_to_profiles(self, profiles: List[Dict[str, Any]], filters: Dict[str, Any]) -> List[Dict[str, Any]]:
-        import datetime
-        filtered_profiles = []
-        for profile in profiles:
-            if filters.get('sex') is not None and filters.get('sex') != 0 and profile.get('sex') != filters['sex']:
-                continue
-            if filters.get('is_online', False) and not profile.get('online', 0):
-                continue
-            filtered_profiles.append(profile)
-        return filtered_profiles
+                all_profiles.extend(profiles)
+        return all_profiles

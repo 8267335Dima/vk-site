@@ -1,4 +1,4 @@
-# --- backend/app/api/endpoints/auth.py ---
+# backend/app/api/endpoints/auth.py
 from datetime import timedelta, datetime
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from pydantic import BaseModel
@@ -13,6 +13,7 @@ from app.services.vk_api import is_token_valid
 from app.core.security import create_access_token, encrypt_data
 from app.core.config import settings
 from app.core.plans import get_limits_for_plan
+from app.core.constants import PlanName
 from app.api.dependencies import get_current_manager_user
 
 router = APIRouter()
@@ -21,7 +22,7 @@ class TokenRequest(BaseModel):
     vk_token: str
 
 async def get_request_identifier(request: Request) -> str:
-    return request.client.host or "unknown"
+    return request.client.host if request.client else "unknown"
 
 @router.post(
     "/vk", 
@@ -50,7 +51,7 @@ async def login_via_vk(
 
     encrypted_token = encrypt_data(vk_token)
     
-    base_plan_limits = get_limits_for_plan("Базовый")
+    base_plan_limits = get_limits_for_plan(PlanName.BASE)
 
     if user:
         user.encrypted_vk_token = encrypted_token
@@ -58,7 +59,7 @@ async def login_via_vk(
         user = User(
             vk_id=vk_id, 
             encrypted_vk_token=encrypted_token,
-            plan="Базовый",
+            plan=PlanName.BASE,
             plan_expires_at=datetime.utcnow() + timedelta(days=14),
             daily_likes_limit=base_plan_limits["daily_likes_limit"],
             daily_add_friends_limit=base_plan_limits["daily_add_friends_limit"]
@@ -66,9 +67,9 @@ async def login_via_vk(
         db.add(user)
 
     if str(vk_id) == settings.ADMIN_VK_ID:
-        admin_limits = get_limits_for_plan("PRO")
+        admin_limits = get_limits_for_plan(PlanName.PRO)
         user.is_admin = True
-        user.plan = "PRO"
+        user.plan = PlanName.PRO
         user.plan_expires_at = None
         user.daily_likes_limit = admin_limits["daily_likes_limit"]
         user.daily_add_friends_limit = admin_limits["daily_add_friends_limit"]
@@ -87,7 +88,6 @@ async def login_via_vk(
 
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     
-    # В "sub" всегда ID менеджера, profile_id по умолчанию равен ID менеджера
     token_data = {"sub": str(user.id), "profile_id": str(user.id)}
     
     access_token = create_access_token(
@@ -106,16 +106,14 @@ async def switch_profile(
     db: AsyncSession = Depends(get_db)
 ) -> TokenResponse:
     
-    # Загружаем управляемые профили для менеджера
     await db.refresh(manager, attribute_names=["managed_profiles"])
     
     allowed_profile_ids = {p.profile_user_id for p in manager.managed_profiles}
-    allowed_profile_ids.add(manager.id) # Менеджер всегда имеет доступ к своему профилю
+    allowed_profile_ids.add(manager.id)
 
     if request_data.profile_id not in allowed_profile_ids:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступ к этому профилю запрещен.")
 
-    # Создаем новый токен с обновленным profile_id
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     token_data = {
         "sub": str(manager.id),

@@ -1,7 +1,7 @@
 # backend/app/services/friend_management_service.py
-import asyncio
-from typing import Dict, Any, List
+from typing import Dict, Any
 from app.services.base import BaseVKService
+from app.services.vk_user_filter import apply_filters_to_profiles
 
 class FriendManagementService(BaseVKService):
 
@@ -25,7 +25,8 @@ class FriendManagementService(BaseVKService):
         
         await self.emitter.send_log(f"Найдено забаненных/удаленных друзей: {len(banned_friends)}.", "info")
         
-        filtered_active_friends = self._apply_filters_to_profiles(active_friends, filters)
+        # Используем централизованную функцию фильтрации
+        filtered_active_friends = apply_filters_to_profiles(active_friends, filters)
         await self.emitter.send_log(f"Найдено друзей по критериям неактивности/пола: {len(filtered_active_friends)}.", "info")
         
         friends_to_remove = (banned_friends + filtered_active_friends)[:count]
@@ -40,10 +41,7 @@ class FriendManagementService(BaseVKService):
         for i in range(0, len(friends_to_remove), batch_size):
             batch = friends_to_remove[i:i + batch_size]
             
-            calls = [
-                {"method": "friends.delete", "params": {"user_id": friend['id']}}
-                for friend in batch
-            ]
+            calls = [{"method": "friends.delete", "params": {"user_id": friend.get('id')}} for friend in batch]
             
             await self.humanizer.imitate_simple_action()
             
@@ -54,11 +52,11 @@ class FriendManagementService(BaseVKService):
                 continue
 
             for friend, result in zip(batch, results):
-                user_id = friend['id']
+                user_id = friend.get('id')
                 name = f"{friend.get('first_name', '')} {friend.get('last_name', '')}"
                 url = f"https://vk.com/id{user_id}"
 
-                if result and result.get('success') == 1:
+                if isinstance(result, dict) and result.get('success') == 1:
                     processed_count += 1
                     await self._increment_stat(stats, 'friends_removed_count')
                     reason = f"({friend.get('deactivated', 'неактивность')})"
@@ -68,21 +66,3 @@ class FriendManagementService(BaseVKService):
                     await self.emitter.send_log(f"Не удалось удалить друга {name}. Причина: {error_msg}", "error", target_url=url)
 
         await self.emitter.send_log(f"Чистка завершена. Удалено друзей: {processed_count}.", "success")
-
-    def _apply_filters_to_profiles(self, profiles: List[Dict[str, Any]], filters: Dict[str, Any]) -> List[Dict[str, Any]]:
-        import datetime
-        filtered_profiles = []
-        now_ts = datetime.datetime.now().timestamp()
-        for profile in profiles:
-            if not filters.get('allow_closed_profiles', False) and profile.get('is_closed', True): continue
-            if filters.get('sex') and profile.get('sex') != filters['sex']: continue
-            
-            last_seen_ts = profile.get('last_seen', {}).get('time', 0)
-            if last_seen_ts == 0: continue
-            
-            last_seen_days = filters.get('last_seen_days')
-            if last_seen_days and (now_ts - last_seen_ts) > (last_seen_days * 86400):
-                filtered_profiles.append(profile)
-                continue
-
-        return filtered_profiles

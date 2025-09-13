@@ -1,9 +1,7 @@
 # backend/app/services/base.py
 import random
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
-from sqlalchemy.orm import selectinload
-from app.db.models import User, DailyStats, Proxy
+from app.db.models import User, DailyStats
 from app.services.vk_api import VKAPI
 from app.services.humanizer import Humanizer
 from app.services.event_emitter import RedisEventEmitter
@@ -35,11 +33,7 @@ class BaseVKService:
         self.humanizer = Humanizer(delay_profile=self.user.delay_profile, logger_func=self.emitter.send_log)
 
     async def _get_working_proxy(self) -> str | None:
-        if 'proxies' not in self.user.__dict__:
-             stmt = select(User).where(User.id == self.user.id).options(selectinload(User.proxies))
-             result = await self.db.execute(stmt)
-             self.user = result.scalar_one()
-
+        # Теперь мы предполагаем, что user.proxies всегда загружены
         working_proxies = [p for p in self.user.proxies if p.is_working]
         if not working_proxies:
             return None
@@ -51,7 +45,7 @@ class BaseVKService:
         return await self.stats_repo.get_or_create_today_stats(self.user.id)
 
     async def _increment_stat(self, stats: DailyStats, field_name: str, value: int = 1):
-        current_value = getattr(stats, field_name)
+        current_value = getattr(stats, field_name, 0)
         new_value = current_value + value
         setattr(stats, field_name, new_value)
         await self.emitter.send_stats_update({field_name: new_value})
@@ -65,5 +59,5 @@ class BaseVKService:
             return result
         except Exception as e:
             await self.db.rollback()
-            await self.emitter.send_log(f"Произошла ошибка, все изменения отменены: {type(e).__name__} - {e}", status="error")
+            await self.emitter.send_log(f"Произошла критическая ошибка: {type(e).__name__} - {e}. Все изменения отменены.", status="error")
             raise

@@ -1,9 +1,10 @@
 # backend/app/services/message_service.py
-from typing import Dict, Any, List
+from typing import Dict, Any
 import random
 from app.services.base import BaseVKService
-from app.core.exceptions import UserLimitReachedError, InvalidActionSettingsError
+from app.core.exceptions import InvalidActionSettingsError
 from app.services.vk_api import VKAccessDeniedError
+from app.services.vk_user_filter import apply_filters_to_profiles
 
 class MessageService(BaseVKService):
 
@@ -17,12 +18,12 @@ class MessageService(BaseVKService):
         await self.emitter.send_log(f"Запуск массовой рассылки. Цель: {count} сообщений.", "info")
         stats = await self._get_today_stats()
 
-        friends_response = await self.vk_api.get_user_friends(self.user.vk_id, fields="sex,online,last_seen")
+        friends_response = await self.vk_api.get_user_friends(self.user.vk_id, fields="sex,online,last_seen,status")
         if not friends_response:
             await self.emitter.send_log("Не удалось получить список друзей.", "error")
             return
 
-        filtered_friends = self._apply_filters_to_profiles(friends_response, filters)
+        filtered_friends = apply_filters_to_profiles(friends_response, filters)
         if not filtered_friends:
             await self.emitter.send_log("После применения фильтров не осталось друзей для рассылки.", "warning")
             return
@@ -33,8 +34,8 @@ class MessageService(BaseVKService):
         target_friends = []
         if only_new_dialogs:
             dialogs = await self.vk_api.get_conversations(count=200)
-            dialog_peer_ids = {conv['conversation']['peer']['id'] for conv in dialogs.get('items', [])}
-            target_friends = [f for f in filtered_friends if f['id'] not in dialog_peer_ids]
+            dialog_peer_ids = {conv.get('conversation', {}).get('peer', {}).get('id') for conv in dialogs.get('items', [])}
+            target_friends = [f for f in filtered_friends if f.get('id') not in dialog_peer_ids]
             await self.emitter.send_log(f"Режим 'Только новые диалоги'. Осталось целей: {len(target_friends)}.", "info")
         else:
             target_friends = filtered_friends
@@ -48,7 +49,7 @@ class MessageService(BaseVKService):
             if processed_count >= count:
                 break
 
-            friend_id = friend['id']
+            friend_id = friend.get('id')
             name = f"{friend.get('first_name', '')} {friend.get('last_name', '')}"
             url = f"https://vk.com/id{friend_id}"
             
@@ -70,23 +71,3 @@ class MessageService(BaseVKService):
                 await self.emitter.send_log(f"Ошибка при отправке сообщения для {name}: {e}", "error", target_url=url)
 
         await self.emitter.send_log(f"Рассылка завершена. Отправлено сообщений: {processed_count}.", "success")
-
-    def _apply_filters_to_profiles(self, profiles: List[Dict[str, Any]], filters: Dict[str, Any]) -> List[Dict[str, Any]]:
-        import datetime
-        filtered_profiles = []
-        now_ts = datetime.datetime.now().timestamp()
-
-        for profile in profiles:
-            if filters.get('sex') is not None and filters.get('sex') != 0 and profile.get('sex') != filters['sex']:
-                continue
-            if filters.get('is_online', False) and not profile.get('online', 0):
-                continue
-            
-            last_seen_ts = profile.get('last_seen', {}).get('time', 0)
-            if last_seen_ts:
-                last_seen_hours = filters.get('last_seen_hours')
-                if last_seen_hours and (now_ts - last_seen_ts) > (last_seen_hours * 3600):
-                    continue
-            
-            filtered_profiles.append(profile)
-        return filtered_profiles

@@ -1,15 +1,17 @@
 # backend/app/main.py
 import asyncio
 import structlog
-from fastapi import APIRouter, FastAPI, Request, status
+from fastapi import APIRouter, FastAPI, Request, status, Depends
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from redis.asyncio import Redis 
+from redis.exceptions import RedisError
 from fastapi_cache import FastAPICache
 from fastapi_cache.backends.redis import RedisBackend
 from contextlib import asynccontextmanager
 from fastapi_limiter import FastAPILimiter
+from fastapi_limiter.depends import RateLimiter
 
 from app.celery_app import celery_app
 
@@ -28,6 +30,12 @@ from app.services.websocket_manager import redis_listener
 configure_logging()
 log = structlog.get_logger(__name__)
 
+async def get_request_identifier(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+# Зависимости Rate Limiter
+rate_limit_dependency = Depends(RateLimiter(times=20, minutes=1, identifier=get_request_identifier))
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     redis_task = None
@@ -42,7 +50,7 @@ async def lifespan(app: FastAPI):
         redis_task = asyncio.create_task(redis_listener(redis_pubsub_connection))
         
         log.info("lifespan.startup", message="Dependencies initialized.")
-    except Exception as e:
+    except RedisError as e:
         log.error("lifespan.startup.error", error=str(e), message="Could not connect to Redis.")
     
     yield
@@ -63,37 +71,53 @@ app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 init_admin(app, engine)
 
 if settings.ALLOWED_ORIGINS:
-    # Разделяем строку по запятым и убираем лишние пробелы
     allowed_origins_list = [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(',')]
 else:
-    # Запасной вариант для разработки, если переменная не задана
     allowed_origins_list = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins_list, # <-- Используем наш список
+    allow_origins=allowed_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# --- Объявление тегов для OpenAPI ---
+class Tags:
+    AUTH = "Аутентификация"
+    USERS = "Пользователи и Профили"
+    PROXIES = "Прокси"
+    TASKS = "Задачи и История"
+    STATS = "Статистика"
+    AUTOMATIONS = "Автоматизации"
+    BILLING = "Тарифы и оплата"
+    ANALYTICS = "Аналитика"
+    SCENARIOS = "Сценарии"
+    NOTIFICATIONS = "Уведомления"
+    POSTS = "Планировщик постов"
+    TEAMS = "Командный функционал"
+    WEBSOCKETS = "WebSockets"
+    SYSTEM = "Система"
+
+
 api_router_v1 = APIRouter()
-api_router_v1.include_router(auth_router, prefix="/auth", tags=["Аутентификация"])
-api_router_v1.include_router(users_router, prefix="/users", tags=["Пользователи"])
-api_router_v1.include_router(proxies_router, prefix="/proxies", tags=["Прокси"])
-api_router_v1.include_router(tasks_router, prefix="/tasks", tags=["Задачи и История"])
-api_router_v1.include_router(stats_router, prefix="/stats", tags=["Статистика"])
-api_router_v1.include_router(automations_router, prefix="/automations", tags=["Автоматизации"])
-api_router_v1.include_router(billing_router, prefix="/billing", tags=["Тарифы и оплата"])
-api_router_v1.include_router(analytics_router, prefix="/analytics", tags=["Аналитика"])
-api_router_v1.include_router(scenarios_router, prefix="/scenarios", tags=["Сценарии"])
-api_router_v1.include_router(notifications_router, prefix="/notifications", tags=["Уведомления"])
-api_router_v1.include_router(posts_router, prefix="/posts", tags=["Планировщик постов"])
-api_router_v1.include_router(teams_router, prefix="/teams", tags=["Командный функционал"])
-api_router_v1.include_router(websockets_router, prefix="", tags=["WebSockets"])
+api_router_v1.include_router(auth_router, prefix="/auth", tags=[Tags.AUTH])
+api_router_v1.include_router(users_router, prefix="/users", tags=[Tags.USERS])
+api_router_v1.include_router(proxies_router, prefix="/proxies", tags=[Tags.PROXIES], dependencies=[rate_limit_dependency])
+api_router_v1.include_router(tasks_router, prefix="/tasks", tags=[Tags.TASKS])
+api_router_v1.include_router(stats_router, prefix="/stats", tags=[Tags.STATS])
+api_router_v1.include_router(automations_router, prefix="/automations", tags=[Tags.AUTOMATIONS])
+api_router_v1.include_router(billing_router, prefix="/billing", tags=[Tags.BILLING], dependencies=[rate_limit_dependency])
+api_router_v1.include_router(analytics_router, prefix="/analytics", tags=[Tags.ANALYTICS])
+api_router_v1.include_router(scenarios_router, prefix="/scenarios", tags=[Tags.SCENARIOS], dependencies=[rate_limit_dependency])
+api_router_v1.include_router(notifications_router, prefix="/notifications", tags=[Tags.NOTIFICATIONS])
+api_router_v1.include_router(posts_router, prefix="/posts", tags=[Tags.POSTS])
+api_router_v1.include_router(teams_router, prefix="/teams", tags=[Tags.TEAMS])
+api_router_v1.include_router(websockets_router, prefix="", tags=[Tags.WEBSOCKETS])
 
 app.include_router(api_router_v1, prefix="/api/v1")
 
-@app.get("/api/health", status_code=status.HTTP_200_OK, tags=["System"])
+@app.get("/api/health", status_code=status.HTTP_200_OK, tags=[Tags.SYSTEM])
 async def health_check():
     return {"status": "ok"}
