@@ -12,72 +12,121 @@ import GroupRemoveIcon from '@mui/icons-material/GroupRemove';
 import AddToPhotosIcon from '@mui/icons-material/AddToPhotos';
 import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 
-// ИЗМЕНЕНИЕ: Единый источник правды для всех задач и автоматизаций
-const tasks = {
+// Единый источник правды для всех задач и автоматизаций,
+// с полной конфигурацией UI для каждого действия.
+const automationsConfig = {
     'like_feed': { 
+        id: 'like_feed',
         icon: <ThumbUpIcon />, 
         name: "Лайки в ленте новостей", 
         description: "Проставляет лайки на посты в ленте новостей.",
-        modalTitle: "Лайки в ленте новостей", 
+        modalTitle: "Лайки в ленте новостей",
+        has_count_slider: true,
+        modal_count_label: 'Количество лайков',
+        default_count: 100,
+        has_filters: true,
     },
     'add_recommended': { 
+        id: 'add_recommended',
         icon: <RecommendIcon />, 
         name: "Добавление друзей", 
         description: "Отправляет заявки пользователям из списка рекомендаций.",
         modalTitle: "Добавление друзей из рекомендаций",
+        has_count_slider: true,
+        modal_count_label: 'Количество заявок',
+        default_count: 20,
+        has_filters: true,
     },
      'accept_friends': { 
+        id: 'accept_friends',
         icon: <GroupAddIcon />, 
         name: "Прием заявок в друзья",
         description: "Принимает входящие заявки в друзья по вашим фильтрам.",
         modalTitle: "Прием входящих заявок",
+        has_count_slider: false, // Количество определяется API
+        has_filters: true,
     },
     'remove_friends': { 
+        id: 'remove_friends',
         icon: <PersonRemoveIcon />, 
         name: "Очистка списка друзей",
         description: "Удаляет неактивных и забаненных друзей.",
         modalTitle: "Чистка списка друзей",
+        has_count_slider: true,
+        modal_count_label: 'Максимум удалений',
+        default_count: 500,
+        has_filters: true,
     },
     'view_stories': { 
+        id: 'view_stories',
         icon: <HistoryIcon />, 
         name: "Просмотр историй",
         description: "Просматривает все доступные истории друзей.",
         modalTitle: "Просмотр историй",
+        has_count_slider: false,
+        has_filters: false,
     },
     'mass_messaging': { 
+        id: 'mass_messaging',
         icon: <SendIcon />, 
         name: "Массовая рассылка",
         description: "Отправляет сообщения друзьям по заданным критериям.",
         modalTitle: "Массовая отправка сообщений друзьям",
+        has_count_slider: true,
+        modal_count_label: 'Количество сообщений',
+        default_count: 50,
+        has_filters: true,
     },
     'leave_groups': { 
+        id: 'leave_groups',
         icon: <GroupRemoveIcon />, 
         name: "Отписка от сообществ",
         description: "Отписывается от сообществ по ключевому слову.",
         modalTitle: 'Отписка от сообществ',
+        has_count_slider: true,
+        modal_count_label: 'Максимум отписок',
+        default_count: 50,
+        has_filters: true,
     },
     'join_groups': { 
+        id: 'join_groups',
         icon: <AddToPhotosIcon />, 
         name: "Вступление в группы",
         description: "Вступает в группы по ключевым словам.",
         modalTitle: 'Вступление в группы',
+        has_count_slider: true,
+        modal_count_label: 'Максимум вступлений',
+        default_count: 20,
+        has_filters: true,
     },
     'birthday_congratulation': { 
+        id: 'birthday_congratulation',
         icon: <CakeIcon />, 
         name: "Поздравления с ДР", 
         description: "Поздравляет ваших друзей с Днем Рождения.",
+        has_count_slider: false,
+        has_filters: false,
     },
     'eternal_online': { 
+        id: 'eternal_online',
         icon: <OnlinePredictionIcon />, 
         name: "Вечный онлайн", 
         description: "Поддерживает статус 'онлайн' для вашего аккаунта.",
+        has_count_slider: false,
+        has_filters: false,
     },
     'post_scheduler': {
+        id: 'post_scheduler',
         icon: <CalendarMonthIcon />,
         name: "Планировщик постов",
-        description: "Создавайте и планируйте публикации наперед."
+        description: "Создавайте и планируйте публикации наперед.",
+        has_count_slider: false,
+        has_filters: false,
     }
 };
+
+// Преобразуем объект в массив для удобного маппинга в UI (например, в UnifiedActionPanel)
+const automationsArray = Object.values(automationsConfig);
 
 export const content = {
     appName: "Zenith",
@@ -90,7 +139,10 @@ export const content = {
         login: "Войти",
         logout: "Выйти",
     },
-    tasks: tasks,
+    // Массив для рендеринга списков
+    automations: automationsArray,
+    // Объект для быстрого доступа к конфигу по ключу (например, в модальных окнах)
+    actions: automationsConfig,
     loginPage: {
         title: "Добро пожаловать в Zenith",
         subtitle: "Ваш интеллектуальный ассистент для ВКонтакте",

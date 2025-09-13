@@ -1,16 +1,13 @@
 // frontend/src/pages/Dashboard/components/ActionModal/ActionModalFilters.js
-// Rationale: Этот компонент стал чисто декларативным. Он не управляет состоянием,
-// а только описывает, какие поля должны быть отрендерены для каждого типа действия.
-// Логика полей инкапсулирована в самих компонентах полей (TextField, SelectField и т.д.),
-// которые работают с React Hook Form через useFormContext.
 import React from 'react';
 import { Box, Grid, Typography, Divider, MenuItem } from '@mui/material';
 import { useFormContext } from 'react-hook-form';
 
-import { content } from 'content/content';
+// ИСПРАВЛЕНО
+import { content } from '../../../../content/content';
+// ИСПРАВЛЕНО
 import PresetManager from '../PresetManager';
 
-// Импортируем наши новые, умные компоненты полей
 import { SwitchField } from './fields/SwitchField';
 import { SelectField } from './fields/SelectField';
 import { TextField } from './fields/TextField';
@@ -18,7 +15,7 @@ import { LabelWithTooltip } from './fields/LabelWithTooltip';
 
 // --- Внутренние компоненты для разных наборов фильтров ---
 
-const CommonFiltersSettings = ({ actionKey }) => {
+export const CommonFiltersSettings = ({ actionKey }) => {
     const showClosedProfilesFilter = ['accept_friends', 'add_recommended', 'mass_messaging'].includes(actionKey);
     const isAcceptFriends = actionKey === 'accept_friends';
 
@@ -69,7 +66,7 @@ const CommonFiltersSettings = ({ actionKey }) => {
     );
 };
 
-const RemoveFriendsFilters = () => {
+export const RemoveFriendsFilters = () => {
     return (
         <Box>
             <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 600 }}>Критерии для чистки</Typography>
@@ -119,9 +116,7 @@ export const ActionModalFilters = ({ actionKey }) => {
     const { getValues, reset } = useFormContext();
 
     const onApplyPreset = (preset) => {
-        // Получаем текущие значения формы (например, `count`)
         const currentValues = getValues();
-        // Сбрасываем форму, объединяя текущие значения с фильтрами из пресета
         reset({
             ...currentValues,
             filters: preset.filters

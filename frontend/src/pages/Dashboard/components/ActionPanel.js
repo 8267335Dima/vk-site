@@ -1,7 +1,8 @@
 // frontend/src/pages/Dashboard/components/ActionPanel.js
 import React from 'react';
 import { Typography, Button, List, ListItem, ListItemText, ListItemIcon, Stack, Paper, alpha } from '@mui/material';
-import { content } from 'content/content';
+// ИСПРАВЛЕНО
+import { content } from '../../../content/content';
 import { motion } from 'framer-motion';
 
 export default function ActionPanel({ onConfigure }) {
@@ -12,7 +13,7 @@ export default function ActionPanel({ onConfigure }) {
       </Typography>
       <List sx={{ p: 0 }}>
         <Stack spacing={1.5}>
-          {Object.entries(content.actions).map(([key, action]) => (
+          {Object.entries(content.tasks).map(([key, action]) => ( // ИСПРАВЛЕНО: content.actions -> content.tasks
             <motion.div whileHover={{ scale: 1.03 }} transition={{ type: 'spring', stiffness: 400, damping: 10 }} key={key}>
                 <ListItem
                   secondaryAction={
@@ -37,7 +38,7 @@ export default function ActionPanel({ onConfigure }) {
                     {action.icon}
                   </ListItemIcon>
                   <ListItemText
-                    primary={action.title}
+                    primary={action.name} // ИСПРАВЛЕНО: action.title -> action.name
                     sx={{
                       '& .MuiListItemText-primary': { fontWeight: 600 },
                       m: 0,

@@ -3,7 +3,8 @@ import React from 'react';
 import { Paper, Typography, Box, Skeleton, Stack, Tooltip, IconButton } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
 import { ResponsiveContainer, RadialBarChart, RadialBar, PolarAngleAxis } from 'recharts';
-import { fetchFriendRequestConversion } from 'api';
+// ИСПРАВЛЕНО
+import { fetchFriendRequestConversion } from '../../../api';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { useTheme } from '@mui/material/styles';
 import { motion } from 'framer-motion';

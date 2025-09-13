@@ -3,12 +3,14 @@ import React, { useState, useEffect } from 'react';
 import { Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, CircularProgress, Stack, Divider, Typography, ToggleButtonGroup, ToggleButton, RadioGroup, FormControlLabel, Radio } from '@mui/material';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
-import { updateAutomation } from 'api';
-import { CommonFiltersSettings, RemoveFriendsFilters } from './ActionModalFilters';
-import CountSlider from 'components/CountSlider';
-import { useUserStore } from 'store';
-import { content } from 'content/content';
+// ИСПРАВЛЕНО
+import { updateAutomation } from '../../../api';
+import { CommonFiltersSettings, RemoveFriendsFilters } from './ActionModal/ActionModalFilters';
+import CountSlider from '../../../components/CountSlider';
+import { content } from '../../../content/content';
+import { useCurrentUser } from '../../../hooks/useCurrentUser';
 
+// ... (остальной код без изменений, но с исправленным `useCurrentUser`)
 const EternalOnlineSettings = ({ settings, onChange }) => {
     const days = [
         { key: 0, label: 'Пн' }, { key: 1, label: 'Вт' }, { key: 2, label: 'Ср' },
@@ -70,13 +72,13 @@ const EternalOnlineSettings = ({ settings, onChange }) => {
 const AutomationSettingsModal = ({ open, onClose, automation }) => {
     const queryClient = useQueryClient();
     const [settings, setSettings] = useState({});
-    const userInfo = useUserStore(state => state.userInfo);
+    const { data: userInfo } = useCurrentUser(); // ИСПРАВЛЕНО
 
     useEffect(() => {
         if (open && automation) {
             const defaults = {
                 count: 50,
-                filters: { sex: 0, is_online: false, allow_closed_profiles: false, remove_banned: true, last_seen_hours: 0, last_seen_days: 0, min_friends: null, max_friends: null, min_followers: null, max_followers: null },
+                filters: { sex: 0, is_online: false, allow_closed_profiles: false, remove_banned: true, last_seen_hours: null, last_seen_days: null, min_friends: null, max_friends: null, min_followers: null, max_followers: null },
                 message_template_default: "С Днем Рождения, {name}! Желаю всего самого наилучшего, успехов и ярких моментов в жизни.",
                 schedule_type: 'always',
                 start_time: '09:00',
@@ -100,10 +102,10 @@ const AutomationSettingsModal = ({ open, onClose, automation }) => {
     });
 
     const handleSettingsChange = (name, value) => {
-        const filterKeys = ['sex', 'is_online', 'allow_closed_profiles', 'remove_banned', 'last_seen_hours', 'last_seen_days', 'min_friends', 'max_friends', 'min_followers', 'max_followers', 'status_keyword'];
 
-        if (filterKeys.includes(name)) {
-            setSettings(s => ({ ...s, filters: { ...s.filters, [name]: value } }));
+        if (name.startsWith('filters.')) {
+            const filterName = name.split('.')[1];
+            setSettings(s => ({ ...s, filters: { ...(s.filters || {}), [filterName]: value } }));
         } else {
             setSettings(s => ({ ...s, [name]: value }));
         }
@@ -119,10 +121,9 @@ const AutomationSettingsModal = ({ open, onClose, automation }) => {
 
     if (!automation) return null;
 
-    const actionConfig = content.actions[automation.automation_type];
     const automationConfig = content.automations.find(a => a.id === automation.automation_type);
-    const needsCount = actionConfig && !!actionConfig.modal_count_label;
-    const needsFilters = automationConfig && automationConfig.has_filters;
+    const needsCount = automationConfig?.has_count_slider;
+    const needsFilters = automationConfig?.has_filters;
     
     const getLimit = () => {
         if (automation.automation_type.includes('add')) return userInfo?.daily_add_friends_limit || 100;
@@ -154,7 +155,7 @@ const AutomationSettingsModal = ({ open, onClose, automation }) => {
 
                     {needsCount && (
                         <CountSlider
-                            label={actionConfig.modal_count_label}
+                            label={automationConfig.modal_count_label}
                             value={settings.count || 20}
                             onChange={(val) => handleSettingsChange('count', val)}
                             max={getLimit()}
@@ -164,12 +165,12 @@ const AutomationSettingsModal = ({ open, onClose, automation }) => {
                     {needsFilters && <Divider />}
 
                     {needsFilters && automation.automation_type === 'remove_friends' && (
-                        <RemoveFriendsFilters filters={settings.filters || {}} onChange={handleSettingsChange} />
+                        <RemoveFriendsFilters filters={settings.filters || {}} onChange={(name, val) => handleSettingsChange(`filters.${name}`, val)} />
                     )}
                     {needsFilters && !['remove_friends'].includes(automation.automation_type) && (
                         <CommonFiltersSettings
                             filters={settings.filters || {}}
-                            onChange={handleSettingsChange}
+                            onChange={(name, val) => handleSettingsChange(`filters.${name}`, val)}
                             actionKey={automation.automation_type}
                         />
                     )}

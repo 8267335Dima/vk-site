@@ -3,7 +3,7 @@ import React from 'react';
 import { Box, Container, Typography, Stack, Link, Grid } from '@mui/material';
 import { Link as RouterLink } from 'react-router-dom';
 import TrackChangesIcon from '@mui/icons-material/TrackChanges';
-import { content } from 'content/content';
+import { content } from '../content/content';
 
 const FooterLink = ({ to, href, children }) => (
     <Link 

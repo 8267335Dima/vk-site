@@ -2,9 +2,11 @@
 import React from 'react';
 import { Box, Paper, Link, Chip, Stack, Typography, Avatar, Grid, Button, Tooltip, Select, MenuItem, keyframes } from '@mui/material';
 import { useQueryClient } from '@tanstack/react-query';
-import { useFeatureFlag } from 'hooks/useFeatureFlag';
+// ИСПРАВЛЕНО
+import { useFeatureFlag } from '../../../hooks/useFeatureFlag';
 import { useMutation } from '@tanstack/react-query';
-import { updateUserDelayProfile } from 'api';
+// ИСПРАВЛЕНО
+import { updateUserDelayProfile } from '../../../api';
 import { toast } from 'react-hot-toast';
 
 import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';

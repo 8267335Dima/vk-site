@@ -4,7 +4,6 @@
 import { useCurrentUser } from './useCurrentUser';
 
 export const useFeatureFlag = () => {
-    // Получаем данные о пользователе напрямую из кэша React Query
     const { data: currentUser } = useCurrentUser();
     const availableFeatures = currentUser?.available_features || [];
 

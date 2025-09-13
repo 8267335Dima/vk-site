@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { Container, Typography, Box, Button, CircularProgress, Paper, Stack, Avatar, IconButton, Tooltip, alpha } from '@mui/material';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchMyTeam, removeTeamMember } from 'api';
+import { fetchMyTeam, removeTeamMember } from '../../api';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';

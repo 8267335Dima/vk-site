@@ -2,8 +2,10 @@
 import React from 'react';
 import { Grid } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
-import { fetchProfileSummary } from 'api';
-import StatCard from 'components/StatCard';
+// ИСПРАВЛЕНО
+import { fetchProfileSummary } from '../../../api';
+// ИСПРАВЛЕНО
+import StatCard from '../../../components/StatCard';
 import GroupIcon from '@mui/icons-material/Group';
 import RssFeedIcon from '@mui/icons-material/RssFeed';
 import PhotoLibraryIcon from '@mui/icons-material/PhotoLibrary';

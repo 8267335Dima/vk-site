@@ -1,12 +1,10 @@
 // frontend/src/pages/Dashboard/components/ActionModal/ActionModal.js
-// Rationale: Полная переработка с использованием React Hook Form.
-// Теперь компонент не управляет состоянием полей. Он получает `control` от RHF
-// и передает его дочерним компонентам. Логика отправки вынесена в кастомный хук useActionTask.
 import React from 'react';
 import { Dialog, DialogTitle, DialogContent, DialogActions, Button, CircularProgress } from '@mui/material';
 import { useForm, FormProvider } from 'react-hook-form';
 import { ActionModalContent } from './ActionModalContent';
-import { useActionTask } from 'hooks/useActionTask';
+// ИСПРАВЛЕНО
+import { useActionTask } from '../../../../hooks/useActionTask';
 
 const ActionModal = ({ open, onClose, actionKey, title }) => {
     const methods = useForm();

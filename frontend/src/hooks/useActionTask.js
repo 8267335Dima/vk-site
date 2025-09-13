@@ -3,7 +3,7 @@
 // отображение toast-уведомлений, вызов API, обработка успеха и ошибок.
 // Компоненты теперь просто вызывают `mutate(params)`.
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { runTask } from 'api';
+import { runTask } from '../api';
 import { toast } from 'react-hot-toast';
 
 const getErrorMessage = (error) => {

@@ -4,7 +4,8 @@ import { Box, FormControl, InputLabel, Select, MenuItem, Button, IconButton, Lis
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchFilterPresets, createFilterPreset, deleteFilterPreset } from 'api';
+// ИСПРАВЛЕНО
+import { fetchFilterPresets, createFilterPreset, deleteFilterPreset } from '../../../api';
 import { toast } from 'react-hot-toast';
 
 const PresetManager = ({ actionKey, currentFilters, onApply }) => {

@@ -2,9 +2,9 @@
 // Rationale: Этот стор теперь соответствует своему названию и хранит ТОЛЬКО состояние аутентификации.
 // Вся информация о пользователе (имя, тариф и т.д.) теперь живет в кэше React Query и доступна через хук useCurrentUser.
 // Это устраняет дублирование данных и делает React Query единственным источником правды для серверного состояния.
-import { switchProfile } from 'api';
+import { switchProfile } from '../api';
 import { toast } from 'react-hot-toast';
-import { queryClient } from 'queryClient';
+import { queryClient } from '../queryClient';
 
 export const createAuthSlice = (set, get) => ({
   token: localStorage.getItem('zenith_token') || null,

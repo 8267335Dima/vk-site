@@ -3,15 +3,17 @@
 // --- frontend/src\api.js ---
 
 // --- frontend/src/api.js ---
+// Rationale: Улучшен interceptor для более детальной обработки ошибок.
+// Все функции теперь консистентно возвращают res.data для удобства использования в React Query.
 import axios from 'axios';
-import { useUserStore } from 'store/userStore';
+import { useStore } from './store';
 
 export const apiClient = axios.create({
   baseURL: process.env.REACT_APP_API_BASE_URL || '',
 });
 
 apiClient.interceptors.request.use((config) => {
-  const token = useUserStore.getState().jwtToken;
+  const token = useStore.getState().token;
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -21,55 +23,57 @@ apiClient.interceptors.request.use((config) => {
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
+    // Перехватчик теперь вызывает action из стора, который сбрасывает все состояния.
     if (error.response && error.response.status === 401) {
-      useUserStore.getState().actions.logout(); 
+      useStore.getState().actions.setUnauthenticated(); 
     }
     return Promise.reject(error);
   }
 );
 
-export const loginWithVkToken = (vkToken) => apiClient.post('/api/v1/auth/vk', { vk_token: vkToken });
+// Auth
+export const loginWithVkToken = (vkToken) => apiClient.post('/api/v1/auth/vk', { vk_token: vkToken }).then(res => res.data);
 export const switchProfile = (profileId) => apiClient.post('/api/v1/auth/switch-profile', { profile_id: profileId }).then(res => res.data);
 
-export const fetchUserInfo = () => apiClient.get('/api/v1/users/me');
-export const fetchUserLimits = () => apiClient.get('/api/v1/users/me/limits');
-export const updateUserDelayProfile = (profile) => apiClient.put('/api/v1/users/me/delay-profile', profile);
-export const fetchTaskInfo = (taskKey) => apiClient.get(`/api/v1/users/task-info?task_key=${taskKey}`);
+// Users
+export const fetchUserInfo = () => apiClient.get('/api/v1/users/me'); // Возвращаем весь response для useQuery
+export const fetchUserLimits = () => apiClient.get('/api/v1/users/me/limits').then(res => res.data);
+export const updateUserDelayProfile = (profile) => apiClient.put('/api/v1/users/me/delay-profile', profile).then(res => res.data);
+export const fetchTaskInfo = (taskKey) => apiClient.get(`/api/v1/users/task-info?task_key=${taskKey}`).then(res => res.data);
 export const getManagedProfiles = () => apiClient.get('/api/v1/users/me/managed-profiles').then(res => res.data);
+export const fetchFilterPresets = (actionType) => apiClient.get(`/api/v1/users/me/filter-presets?action_type=${actionType}`).then(res => res.data);
+export const createFilterPreset = (data) => apiClient.post('/api/v1/users/me/filter-presets', data).then(res => res.data);
+export const deleteFilterPreset = (id) => apiClient.delete(`/api/v1/users/me/filter-presets/${id}`);
 
-export const runTask = (taskKey, params) => apiClient.post(`/api/v1/tasks/run/${taskKey}`, params);
+// Tasks
+export const runTask = (taskKey, params) => apiClient.post(`/api/v1/tasks/run/${taskKey}`, params).then(res => res.data);
 export const fetchTaskHistory = ({ pageParam = 1 }, filters) => {
     const params = new URLSearchParams({ page: pageParam, size: 25 });
-    if (filters.status) {
-        params.append('status', filters.status);
-    }
+    if (filters.status) params.append('status', filters.status);
     return apiClient.get(`/api/v1/tasks/history?${params.toString()}`).then(res => res.data);
 };
-export const cancelTask = (taskHistoryId) => apiClient.post(`/api/v1/tasks/${taskHistoryId}/cancel`);
-export const retryTask = (taskHistoryId) => apiClient.post(`/api/v1/tasks/${taskHistoryId}/retry`);
+export const cancelTask = (taskHistoryId) => apiClient.post(`/api/v1/tasks/${taskHistoryId}/cancel`).then(res => res.data);
+export const retryTask = (taskHistoryId) => apiClient.post(`/api/v1/tasks/${taskHistoryId}/retry`).then(res => res.data);
 
+// Stats
 export const fetchActivityStats = (days = 7) => apiClient.get(`/api/v1/stats/activity?days=${days}`).then(res => res.data);
+
+// Analytics
 export const fetchAudienceAnalytics = () => apiClient.get('/api/v1/analytics/audience').then(res => res.data);
 export const fetchProfileGrowth = (days = 30) => apiClient.get(`/api/v1/analytics/profile-growth?days=${days}`).then(res => res.data);
 export const fetchProfileSummary = () => apiClient.get('/api/v1/analytics/profile-summary').then(res => res.data);
 export const fetchFriendRequestConversion = () => apiClient.get('/api/v1/analytics/friend-request-conversion').then(res => res.data);
 export const fetchPostActivityHeatmap = () => apiClient.get('/api/v1/analytics/post-activity-heatmap').then(res => res.data);
 
+// Automations
 export const fetchAutomations = () => apiClient.get('/api/v1/automations').then(res => res.data);
 export const updateAutomation = ({ automationType, isActive, settings }) => apiClient.post(`/api/v1/automations/${automationType}`, { is_active: isActive, settings: settings || {} }).then(res => res.data);
 
+// Billing
 export const fetchAvailablePlans = () => apiClient.get('/api/v1/billing/plans').then(res => res.data);
 export const createPayment = (planId, months) => apiClient.post('/api/v1/billing/create-payment', { plan_id: planId, months }).then(res => res.data);
 
-// Функции для Планировщика
-export const fetchPosts = () => apiClient.get('/api/v1/posts').then(res => res.data);
-export const createPost = (data) => apiClient.post('/api/v1/posts', data).then(res => res.data);
-export const updatePost = (id, data) => apiClient.put(`/api/v1/posts/${id}`, data).then(res => res.data);
-export const deletePost = (id) => apiClient.delete(`/api/v1/posts/${id}`);
-export const uploadImageForPost = (formData) => apiClient.post('/api/v1/posts/upload-image', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }
-}).then(res => res.data);
-
+// Scenarios
 export const fetchScenarios = () => apiClient.get('/api/v1/scenarios').then(res => res.data);
 export const fetchScenarioById = (id) => apiClient.get(`/api/v1/scenarios/${id}`).then(res => res.data);
 export const createScenario = (data) => apiClient.post('/api/v1/scenarios', data).then(res => res.data);
@@ -77,18 +81,16 @@ export const updateScenario = (id, data) => apiClient.put(`/api/v1/scenarios/${i
 export const deleteScenario = (id) => apiClient.delete(`/api/v1/scenarios/${id}`);
 export const fetchAvailableConditions = () => apiClient.get('/api/v1/scenarios/available-conditions').then(res => res.data);
 
+// Notifications
 export const fetchNotifications = () => apiClient.get('/api/v1/notifications').then(res => res.data);
 export const markNotificationsAsRead = () => apiClient.post('/api/v1/notifications/read');
 
+// Proxies
 export const fetchProxies = () => apiClient.get('/api/v1/proxies').then(res => res.data);
 export const addProxy = (proxyUrl) => apiClient.post('/api/v1/proxies', { proxy_url: proxyUrl }).then(res => res.data);
 export const deleteProxy = (id) => apiClient.delete(`/api/v1/proxies/${id}`);
 
-export const fetchFilterPresets = (actionType) => apiClient.get(`/api/v1/users/me/filter-presets?action_type=${actionType}`).then(res => res.data);
-export const createFilterPreset = (data) => apiClient.post('/api/v1/users/me/filter-presets', data).then(res => res.data);
-export const deleteFilterPreset = (id) => apiClient.delete(`/api/v1/users/me/filter-presets/${id}`);
-
-// Командный функционал
+// Teams
 export const fetchMyTeam = () => apiClient.get('/api/v1/teams/my-team').then(res => res.data);
 export const inviteTeamMember = (vkId) => apiClient.post('/api/v1/teams/my-team/members', { user_vk_id: vkId });
 export const removeTeamMember = (memberId) => apiClient.delete(`/api/v1/teams/my-team/members/${memberId}`);
@@ -96,21 +98,22 @@ export const updateMemberAccess = (memberId, accesses) => apiClient.put(`/api/v1
 
 // --- frontend/src\App.js ---
 
-// --- frontend/src/App.js ---
-import React, { useEffect, Suspense, lazy } from 'react';
+// frontend/src/App.js
+import React, { Suspense, lazy } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { ThemeProvider, CssBaseline, Box, CircularProgress } from '@mui/material';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'react-hot-toast';
+
 import { queryClient } from './queryClient.js';
-import { theme, globalStyles } from './theme.js';
-import { useUserStore, useUserActions } from './store/userStore.js';
+import { theme } from './theme.js';
+import { useStore } from './store';
 import Layout from './components/Layout.js';
-
 import ErrorBoundary from './components/ErrorBoundary.js';
-import { useFeatureFlag } from 'hooks/useFeatureFlag.js';
-import { useCurrentUser } from 'hooks/useCurrentUser.js';
+import { useCurrentUser } from './hooks/useCurrentUser.js';
+import { useFeatureFlag } from './hooks/useFeatureFlag.js';
 
+// Lazy-loaded pages
 const HomePage = lazy(() => import('./pages/Home/HomePage.js'));
 const LoginPage = lazy(() => import('./pages/Login/LoginPage.js'));
 const DashboardPage = lazy(() => import('./pages/Dashboard/DashboardPage.js'));
@@ -121,33 +124,33 @@ const ScenarioEditorPage = lazy(() => import('./pages/Scenarios/editor/ScenarioE
 const ForbiddenPage = lazy(() => import('./pages/Forbidden/ForbiddenPage.js'));
 const PostsPage = lazy(() => import('./pages/Posts/PostsPage.js'));
 
-
 const FullscreenLoader = () => (
     <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
         <CircularProgress size={60} />
     </Box>
 );
 
+// Rationale: Этот компонент проверяет, аутентифицирован ли пользователь.
+// Он использует useCurrentUser, который проверяет валидность токена через реальный API-запрос.
+// Это надежнее, чем просто проверять наличие токена в localStorage.
 const PrivateRoutes = () => {
-    const jwtToken = useUserStore(state => state.jwtToken);
-    // ИЗМЕНЕНИЕ: Теперь мы используем хук React Query для проверки статуса пользователя
-    const { isLoading, isError } = useCurrentUser();
-    const { logout } = useUserActions();
-
-    useEffect(() => {
-        if (isError) {
-            // Если запрос на получение пользователя вернул ошибку (например, 401), выходим из системы
-            logout();
-        }
-    }, [isError, logout]);
+    const { isSuccess, isLoading } = useCurrentUser();
+    const isAuthenticated = useStore(state => state.isAuthenticated);
 
     if (isLoading) {
         return <FullscreenLoader />;
     }
-    
-    return jwtToken ? <Outlet /> : <Navigate to="/login" replace />;
+
+    // Успешный запрос к API и наличие флага в сторе - единственное условие для доступа.
+    if (isSuccess && isAuthenticated) {
+        return <Outlet />;
+    }
+
+    return <Navigate to="/login" replace />;
 };
 
+// Rationale: Этот компонент-обертка проверяет, доступна ли фича пользователю по его тарифу.
+// Он получает данные из useFeatureFlag, который, в свою очередь, берет их из useCurrentUser.
 const ProtectedRoute = ({ feature, children }) => {
     const { isFeatureAvailable } = useFeatureFlag();
     if (!feature || isFeatureAvailable(feature)) {
@@ -157,30 +160,20 @@ const ProtectedRoute = ({ feature, children }) => {
 };
 
 function App() {
-  const jwtToken = useUserStore(state => state.jwtToken);
-  const { finishInitialLoad } = useUserActions();
-
-  useEffect(() => {
-    // ИЗМЕНЕНИЕ: Логика загрузки пользователя удалена.
-    // Zustand теперь отвечает только за определение, есть ли токен.
-    if (!jwtToken) {
-      finishInitialLoad();
-    }
-  }, [jwtToken, finishInitialLoad]);
+  const isAuthenticated = useStore(state => state.isAuthenticated);
   
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider theme={theme}>
         <CssBaseline />
         <Toaster position="bottom-right" toastOptions={{ style: { background: '#17181D', color: '#FFFFFF', border: '1px solid rgba(160, 163, 189, 0.15)' } }} />
-        <style>{globalStyles}</style>
         <Router>
           <ErrorBoundary>
             <Suspense fallback={<FullscreenLoader />}>
               <Routes>
                 <Route element={<Layout />}>
                   <Route path="/" element={<HomePage />} />
-                  <Route path="/login" element={jwtToken ? <Navigate to="/dashboard" replace /> : <LoginPage />} />
+                  <Route path="/login" element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <LoginPage />} />
                   <Route path="/billing" element={<BillingPage />} />
                   <Route path="/forbidden" element={<ForbiddenPage />} />
 
@@ -385,7 +378,7 @@ export const globalStyles = `
 
 // frontend/src/websocket.js
 import { toast } from 'react-hot-toast';
-import { useUserStore } from 'store/userStore';
+import { useStore } from './store';
 import { queryClient } from './queryClient';
 
 let socket = null;
@@ -403,7 +396,7 @@ const getSocketUrl = () => {
 const handleMessage = (event) => {
     try {
         const { type, payload } = JSON.parse(event.data);
-        const { setDailyLimits } = useUserStore.getState().actions;
+        const { setDailyLimits } = useStore.getState().actions;
 
         switch (type) {
             case 'log':
@@ -462,16 +455,16 @@ export const connectWebSocket = (token) => {
 
     socket.onopen = () => {
         console.log('WebSocket connected');
-        useUserStore.getState().actions.setConnectionStatus('На связи');
+        useStore.getState().actions.setConnectionStatus('На связи');
         if (reconnectTimeout) clearTimeout(reconnectTimeout);
     };
 
     socket.onclose = (event) => {
         console.log(`WebSocket disconnected: ${event.code}`);
         socket = null;
-        useUserStore.getState().actions.setConnectionStatus('Переподключение...');
+        useStore.getState().actions.setConnectionStatus('Переподключение...');
         
-        const currentToken = useUserStore.getState().jwtToken;
+        const currentToken = useStore.getState().jwtToken;
         if (currentToken) {
            reconnectTimeout = setTimeout(() => connectWebSocket(currentToken), reconnectInterval);
         }
@@ -493,7 +486,7 @@ export const disconnectWebSocket = () => {
     if (socket) {
         socket.close();
         socket = null;
-        useUserStore.getState().actions.setConnectionStatus('Отключено');
+        useStore.getState().actions.setConnectionStatus('Отключено');
     }
 };
 
@@ -638,7 +631,7 @@ import React from 'react';
 import { Box, Container, Typography, Stack, Link, Grid } from '@mui/material';
 import { Link as RouterLink } from 'react-router-dom';
 import TrackChangesIcon from '@mui/icons-material/TrackChanges';
-import { content } from 'content/content';
+import { content } from '../content/content';
 
 const FooterLink = ({ to, href, children }) => (
     <Link 
@@ -713,15 +706,19 @@ import {
     useTheme, useMediaQuery, IconButton, Drawer, List, ListItem, ListItemButton
 } from '@mui/material';
 import { Link as RouterLink, useLocation, Outlet } from 'react-router-dom';
-import { useUserStore, useUserActions } from 'store/userStore';
+// ИСПРАВЛЕНИЕ: Правильный относительный путь
+import { useStore, useStoreActions } from '../store';
 import HubIcon from '@mui/icons-material/Hub';
 import MenuIcon from '@mui/icons-material/Menu';
-import { content } from 'content/content';
+// ИСПРАВЛЕНИЕ: Правильный относительный путь
+import { content } from '../content/content';
 import NotificationsBell from './NotificationsBell';
 import Footer from './Footer';
-import { useFeatureFlag } from 'hooks/useFeatureFlag';
+// ИСПРАВЛЕНИЕ: Правильный относительный путь
+import { useFeatureFlag } from '../hooks/useFeatureFlag';
 import ProfileSwitcher from './ProfileSwitcher';
 
+// ... (остальной код компонента без изменений)
 const navItems = [
     { label: content.nav.dashboard, to: "/dashboard", feature: null }, 
     { label: content.nav.scenarios, to: "/scenarios", feature: "scenarios" },
@@ -786,8 +783,8 @@ const MobileDrawer = ({ open, onClose, onLogout, visibleNavItems }) => (
 
 
 export default function Layout() {
-    const jwtToken = useUserStore(state => state.jwtToken);
-    const { logout } = useUserActions();
+    const isAuthenticated = useStore(state => state.isAuthenticated);
+    const { logout } = useStoreActions();
     const { isFeatureAvailable } = useFeatureFlag();
     
     const theme = useTheme();
@@ -812,7 +809,7 @@ export default function Layout() {
 
                         {isMobile ? (
                              <>
-                                {jwtToken ? (
+                                {isAuthenticated ? (
                                     <>
                                         {isFeatureAvailable('agency_mode') && <ProfileSwitcher isMobile />}
                                         <NotificationsBell />
@@ -824,9 +821,9 @@ export default function Layout() {
                              </>
                         ) : (
                             <Stack direction="row" spacing={1} alignItems="center">
-                                {jwtToken && isFeatureAvailable('agency_mode') && <ProfileSwitcher />}
-                                {jwtToken && visibleNavItems.map(item => <NavButton key={item.to} to={item.to}>{item.label}</NavButton>)}
-                                {jwtToken ? (
+                                {isAuthenticated && isFeatureAvailable('agency_mode') && <ProfileSwitcher />}
+                                {isAuthenticated && visibleNavItems.map(item => <NavButton key={item.to} to={item.to}>{item.label}</NavButton>)}
+                                {isAuthenticated ? (
                                     <>
                                         <NotificationsBell />
                                         <Button onClick={logout} variant="outlined" color="primary" sx={{ ml: 2 }}>{content.nav.logout}</Button>
@@ -842,7 +839,7 @@ export default function Layout() {
                 </Container>
             </AppBar>
             
-            {isMobile && jwtToken && <MobileDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} onLogout={() => { setDrawerOpen(false); logout(); }} visibleNavItems={visibleNavItems} />}
+            {isMobile && isAuthenticated && <MobileDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} onLogout={() => { setDrawerOpen(false); logout(); }} visibleNavItems={visibleNavItems} />}
 
             <Box component="main" sx={{ flexGrow: 1 }}>
                  <Outlet />
@@ -887,7 +884,7 @@ import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchNotifications, markNotificationsAsRead } from 'api';
+import { fetchNotifications, markNotificationsAsRead } from '../api';
 import { formatDistanceToNow } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -1046,13 +1043,15 @@ import React, { useState } from 'react';
 import { Box, Typography, Menu, MenuItem, Button, Avatar, ListItemIcon, ListItemText, CircularProgress, Tooltip, IconButton } from '@mui/material';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import AddIcon from '@mui/icons-material/Add';
-import { useUserStore, useUserActions } from 'store/userStore';
+import { useStore, useStoreActions } from '../store';
 import { useQuery } from '@tanstack/react-query';
-import { getManagedProfiles } from 'api';
+import { getManagedProfiles } from '../api';
 
 const ProfileSwitcher = ({ isMobile }) => {
-    const { setActiveProfile } = useUserActions();
-    const activeProfileId = useUserStore(state => state.activeProfileId);
+    // ИСПРАВЛЕНИЕ: Используем новый экшен из useStoreActions
+    const { setActiveProfile } = useStoreActions();
+    // ИСПРАВЛЕНИЕ: Получаем ID из useStore
+    const activeProfileId = useStore(state => state.activeProfileId);
     
     const { data: profiles, isLoading } = useQuery({
         queryKey: ['managedProfiles'],
@@ -1066,7 +1065,10 @@ const ProfileSwitcher = ({ isMobile }) => {
     const handleClose = () => setAnchorEl(null);
 
     const handleSelectProfile = (profileId) => {
-        setActiveProfile(profileId);
+        // Конвертируем в число для строгого сравнения
+        if (Number(profileId) !== Number(activeProfileId)) {
+            setActiveProfile(profileId);
+        }
         handleClose();
     };
 
@@ -1075,9 +1077,9 @@ const ProfileSwitcher = ({ isMobile }) => {
         handleClose();
     };
     
-    const currentProfile = profiles?.find(p => p.id === activeProfileId);
+    const currentProfile = profiles?.find(p => Number(p.id) === Number(activeProfileId));
 
-    if (isLoading && !currentProfile) {
+    if (isLoading) {
         return <CircularProgress size={24} />;
     }
 
@@ -1100,7 +1102,7 @@ const ProfileSwitcher = ({ isMobile }) => {
                 endIcon={<KeyboardArrowDownIcon />}
             >
                 <Typography sx={{ display: { xs: 'none', md: 'block' }, fontWeight: 600, mx: 1 }}>
-                    {isLoading ? 'Загрузка...' : `${currentProfile?.first_name} ${currentProfile?.last_name}`}
+                    {isLoading || !currentProfile ? 'Загрузка...' : `${currentProfile?.first_name} ${currentProfile?.last_name}`}
                 </Typography>
             </Button>
             <Menu anchorEl={anchorEl} open={open} onClose={handleClose}>
@@ -1113,7 +1115,7 @@ const ProfileSwitcher = ({ isMobile }) => {
                         <MenuItem 
                             key={profile.id} 
                             onClick={() => handleSelectProfile(profile.id)}
-                            selected={profile.id === activeProfileId}
+                            selected={Number(profile.id) === Number(activeProfileId)}
                         >
                             <ListItemIcon>
                                 <Avatar src={profile.photo_50} sx={{ width: 28, height: 28 }} />
@@ -1331,13 +1333,13 @@ export const content = {
 // frontend/src/hooks/useActionModalState.js
 import { useState, useEffect, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { fetchTaskInfo } from 'api.js';
-import { useUserStore } from 'store/userStore';
+import { fetchTaskInfo } from '../api';
+import { useStore } from '../store';
 
 export const useActionModalState = (open, actionKey, title) => {
     const [params, setParams] = useState({});
-    const daily_add_friends_limit = useUserStore(state => state.userInfo?.daily_add_friends_limit);
-    const daily_likes_limit = useUserStore(state => state.userInfo?.daily_likes_limit);
+    const daily_add_friends_limit = useStore(state => state.userInfo?.daily_add_friends_limit);
+    const daily_likes_limit = useStore(state => state.userInfo?.daily_likes_limit);
 
     const { data: taskInfo, isLoading: isLoadingInfo } = useQuery({
         queryKey: ['taskInfo', actionKey],
@@ -1401,33 +1403,76 @@ export const useActionModalState = (open, actionKey, title) => {
     return { params, getModalTitle, handleParamChange, getActionLimit };
 };
 
+// --- frontend/src\hooks\useActionTask.js ---
+
+// frontend/src/hooks/useActionTask.js
+// Rationale: Этот хук инкапсулирует всю логику выполнения задачи:
+// отображение toast-уведомлений, вызов API, обработка успеха и ошибок.
+// Компоненты теперь просто вызывают `mutate(params)`.
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { runTask } from '../api';
+import { toast } from 'react-hot-toast';
+
+const getErrorMessage = (error) => {
+    if (typeof error?.response?.data?.detail === 'string') {
+        return error.response.data.detail;
+    }
+    return error?.message || "Произошла неизвестная ошибка.";
+};
+
+export const useActionTask = (actionKey, title, onSuccessCallback) => {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: (params) => runTask(actionKey, params),
+        onMutate: () => {
+            // Оптимистичное обновление или просто показ лоадера
+            return toast.loading(`Задача "${title}" добавляется в очередь...`);
+        },
+        onSuccess: (data, variables, toastId) => {
+            toast.success(`Задача "${title}" успешно добавлена!`, { id: toastId });
+            // Инвалидируем историю задач, чтобы она обновилась
+            queryClient.invalidateQueries({ queryKey: ['task_history'] });
+            if (onSuccessCallback) onSuccessCallback();
+        },
+        onError: (error, variables, toastId) => {
+            const errorMessage = getErrorMessage(error);
+            toast.error(errorMessage, { id: toastId });
+        },
+    });
+};
+
 // --- frontend/src\hooks\useCurrentUser.js ---
 
 // frontend/src/hooks/useCurrentUser.js
+// Rationale: Это сердце новой архитектуры. Единственный источник правды для данных текущего пользователя.
+// Он не только предоставляет данные, но и синхронизирует состояние аутентификации в Zustand
+// при получении ошибки 401, делая систему самовосстанавливающейся.
 import { useQuery } from '@tanstack/react-query';
-import { fetchUserInfo } from 'api';
-import { useUserStore } from 'store/userStore';
+import { fetchUserInfo } from '../api';
+import { useStore } from '../store';
 
 export const useCurrentUser = () => {
-    const jwtToken = useUserStore(state => state.jwtToken);
-    
+    const token = useStore(state => state.token);
+    const activeProfileId = useStore(state => state.activeProfileId);
+    const { setUnauthenticated } = useStore(state => state.actions);
+
     return useQuery({
-        // Ключ запроса включает ID профиля, чтобы данные автоматически перезагружались при смене профиля
-        queryKey: ['currentUser', useUserStore.getState().activeProfileId],
+        // Ключ запроса теперь включает ID активного профиля,
+        // React Query автоматически перезагрузит данные при его смене.
+        queryKey: ['currentUser', activeProfileId],
         queryFn: fetchUserInfo,
-        // Запрос активен только если есть токен
-        enabled: !!jwtToken,
-        // Данные о пользователе (имя, тариф) не меняются очень часто,
-        // поэтому можно установить большое время "свежести" данных.
-        // React Query все равно может обновить их в фоне при необходимости.
-        staleTime: 1000 * 60 * 15, // 15 минут
-        // Данные не удаляются из кэша сразу, даже если компонент размонтирован.
-        gcTime: 1000 * 60 * 30, // 30 минут
-        // Выбираем только сам объект с данными для удобства
+        enabled: !!token, // Запрос выполняется только при наличии токена
+        staleTime: 1000 * 60 * 15, // 15 минут "свежести" данных
+        gcTime: 1000 * 60 * 30, // 30 минут жизни в кэше
         select: (response) => response.data,
-        // Не повторять запрос при ошибке, так как это скорее всего 401,
-        // и обработка выхода из системы произойдет в PrivateRoutes.
-        retry: false,
+        retry: false, // Не повторять запрос при ошибке, т.к. это скорее всего 401
+        onError: (error) => {
+            if (error.response?.status === 401) {
+                // Если токен невалиден, выходим из системы
+                setUnauthenticated();
+            }
+        },
     });
 };
 
@@ -1436,7 +1481,7 @@ export const useCurrentUser = () => {
 // frontend/src/hooks/useDashboardManager.js
 import { useState, useCallback } from 'react';
 import { toast } from 'react-hot-toast';
-import { runTask } from 'api.js';
+import { runTask } from '../api';
 
 const getErrorMessage = (error) => {
     if (typeof error?.response?.data?.detail === 'string') {
@@ -1511,14 +1556,13 @@ export const useDashboardManager = () => {
 // --- frontend/src\hooks\useFeatureFlag.js ---
 
 // frontend/src/hooks/useFeatureFlag.js
-import { useUserStore } from 'store/userStore';
+// Rationale: Хук обновлен для получения данных из useCurrentUser, а не из Zustand.
+// Это гарантирует, что флаги всегда соответствуют данным с сервера.
+import { useCurrentUser } from './useCurrentUser';
 
-/**
- * Хук для проверки доступности фич на основе данных, полученных с бэкенда.
- * @returns {{isFeatureAvailable: (featureKey: string) => boolean}}
- */
 export const useFeatureFlag = () => {
-    const availableFeatures = useUserStore(state => state.availableFeatures);
+    const { data: currentUser } = useCurrentUser();
+    const availableFeatures = currentUser?.available_features || [];
 
     const isFeatureAvailable = (featureKey) => {
         return availableFeatures.includes(featureKey);
@@ -1533,14 +1577,16 @@ export const useFeatureFlag = () => {
 import React, { useState } from 'react';
 import { Container, Typography, Grid, Skeleton, Stack, ToggleButtonGroup, ToggleButton, Box, Paper, alpha } from '@mui/material';
 import { motion } from 'framer-motion';
-import { useUserStore } from 'store/userStore';
-import { createPayment, fetchAvailablePlans } from 'api.js';
-import { toast } from 'react-hot-toast';
 import { useQuery } from '@tanstack/react-query';
+import { toast } from 'react-hot-toast';
+
+// ИСПРАВЛЕНИЕ: Все пути исправлены на корректные относительные пути
+import { useCurrentUser } from '../../hooks/useCurrentUser';
+import { createPayment, fetchAvailablePlans } from '../../api';
 import PlanCard from './components/PlanCard';
-import { ReactComponent as VisaLogo } from './assets/visa.svg';
-import { ReactComponent as MastercardLogo } from './assets/mastercard.svg';
-import { ReactComponent as MirLogo } from './assets/mir.svg';
+import { ReactComponent as VisaLogo } from '../../assets/icons/visa.svg';
+import { ReactComponent as MastercardLogo } from '../../assets/icons/mastercard.svg';
+import { ReactComponent as MirLogo } from '../../assets/icons/mir.svg';
 
 const periodOptions = [
     { months: 1, label: '1 месяц' },
@@ -1550,7 +1596,8 @@ const periodOptions = [
 ];
 
 export default function BillingPage() {
-    const userInfo = useUserStore((state) => state.userInfo);
+    // ИСПРАВЛЕНИЕ: Используем хук useCurrentUser для получения данных о пользователе
+    const { data: userInfo } = useCurrentUser();
     const [loadingPlan, setLoadingPlan] = useState(null);
     const [selectedMonths, setSelectedMonths] = useState(1);
 
@@ -1737,31 +1784,29 @@ export default PlanCard;
 // --- frontend/src\pages\Dashboard\DashboardPage.js ---
 
 // --- frontend/src/pages/Dashboard/DashboardPage.js ---
-import React, { Suspense, useState, lazy, useEffect } from 'react';
-import { Box, Grid, Typography, motion, Stack } from '@mui/material'; // ИЗМЕНЕНИЕ: Оставлены только используемые компоненты
+import React, { useState, useEffect, Suspense, lazy } from 'react';
+import { Box, Grid, Typography, motion, Stack } from '@mui/material';
 import Joyride, { STATUS } from 'react-joyride';
 
-import { useUserStore } from 'store/userStore';
-import { useCurrentUser } from 'hooks/useCurrentUser';
-import { useDashboardManager } from 'hooks/useDashboardManager';
-import { useFeatureFlag } from 'hooks/useFeatureFlag';
+import { useStore } from '../../store';
+import { useCurrentUser } from '../../hooks/useCurrentUser';
+import { useDashboardManager } from '../../hooks/useDashboardManager';
+import { useFeatureFlag } from '../../hooks/useFeatureFlag';
 
-import LazyLoader from 'components/LazyLoader';
-import ActionModal from 'pages/Dashboard/components/ActionModal';
-import TaskLogWidget from 'pages/Dashboard/components/TaskLogWidget';
-import ProfileSummaryWidget from 'pages/Dashboard/components/ProfileSummaryWidget';
-import UnifiedActionPanel from 'pages/Dashboard/components/UnifiedActionPanel';
-import { UserProfileCard } from './components/UserProfileCard'; // Компонент теперь импортируется отсюда
+import LazyLoader from '../../components/LazyLoader';
+import ActionModal from './components/ActionModal/ActionModal';
+import TaskLogWidget from './components/TaskLogWidget';
+import ProfileSummaryWidget from './components/ProfileSummaryWidget';
+import UnifiedActionPanel from './components/UnifiedActionPanel';
+import { UserProfileCard } from './components/UserProfileCard';
 
-// ИЗМЕНЕНИЕ: Все неиспользуемые импорты иконок и утилит удалены
-
-const ActivityChartWidget = lazy(() => import('pages/Dashboard/components/ActivityChartWidget'));
-const AudienceAnalyticsWidget = lazy(() => import('pages/Dashboard/components/AudienceAnalyticsWidget'));
-const ProfileGrowthWidget = lazy(() => import('pages/Dashboard/components/ProfileGrowthWidget'));
-const ProxyManagerModal = lazy(() => import('pages/Dashboard/components/ProxyManagerModal'));
-const AutomationSettingsModal = lazy(() => import('pages/Dashboard/components/AutomationSettingsModal'));
-const FriendRequestConversionWidget = lazy(() => import('pages/Dashboard/components/FriendRequestConversionWidget'));
-const PostActivityHeatmapWidget = lazy(() => import('pages/Dashboard/components/PostActivityHeatmapWidget'));
+const ActivityChartWidget = lazy(() => import('./components/ActivityChartWidget'));
+const AudienceAnalyticsWidget = lazy(() => import('./components/AudienceAnalyticsWidget'));
+const ProfileGrowthWidget = lazy(() => import('./components/ProfileGrowthWidget'));
+const ProxyManagerModal = lazy(() => import('./components/ProxyManagerModal'));
+const AutomationSettingsModal = lazy(() => import('./components/AutomationSettingsModal'));
+const FriendRequestConversionWidget = lazy(() => import('./components/FriendRequestConversionWidget'));
+const PostActivityHeatmapWidget = lazy(() => import('./components/PostActivityHeatmapWidget'));
 
 const motionVariants = {
     initial: { opacity: 0, y: 20 },
@@ -1770,9 +1815,9 @@ const motionVariants = {
 
 export default function DashboardPage() {
     const { data: userInfo, isLoading: isUserLoading } = useCurrentUser();
-    const connectionStatus = useUserStore(state => state.connectionStatus);
+    const connectionStatus = useStore(state => state.connectionStatus);
     const { isFeatureAvailable } = useFeatureFlag();
-    const { modalState, openModal, closeModal, onActionSubmit } = useDashboardManager();
+    const { modalState, openModal, closeModal } = useDashboardManager();
     const [isProxyModalOpen, setProxyModalOpen] = useState(false);
     const [automationToEdit, setAutomationToEdit] = useState(null);
     const [runTour, setRunTour] = useState(false);
@@ -1798,7 +1843,7 @@ export default function DashboardPage() {
     useEffect(() => {
         const hasSeenTour = localStorage.getItem('zenith_tour_completed');
         if (!hasSeenTour) {
-            setRunTour(true);
+            setTimeout(() => setRunTour(true), 1500);
         }
     }, []);
 
@@ -1811,7 +1856,7 @@ export default function DashboardPage() {
     };
 
     if (isUserLoading || !userInfo) {
-        return <LazyLoader />;
+        return <LazyLoader variant="circular" />;
     }
 
     return (
@@ -1853,35 +1898,35 @@ export default function DashboardPage() {
                         </motion.div>
                          <Grid container spacing={3} id="profile-summary">
                             <Grid item xs={12} md={7}>
-                                <Suspense fallback={<LazyLoader />}>
+                                <Suspense fallback={<LazyLoader variant="skeleton"/>}>
                                     <ProfileSummaryWidget />
                                 </Suspense>
                             </Grid>
                              <Grid item xs={12} md={5}>
-                                <Suspense fallback={<LazyLoader />}>
+                                <Suspense fallback={<LazyLoader variant="skeleton"/>}>
                                     <FriendRequestConversionWidget />
                                 </Suspense>
                              </Grid>
                          </Grid>
                         <motion.div custom={4} variants={motionVariants} initial="initial" animate="animate">
-                            <Suspense fallback={<LazyLoader />}>
+                            <Suspense fallback={<LazyLoader variant="skeleton"/>}>
                                 <ActivityChartWidget />
                             </Suspense>
                         </motion.div>
                         {isFeatureAvailable('profile_growth_analytics') && (
                             <motion.div custom={5} variants={motionVariants} initial="initial" animate="animate">
-                               <Suspense fallback={<LazyLoader />}>
+                               <Suspense fallback={<LazyLoader variant="skeleton"/>}>
                                     <ProfileGrowthWidget />
                                </Suspense>
                             </motion.div>
                         )}
                         <motion.div custom={6} variants={motionVariants} initial="initial" animate="animate">
-                           <Suspense fallback={<LazyLoader />}>
+                           <Suspense fallback={<LazyLoader variant="skeleton"/>}>
                                 <PostActivityHeatmapWidget />
                            </Suspense>
                         </motion.div>
                         <motion.div custom={7} variants={motionVariants} initial="initial" animate="animate">
-                           <Suspense fallback={<LazyLoader />}>
+                           <Suspense fallback={<LazyLoader variant="skeleton"/>}>
                                 <AudienceAnalyticsWidget />
                            </Suspense>
                         </motion.div>
@@ -1895,393 +1940,17 @@ export default function DashboardPage() {
                 </Grid>
             </Grid>
             
-            <ActionModal {...modalState} onClose={closeModal} onSubmit={onActionSubmit} />
+            <ActionModal
+                open={modalState.open}
+                onClose={closeModal}
+                actionKey={modalState.actionKey}
+                title={modalState.title}
+            />
+
             <Suspense>
                 {isProxyModalOpen && <ProxyManagerModal open={isProxyModalOpen} onClose={() => setProxyModalOpen(false)} />}
                 {automationToEdit && <AutomationSettingsModal open={!!automationToEdit} onClose={() => setAutomationToEdit(null)} automation={automationToEdit} />}
             </Suspense>
-        </Box>
-    );
-}
-
-// --- frontend/src\pages\Dashboard\components\ActionModal.js ---
-
-// frontend/src/pages/Dashboard/components/ActionModal.js
-import React from 'react';
-import { Dialog, DialogTitle, DialogContent, DialogActions, Button } from '@mui/material';
-import ActionModalContent from './ActionModalContent';
-import { useActionModalState } from 'hooks/useActionModalState';
-import { content } from 'content/content';
-
-const ActionModal = ({ open, onClose, onSubmit, title, actionKey }) => {
-    const { params, getModalTitle, handleParamChange, getActionLimit } = useActionModalState(open, actionKey, title);
-
-    const handleSubmit = () => {
-        onSubmit(actionKey, params);
-        onClose();
-    };
-    
-    return (
-        <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm" PaperProps={{ sx: { borderRadius: 4 } }}>
-            <DialogTitle sx={{ fontWeight: 600, pb: 1 }}>{getModalTitle()}</DialogTitle>
-            <DialogContent dividers>
-                <ActionModalContent 
-                    actionKey={actionKey}
-                    params={params}
-                    onParamChange={handleParamChange}
-                    limit={getActionLimit()}
-                />
-            </DialogContent>
-            <DialogActions sx={{ p: 2 }}>
-                <Button onClick={onClose}>{content.modal.cancelButton}</Button>
-                <Button onClick={handleSubmit} variant="contained">{content.modal.launchButton}</Button>
-            </DialogActions>
-        </Dialog>
-    );
-};
-
-export default ActionModal;
-
-// --- frontend/src\pages\Dashboard\components\ActionModalContent.js ---
-
-// --- frontend/src/pages/Dashboard/components/ActionModalContent.js ---
-import React from 'react';
-import { TextField, Box, FormControlLabel, Switch, Divider, Tooltip, Stack } from '@mui/material';
-import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
-import { content } from 'content/content';
-import ActionModalFilters from './ActionModalFilters';
-import CountSlider from 'components/CountSlider';
-
-
-const { modal: modalContent } = content;
-
-const LikeAfterAdd = ({ enabled, onChange }) => (
-    <FormControlLabel
-        control={<Switch checked={enabled} onChange={(e) => onChange('like_config.enabled', e.target.checked)} />}
-        label={
-            <Box display="flex" alignItems="center" component="span">
-                {modalContent.likeAfterRequest.label}
-                <Tooltip title={modalContent.likeAfterRequest.tooltip} placement="top" arrow>
-                    <InfoOutlinedIcon fontSize="small" color="secondary" sx={{ ml: 0.5, cursor: 'help' }} />
-                </Tooltip>
-            </Box>
-        }
-    />
-);
-
-const MessageOnAdd = ({ enabled, text, onChange }) => (
-    <Stack spacing={1} sx={{mt: 2}}>
-         <FormControlLabel
-            control={<Switch checked={enabled} onChange={(e) => onChange('send_message_on_add', e.target.checked)} />}
-            label={
-                <Box display="flex" alignItems="center" component="span">
-                    {modalContent.messageOnAdd.label}
-                    <Tooltip title={modalContent.messageOnAdd.tooltip} placement="top" arrow>
-                         <InfoOutlinedIcon fontSize="small" color="secondary" sx={{ ml: 0.5, cursor: 'help' }} />
-                    </Tooltip>
-                </Box>
-            }
-        />
-        {enabled && (
-             <TextField
-                fullWidth multiline rows={3}
-                label="Текст сообщения"
-                value={text} onChange={(e) => onChange('message_text', e.target.value)}
-                helperText={modalContent.messageOnAdd.helperText}
-            />
-        )}
-    </Stack>
-);
-
-const MassMessageSettings = ({ params, onChange }) => (
-    <Stack spacing={2} sx={{mt: 2}}>
-        <TextField
-            fullWidth multiline rows={4}
-            label="Текст сообщения"
-            value={params.message_text || ''} onChange={(e) => onChange('message_text', e.target.value)}
-            helperText={modalContent.messageOnAdd.helperText}
-        />
-        <FormControlLabel
-            control={<Switch checked={params.only_new_dialogs || false} onChange={(e) => onChange('only_new_dialogs', e.target.checked)} />}
-            label={
-                <Box display="flex" alignItems="center" component="span">
-                    {modalContent.massMessage.onlyNewDialogsLabel}
-                    <Tooltip title={modalContent.massMessage.tooltip} placement="top" arrow>
-                         <InfoOutlinedIcon fontSize="small" color="secondary" sx={{ ml: 0.5, cursor: 'help' }} />
-                    </Tooltip>
-                </Box>
-            }
-        />
-    </Stack>
-);
-
-const LikeFeedSettings = ({ params, onChange }) => (
-    <FormControlLabel
-        control={<Switch checked={params.filters?.only_with_photo || false} onChange={(e) => onChange('filters.only_with_photo', e.target.checked)} />}
-        label={
-             <Box display="flex" alignItems="center" component="span">
-                Лайкать только посты с фото
-                <Tooltip title="Игнорировать текстовые посты без изображений." placement="top" arrow>
-                     <InfoOutlinedIcon fontSize="small" color="secondary" sx={{ ml: 0.5, cursor: 'help' }} />
-                </Tooltip>
-            </Box>
-        }
-    />
-);
-
-const ActionModalContent = ({ actionKey, params, onParamChange, limit }) => {
-    const actionConfig = content.actions[actionKey];
-    if (!actionConfig) return null;
-
-    const needsCount = !!actionConfig.modal_count_label;
-    const automationConfig = content.automations.find(a => a.id === actionKey);
-    const hasFilters = automationConfig?.has_filters ?? false;
-    
-    return (
-        <Stack spacing={3} py={1}>
-            {needsCount && (
-                <CountSlider
-                    label={actionConfig.modal_count_label}
-                    value={params.count || 0}
-                    onChange={(val) => onParamChange('count', val)}
-                    max={limit}
-                />
-            )}
-            
-            {actionKey === 'like_feed' && (
-                <LikeFeedSettings params={params} onChange={onParamChange} />
-            )}
-            
-            {actionKey === 'add_recommended' && (
-                <Box>
-                    <LikeAfterAdd enabled={params.like_config?.enabled || false} onChange={onParamChange} />
-                    <MessageOnAdd 
-                        enabled={params.send_message_on_add || false}
-                        text={params.message_text || ''}
-                        onChange={onParamChange}
-                    />
-                </Box>
-            )}
-
-            {actionKey === 'mass_messaging' && (
-                <MassMessageSettings params={params} onChange={onParamChange} />
-            )}
-            
-            {hasFilters && (
-                <>
-                    <Divider />
-                    <ActionModalFilters filters={params.filters || {}} onChange={onParamChange} actionKey={actionKey} />
-                </>
-            )}
-        </Stack>
-    );
-};
-
-export default ActionModalContent;
-
-// --- frontend/src\pages\Dashboard\components\ActionModalFilters.js ---
-
-// --- frontend/src/pages/Dashboard/components/ActionModalFilters.js ---
-import React from 'react';
-import {
-    FormControlLabel, Switch, Select, MenuItem, InputLabel, FormControl, Grid, Typography, Box, Tooltip, TextField, Divider
-} from '@mui/material';
-import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
-import { content } from 'content/content';
-import PresetManager from './PresetManager';
-
-const FilterWrapper = ({ children }) => (
-    <Box>
-        <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 600 }}>{content.modal.filtersTitle}</Typography>
-        {children}
-    </Box>
-);
-
-const LabelWithTooltip = ({ title, tooltipText }) => (
-    <Box display="flex" alignItems="center" component="span">
-        {title}
-        <Tooltip title={tooltipText} placement="top" arrow>
-            <InfoOutlinedIcon fontSize="small" color="secondary" sx={{ ml: 0.5, cursor: 'help' }} />
-        </Tooltip>
-    </Box>
-);
-
-const NumberFilterField = ({ name, value, label, onChange }) => (
-    <TextField
-        name={name}
-        value={value || ''}
-        onChange={onChange}
-        label={label}
-        type="number"
-        size="small"
-        fullWidth
-        placeholder="Любое"
-        inputProps={{ min: 0 }}
-        helperText="Оставьте пустым, чтобы не использовать"
-    />
-);
-
-
-export const CommonFiltersSettings = ({ filters, onChange, actionKey }) => {
-    const showClosedProfilesFilter = ['accept_friends', 'add_recommended', 'mass_messaging'].includes(actionKey);
-    const isAcceptFriends = actionKey === 'accept_friends';
-
-    const handleChange = (e) => {
-        const { name, value, type, checked } = e.target;
-        const val = type === 'checkbox' ? checked : (type === 'number' ? (value ? parseInt(value, 10) : null) : value);
-        onChange(name, val);
-    };
-
-    return (
-        <FilterWrapper>
-            <Grid container spacing={2} alignItems="center">
-                <Grid item xs={12} sm={6}>
-                    <FormControlLabel control={<Switch name="is_online" checked={filters.is_online || false} onChange={handleChange} />} label="Только онлайн" />
-                </Grid>
-                {showClosedProfilesFilter && (
-                    <Grid item xs={12} sm={6}>
-                        <FormControlLabel
-                            control={<Switch name="allow_closed_profiles" checked={filters.allow_closed_profiles || false} onChange={handleChange} />}
-                            label={<LabelWithTooltip title="Закрытые профили" tooltipText="Разрешить взаимодействие с пользователями, у которых закрыт профиль. Часть фильтров (статус, кол-во друзей) не будет применяться." />}
-                        />
-                    </Grid>
-                )}
-                <Grid item xs={12}>
-                    <FormControl fullWidth size="small">
-                        <InputLabel>Был(а) в сети</InputLabel>
-                        <Select name="last_seen_hours" value={filters.last_seen_hours || 0} label="Был(а) в сети" onChange={handleChange}>
-                            <MenuItem value={0}>Неважно</MenuItem>
-                            <MenuItem value={1}>В течение часа</MenuItem>
-                            <MenuItem value={3}>В течение 3 часов</MenuItem>
-                            <MenuItem value={12}>В течение 12 часов</MenuItem>
-                            <MenuItem value={24}>В течение суток</MenuItem>
-                        </Select>
-                    </FormControl>
-                </Grid>
-                <Grid item xs={12}>
-                    <FormControl fullWidth size="small">
-                        <InputLabel>Пол</InputLabel>
-                        <Select name="sex" value={filters.sex || 0} label="Пол" onChange={handleChange}>
-                            <MenuItem value={0}>Любой</MenuItem>
-                            <MenuItem value={1}>Женский</MenuItem>
-                            <MenuItem value={2}>Мужской</MenuItem>
-                        </Select>
-                    </FormControl>
-                </Grid>
-                <Grid item xs={12}>
-                    <TextField
-                        name="status_keyword"
-                        value={filters.status_keyword || ''}
-                        onChange={handleChange}
-                        label="Ключевое слово в статусе"
-                        size="small"
-                        fullWidth
-                        placeholder="Например: ищу работу, спб"
-                    />
-                </Grid>
-                 {isAcceptFriends && (
-                    <>
-                        <Grid item xs={6}><NumberFilterField name="min_friends" value={filters.min_friends} label="Мин. друзей" onChange={handleChange} /></Grid>
-                        <Grid item xs={6}><NumberFilterField name="max_friends" value={filters.max_friends} label="Макс. друзей" onChange={handleChange} /></Grid>
-                        <Grid item xs={6}><NumberFilterField name="min_followers" value={filters.min_followers} label="Мин. подписчиков" onChange={handleChange} /></Grid>
-                        <Grid item xs={6}><NumberFilterField name="max_followers" value={filters.max_followers} label="Макс. подписчиков" onChange={handleChange} /></Grid>
-                    </>
-                )}
-            </Grid>
-        </FilterWrapper>
-    );
-};
-
-export const RemoveFriendsFilters = ({ filters, onChange }) => {
-    const handleChange = (e) => {
-        const { name, value, type, checked } = e.target;
-        const val = type === 'checkbox' ? checked : value;
-        onChange(name, val);
-    };
-    return (
-        <Box>
-             <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 600 }}>Критерии для чистки</Typography>
-            <Grid container spacing={2} alignItems="center">
-                 <Grid item xs={12}>
-                    <FormControlLabel
-                        control={<Switch name="remove_banned" checked={filters.remove_banned !== false} onChange={handleChange} />}
-                        label={<LabelWithTooltip title="Удаленные / забаненные" tooltipText="Удалить пользователей, чьи страницы были удалены или заблокированы." />}
-                    />
-                </Grid>
-                <Grid item xs={12}>
-                    <FormControl fullWidth size="small">
-                        <InputLabel>Неактивные (не заходили более)</InputLabel>
-                        <Select name="last_seen_days" value={filters.last_seen_days || 0} label="Неактивные (не заходили более)" onChange={handleChange}>
-                           <MenuItem value={0}>Не удалять по неактивности</MenuItem>
-                           <MenuItem value={30}>1 месяца</MenuItem>
-                           <MenuItem value={90}>3 месяцев</MenuItem>
-                           <MenuItem value={180}>6 месяцев</MenuItem>
-                           <MenuItem value={365}>1 года</MenuItem>
-                        </Select>
-                    </FormControl>
-                </Grid>
-                 <Grid item xs={12}>
-                    <FormControl fullWidth size="small">
-                        <InputLabel>Пол</InputLabel>
-                        <Select name="sex" value={filters.sex || 0} label="Пол" onChange={handleChange}>
-                           <MenuItem value={0}>Любой</MenuItem>
-                           <MenuItem value={1}>Женский</MenuItem>
-                           <MenuItem value={2}>Мужской</MenuItem>
-                        </Select>
-                    </FormControl>
-                </Grid>
-            </Grid>
-        </Box>
-    );
-};
-
-const KeywordFilter = ({ title, keyword, onChange, placeholder, helperText }) => (
-    <Box>
-        <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 600 }}>{title}</Typography>
-        <TextField
-            name="status_keyword"
-            value={keyword || ''}
-            onChange={onChange}
-            label="Ключевое слово или фраза"
-            size="small"
-            fullWidth
-            placeholder={placeholder}
-            helperText={helperText}
-        />
-    </Box>
-);
-
-export default function ActionModalFilters({ filters, onChange, actionKey }) {
-    const onApplyPreset = (newFilters) => {
-        onChange('filters', newFilters);
-    };
-
-    const automationConfig = content.automations.find(a => a.id === actionKey);
-    const hasFilters = automationConfig?.has_filters ?? false;
-    if (!hasFilters) return null;
-    
-    let FilterComponent;
-    const handleChange = (e) => onChange(`filters.${e.target.name}`, e.target.value);
-
-    switch (actionKey) {
-        case 'remove_friends':
-            FilterComponent = <RemoveFriendsFilters filters={filters} onChange={(name, val) => onChange(`filters.${name}`, val)} />;
-            break;
-        case 'leave_groups':
-            FilterComponent = <KeywordFilter title="Критерии для отписки" keyword={filters.status_keyword} onChange={handleChange} placeholder="Например: барахолка, новости" helperText="Оставьте пустым, чтобы отписываться от всех подряд." />;
-            break;
-        case 'join_groups':
-            FilterComponent = <KeywordFilter title="Критерии для вступления" keyword={filters.status_keyword} onChange={handleChange} placeholder="Например: SMM, дизайн, маркетинг" helperText="Введите ключевые слова для поиска релевантных групп." />;
-            break;
-        default:
-            FilterComponent = <CommonFiltersSettings filters={filters} onChange={(name, val) => onChange(`filters.${name}`, val)} actionKey={actionKey} />;
-    }
-
-    return (
-        <Box>
-            <PresetManager actionKey={actionKey} currentFilters={filters} onApply={onApplyPreset} />
-            <Divider sx={{ my: 2 }} />
-            {FilterComponent}
         </Box>
     );
 }
@@ -2291,7 +1960,8 @@ export default function ActionModalFilters({ filters, onChange, actionKey }) {
 // frontend/src/pages/Dashboard/components/ActionPanel.js
 import React from 'react';
 import { Typography, Button, List, ListItem, ListItemText, ListItemIcon, Stack, Paper, alpha } from '@mui/material';
-import { content } from 'content/content';
+// ИСПРАВЛЕНО
+import { content } from '../../../content/content';
 import { motion } from 'framer-motion';
 
 export default function ActionPanel({ onConfigure }) {
@@ -2302,7 +1972,7 @@ export default function ActionPanel({ onConfigure }) {
       </Typography>
       <List sx={{ p: 0 }}>
         <Stack spacing={1.5}>
-          {Object.entries(content.actions).map(([key, action]) => (
+          {Object.entries(content.tasks).map(([key, action]) => ( // ИСПРАВЛЕНО: content.actions -> content.tasks
             <motion.div whileHover={{ scale: 1.03 }} transition={{ type: 'spring', stiffness: 400, damping: 10 }} key={key}>
                 <ListItem
                   secondaryAction={
@@ -2327,7 +1997,7 @@ export default function ActionPanel({ onConfigure }) {
                     {action.icon}
                   </ListItemIcon>
                   <ListItemText
-                    primary={action.title}
+                    primary={action.name} // ИСПРАВЛЕНО: action.title -> action.name
                     sx={{
                       '& .MuiListItemText-primary': { fontWeight: 600 },
                       m: 0,
@@ -2349,11 +2019,13 @@ import React, { useState, useMemo } from 'react';
 import { Paper, Typography, Box, useTheme, ButtonGroup, Button, Skeleton } from '@mui/material';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, Legend } from 'recharts';
 import { useQuery } from '@tanstack/react-query';
-import { fetchActivityStats } from 'api.js';
+// ИСПРАВЛЕНО
+import { fetchActivityStats } from '../../../api';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { motion } from 'framer-motion';
 
+// ... (остальной код без изменений)
 const CustomTooltip = ({ active, payload, label }) => {
     if (active && payload && payload.length) {
         return (
@@ -2449,10 +2121,6 @@ export default function ActivityChartWidget() {
     );
 }
 
-
-
-
-
 // --- frontend/src\pages\Dashboard\components\AudienceAnalyticsWidget.js ---
 
 // --- frontend/src/pages/Dashboard/components/AudienceAnalyticsWidget.js ---
@@ -2460,10 +2128,12 @@ import React, { useMemo } from 'react';
 import { Paper, Typography, useTheme, Grid, Skeleton, Tooltip, IconButton, Stack, alpha, Box } from '@mui/material';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip as RechartsTooltip, PieChart, Pie, Cell, Sector } from 'recharts';
 import { useQuery } from '@tanstack/react-query';
-import { fetchAudienceAnalytics } from 'api.js';
+// ИСПРАВЛЕНО
+import { fetchAudienceAnalytics } from '../../../api';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { motion } from 'framer-motion';
 
+// ... (остальной код без изменений)
 const CustomTooltip = ({ active, payload, label }) => {
     if (active && payload && payload.length) {
         return (
@@ -2571,7 +2241,6 @@ export default function AudienceAnalyticsWidget() {
     );
 }
 
-
 // --- frontend/src\pages\Dashboard\components\AutomationSettingsModal.js ---
 
 // frontend/src/pages/Dashboard/components/AutomationSettingsModal.js
@@ -2579,12 +2248,14 @@ import React, { useState, useEffect } from 'react';
 import { Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, CircularProgress, Stack, Divider, Typography, ToggleButtonGroup, ToggleButton, RadioGroup, FormControlLabel, Radio } from '@mui/material';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
-import { updateAutomation } from 'api';
-import { CommonFiltersSettings, RemoveFriendsFilters } from './ActionModalFilters';
-import CountSlider from 'components/CountSlider';
-import { useUserStore } from 'store/userStore';
-import { content } from 'content/content';
+// ИСПРАВЛЕНО
+import { updateAutomation } from '../../../api';
+import { CommonFiltersSettings, RemoveFriendsFilters } from './ActionModal/ActionModalFilters';
+import CountSlider from '../../../components/CountSlider';
+import { content } from '../../../content/content';
+import { useCurrentUser } from '../../../hooks/useCurrentUser';
 
+// ... (остальной код без изменений, но с исправленным `useCurrentUser`)
 const EternalOnlineSettings = ({ settings, onChange }) => {
     const days = [
         { key: 0, label: 'Пн' }, { key: 1, label: 'Вт' }, { key: 2, label: 'Ср' },
@@ -2646,13 +2317,13 @@ const EternalOnlineSettings = ({ settings, onChange }) => {
 const AutomationSettingsModal = ({ open, onClose, automation }) => {
     const queryClient = useQueryClient();
     const [settings, setSettings] = useState({});
-    const userInfo = useUserStore(state => state.userInfo);
+    const { data: userInfo } = useCurrentUser(); // ИСПРАВЛЕНО
 
     useEffect(() => {
         if (open && automation) {
             const defaults = {
                 count: 50,
-                filters: { sex: 0, is_online: false, allow_closed_profiles: false, remove_banned: true, last_seen_hours: 0, last_seen_days: 0, min_friends: null, max_friends: null, min_followers: null, max_followers: null },
+                filters: { sex: 0, is_online: false, allow_closed_profiles: false, remove_banned: true, last_seen_hours: null, last_seen_days: null, min_friends: null, max_friends: null, min_followers: null, max_followers: null },
                 message_template_default: "С Днем Рождения, {name}! Желаю всего самого наилучшего, успехов и ярких моментов в жизни.",
                 schedule_type: 'always',
                 start_time: '09:00',
@@ -2676,10 +2347,10 @@ const AutomationSettingsModal = ({ open, onClose, automation }) => {
     });
 
     const handleSettingsChange = (name, value) => {
-        const filterKeys = ['sex', 'is_online', 'allow_closed_profiles', 'remove_banned', 'last_seen_hours', 'last_seen_days', 'min_friends', 'max_friends', 'min_followers', 'max_followers', 'status_keyword'];
 
-        if (filterKeys.includes(name)) {
-            setSettings(s => ({ ...s, filters: { ...s.filters, [name]: value } }));
+        if (name.startsWith('filters.')) {
+            const filterName = name.split('.')[1];
+            setSettings(s => ({ ...s, filters: { ...(s.filters || {}), [filterName]: value } }));
         } else {
             setSettings(s => ({ ...s, [name]: value }));
         }
@@ -2695,10 +2366,9 @@ const AutomationSettingsModal = ({ open, onClose, automation }) => {
 
     if (!automation) return null;
 
-    const actionConfig = content.actions[automation.automation_type];
     const automationConfig = content.automations.find(a => a.id === automation.automation_type);
-    const needsCount = actionConfig && !!actionConfig.modal_count_label;
-    const needsFilters = automationConfig && automationConfig.has_filters;
+    const needsCount = automationConfig?.has_count_slider;
+    const needsFilters = automationConfig?.has_filters;
     
     const getLimit = () => {
         if (automation.automation_type.includes('add')) return userInfo?.daily_add_friends_limit || 100;
@@ -2730,7 +2400,7 @@ const AutomationSettingsModal = ({ open, onClose, automation }) => {
 
                     {needsCount && (
                         <CountSlider
-                            label={actionConfig.modal_count_label}
+                            label={automationConfig.modal_count_label}
                             value={settings.count || 20}
                             onChange={(val) => handleSettingsChange('count', val)}
                             max={getLimit()}
@@ -2740,12 +2410,12 @@ const AutomationSettingsModal = ({ open, onClose, automation }) => {
                     {needsFilters && <Divider />}
 
                     {needsFilters && automation.automation_type === 'remove_friends' && (
-                        <RemoveFriendsFilters filters={settings.filters || {}} onChange={handleSettingsChange} />
+                        <RemoveFriendsFilters filters={settings.filters || {}} onChange={(name, val) => handleSettingsChange(`filters.${name}`, val)} />
                     )}
                     {needsFilters && !['remove_friends'].includes(automation.automation_type) && (
                         <CommonFiltersSettings
                             filters={settings.filters || {}}
-                            onChange={handleSettingsChange}
+                            onChange={(name, val) => handleSettingsChange(`filters.${name}`, val)}
                             actionKey={automation.automation_type}
                         />
                     )}
@@ -2770,7 +2440,8 @@ import React from 'react';
 import { Paper, Typography, Box, Skeleton, Stack, Tooltip, IconButton } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
 import { ResponsiveContainer, RadialBarChart, RadialBar, PolarAngleAxis } from 'recharts';
-import { fetchFriendRequestConversion } from 'api';
+// ИСПРАВЛЕНО
+import { fetchFriendRequestConversion } from '../../../api';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { useTheme } from '@mui/material/styles';
 import { motion } from 'framer-motion';
@@ -2873,7 +2544,8 @@ export default FriendRequestConversionWidget;
 import React from 'react';
 import { Paper, Typography, Box, Skeleton, Tooltip, Stack, alpha } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
-import { fetchPostActivityHeatmap } from 'api';
+// ИСПРАВЛЕНО
+import { fetchPostActivityHeatmap } from '../../../api';
 import { motion } from 'framer-motion';
 
 const daysOfWeek = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
@@ -2957,7 +2629,8 @@ import { Box, FormControl, InputLabel, Select, MenuItem, Button, IconButton, Lis
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchFilterPresets, createFilterPreset, deleteFilterPreset } from 'api';
+// ИСПРАВЛЕНО
+import { fetchFilterPresets, createFilterPreset, deleteFilterPreset } from '../../../api';
 import { toast } from 'react-hot-toast';
 
 const PresetManager = ({ actionKey, currentFilters, onApply }) => {
@@ -3081,7 +2754,8 @@ import React, { useState, useMemo } from 'react';
 import { Paper, Typography, Box, useTheme, Skeleton, Button, ButtonGroup, Chip, Stack } from '@mui/material';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { useQuery } from '@tanstack/react-query';
-import { fetchProfileGrowth } from 'api.js';
+// ИСПРАВЛЕНО
+import { fetchProfileGrowth } from '../../../api';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
@@ -3181,8 +2855,10 @@ export default function ProfileGrowthWidget() {
 import React from 'react';
 import { Grid } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
-import { fetchProfileSummary } from 'api';
-import StatCard from 'components/StatCard';
+// ИСПРАВЛЕНО
+import { fetchProfileSummary } from '../../../api';
+// ИСПРАВЛЕНО
+import StatCard from '../../../components/StatCard';
 import GroupIcon from '@mui/icons-material/Group';
 import RssFeedIcon from '@mui/icons-material/RssFeed';
 import PhotoLibraryIcon from '@mui/icons-material/PhotoLibrary';
@@ -3233,7 +2909,8 @@ import React, { useState } from 'react';
 import { Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Box, CircularProgress, Stack, List, ListItem, ListItemText, IconButton, Typography } from '@mui/material';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
-import { apiClient } from 'api';
+// ИСПРАВЛЕНО
+import { apiClient } from '../../../api';
 import DeleteIcon from '@mui/icons-material/Delete';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
@@ -3404,7 +3081,8 @@ import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import ReplayIcon from '@mui/icons-material/Replay';
 import CancelIcon from '@mui/icons-material/Cancel';
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchTaskHistory, cancelTask, retryTask } from 'api.js';
+// ИСПРАВЛЕНО
+import { fetchTaskHistory, cancelTask, retryTask } from '../../../api';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -3663,12 +3341,14 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import LockIcon from '@mui/icons-material/Lock';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchAutomations, updateAutomation } from 'api.js';
+// ИСПРАВЛЕНО
+import { fetchAutomations, updateAutomation } from '../../../api';
 import { toast } from 'react-hot-toast';
-import { content } from 'content/content';
+// ИСПРАВЛЕНО
+import { content } from '../../../content/content';
 import { motion } from 'framer-motion';
-import { useFeatureFlag } from 'hooks/useFeatureFlag';
-
+// ИСПРАВЛЕНО
+import { useFeatureFlag } from '../../../hooks/useFeatureFlag';
 const ActionRow = ({ action, automation, onRun, onSettings, onToggle, isToggling }) => {
     const { isFeatureAvailable } = useFeatureFlag();
     const isAutomationAvailable = isFeatureAvailable(action.id);
@@ -3798,9 +3478,11 @@ export default function UnifiedActionPanel({ onRun, onSettings }) {
 import React from 'react';
 import { Box, Paper, Link, Chip, Stack, Typography, Avatar, Grid, Button, Tooltip, Select, MenuItem, keyframes } from '@mui/material';
 import { useQueryClient } from '@tanstack/react-query';
-import { useFeatureFlag } from 'hooks/useFeatureFlag';
+// ИСПРАВЛЕНО
+import { useFeatureFlag } from '../../../hooks/useFeatureFlag';
 import { useMutation } from '@tanstack/react-query';
-import { updateUserDelayProfile } from 'api';
+// ИСПРАВЛЕНО
+import { updateUserDelayProfile } from '../../../api';
 import { toast } from 'react-hot-toast';
 
 import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
@@ -3911,6 +3593,545 @@ export const UserProfileCard = React.memo(({ userInfo, connectionStatus, onProxy
         </Paper>
     );
 });
+
+// --- frontend/src\pages\Dashboard\components\ActionModal\ActionModal.js ---
+
+// frontend/src/pages/Dashboard/components/ActionModal/ActionModal.js
+import React from 'react';
+import { Dialog, DialogTitle, DialogContent, DialogActions, Button, CircularProgress } from '@mui/material';
+import { useForm, FormProvider } from 'react-hook-form';
+import { ActionModalContent } from './ActionModalContent';
+// ИСПРАВЛЕНО
+import { useActionTask } from '../../../../hooks/useActionTask';
+
+const ActionModal = ({ open, onClose, actionKey, title }) => {
+    const methods = useForm();
+    const { mutate: runAction, isLoading } = useActionTask(actionKey, title, onClose);
+
+    const onSubmit = (data) => {
+        // RHF уже предоставляет данные в нужном формате.
+        // Дополнительная очистка не требуется.
+        runAction(data);
+    };
+
+    if (!open) return null;
+
+    return (
+        <FormProvider {...methods}>
+            <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm" PaperProps={{ sx: { borderRadius: 4 } }}>
+                <form onSubmit={methods.handleSubmit(onSubmit)}>
+                    <DialogTitle sx={{ fontWeight: 600, pb: 1 }}>{title}</DialogTitle>
+                    <DialogContent dividers>
+                        <ActionModalContent actionKey={actionKey} />
+                    </DialogContent>
+                    <DialogActions sx={{ p: 2 }}>
+                        <Button onClick={onClose} disabled={isLoading}>Отмена</Button>
+                        <Button type="submit" variant="contained" disabled={isLoading}>
+                            {isLoading ? <CircularProgress size={24} /> : 'Запустить'}
+                        </Button>
+                    </DialogActions>
+                </form>
+            </Dialog>
+        </FormProvider>
+    );
+};
+
+export default ActionModal;
+
+// --- frontend/src\pages\Dashboard\components\ActionModal\ActionModalContent.js ---
+
+// frontend/src/pages/Dashboard/components/ActionModal/ActionModalContent.js
+import React from 'react';
+import { Stack, Divider } from '@mui/material';
+import { useQuery } from '@tanstack/react-query';
+
+// ИСПРАВЛЕНИЕ: Пути к API, контенту и хукам
+import { fetchTaskInfo } from '../../../../api';
+import { content } from '../../../../content/content';
+import { useCurrentUser } from '../../../../hooks/useCurrentUser';
+
+import { ActionModalFilters } from './ActionModalFilters';
+import { CountSliderField } from './fields/CountSliderField';
+import { LikeFeedSettingsFields } from './fields/LikeFeedSettingsFields';
+import { AddFriendsSettingsFields } from './fields/AddFriendsSettingsFields';
+import { MassMessageSettingsFields } from './fields/MassMessageSettingsFields';
+
+export const ActionModalContent = ({ actionKey }) => {
+    const { data: userInfo } = useCurrentUser();
+    const { data: taskInfo } = useQuery({
+        queryKey: ['taskInfo', actionKey],
+        queryFn: () => fetchTaskInfo(actionKey),
+        enabled: !!actionKey,
+    });
+    
+    // Получаем конфиг для текущего действия из центрального источника
+    const automationConfig = content.automations.find(a => a.id === actionKey);
+    if (!automationConfig) return null;
+
+    const getActionLimit = () => {
+        if (actionKey.includes('add')) return userInfo?.daily_add_friends_limit || 40;
+        if (actionKey.includes('like')) return userInfo?.daily_likes_limit || 1000;
+        if (actionKey === 'remove_friends') return taskInfo?.count || 5000;
+        return 1000;
+    };
+
+    return (
+        <Stack spacing={3} py={1}>
+            {automationConfig.has_count_slider && (
+                <CountSliderField
+                    name="count"
+                    label={automationConfig.modal_count_label}
+                    max={getActionLimit()}
+                    defaultValue={automationConfig.default_count}
+                />
+            )}
+            
+            {actionKey === 'like_feed' && <LikeFeedSettingsFields />}
+            {actionKey === 'add_recommended' && <AddFriendsSettingsFields />}
+            {actionKey === 'mass_messaging' && <MassMessageSettingsFields />}
+            
+            {automationConfig.has_filters && (
+                <>
+                    <Divider />
+                    <ActionModalFilters actionKey={actionKey} />
+                </>
+            )}
+        </Stack>
+    );
+};
+
+// --- frontend/src\pages\Dashboard\components\ActionModal\ActionModalFilters.js ---
+
+// frontend/src/pages/Dashboard/components/ActionModal/ActionModalFilters.js
+import React from 'react';
+import { Box, Grid, Typography, Divider, MenuItem } from '@mui/material';
+import { useFormContext } from 'react-hook-form';
+
+// ИСПРАВЛЕНО
+import { content } from '../../../../content/content';
+// ИСПРАВЛЕНО
+import PresetManager from '../PresetManager';
+
+import { SwitchField } from './fields/SwitchField';
+import { SelectField } from './fields/SelectField';
+import { TextField } from './fields/TextField';
+import { LabelWithTooltip } from './fields/LabelWithTooltip';
+
+// --- Внутренние компоненты для разных наборов фильтров ---
+
+const CommonFiltersSettings = ({ actionKey }) => {
+    const showClosedProfilesFilter = ['accept_friends', 'add_recommended', 'mass_messaging'].includes(actionKey);
+    const isAcceptFriends = actionKey === 'accept_friends';
+
+    return (
+        <Box>
+            <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 600 }}>{content.modal.filtersTitle}</Typography>
+            <Grid container spacing={2} alignItems="center">
+                <Grid item xs={12} sm={6}>
+                    <SwitchField name="filters.is_online" label="Только онлайн" />
+                </Grid>
+                {showClosedProfilesFilter && (
+                    <Grid item xs={12} sm={6}>
+                        <SwitchField
+                            name="filters.allow_closed_profiles"
+                            label={<LabelWithTooltip title="Закрытые профили" tooltipText="Разрешить взаимодействие с пользователями, у которых закрыт профиль. Часть фильтров (статус, кол-во друзей) не будет применяться." />}
+                        />
+                    </Grid>
+                )}
+                <Grid item xs={12}>
+                    <SelectField name="filters.last_seen_hours" label="Был(а) в сети" defaultValue={null}>
+                        <MenuItem value={null}><em>Неважно</em></MenuItem>
+                        <MenuItem value={1}>В течение часа</MenuItem>
+                        <MenuItem value={3}>В течение 3 часов</MenuItem>
+                        <MenuItem value={12}>В течение 12 часов</MenuItem>
+                        <MenuItem value={24}>В течение суток</MenuItem>
+                    </SelectField>
+                </Grid>
+                <Grid item xs={12}>
+                    <SelectField name="filters.sex" label="Пол" defaultValue={0}>
+                        <MenuItem value={0}>Любой</MenuItem>
+                        <MenuItem value={1}>Женский</MenuItem>
+                        <MenuItem value={2}>Мужской</MenuItem>
+                    </SelectField>
+                </Grid>
+                <Grid item xs={12}>
+                    <TextField name="filters.status_keyword" label="Ключевое слово в статусе" placeholder="Например: ищу работу, спб" />
+                </Grid>
+                {isAcceptFriends && (
+                    <>
+                        <Grid item xs={6}><TextField name="filters.min_friends" label="Мин. друзей" type="number" helperText="Оставьте пустым, чтобы не использовать" /></Grid>
+                        <Grid item xs={6}><TextField name="filters.max_friends" label="Макс. друзей" type="number" helperText="Оставьте пустым, чтобы не использовать" /></Grid>
+                        <Grid item xs={6}><TextField name="filters.min_followers" label="Мин. подписчиков" type="number" helperText="Оставьте пустым, чтобы не использовать" /></Grid>
+                        <Grid item xs={6}><TextField name="filters.max_followers" label="Макс. подписчиков" type="number" helperText="Оставьте пустым, чтобы не использовать" /></Grid>
+                    </>
+                )}
+            </Grid>
+        </Box>
+    );
+};
+
+const RemoveFriendsFilters = () => {
+    return (
+        <Box>
+            <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 600 }}>Критерии для чистки</Typography>
+            <Grid container spacing={2} alignItems="center">
+                <Grid item xs={12}>
+                    <SwitchField
+                        name="filters.remove_banned"
+                        defaultValue={true}
+                        label={<LabelWithTooltip title="Удаленные / забаненные" tooltipText="Удалить пользователей, чьи страницы были удалены или заблокированы." />}
+                    />
+                </Grid>
+                <Grid item xs={12}>
+                    <SelectField name="filters.last_seen_days" label="Неактивные (не заходили более)" defaultValue={null}>
+                        <MenuItem value={null}><em>Не удалять по неактивности</em></MenuItem>
+                        <MenuItem value={30}>1 месяца</MenuItem>
+                        <MenuItem value={90}>3 месяцев</MenuItem>
+                        <MenuItem value={180}>6 месяцев</MenuItem>
+                        <MenuItem value={365}>1 года</MenuItem>
+                    </SelectField>
+                </Grid>
+                <Grid item xs={12}>
+                    <SelectField name="filters.sex" label="Пол" defaultValue={0}>
+                        <MenuItem value={0}>Любой</MenuItem>
+                        <MenuItem value={1}>Женский</MenuItem>
+                        <MenuItem value={2}>Мужской</MenuItem>
+                    </SelectField>
+                </Grid>
+            </Grid>
+        </Box>
+    );
+};
+
+const KeywordFilter = ({ title, name, placeholder, helperText }) => (
+    <Box>
+        <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 600 }}>{title}</Typography>
+        <TextField
+            name={name}
+            label="Ключевое слово или фраза"
+            placeholder={placeholder}
+            helperText={helperText}
+        />
+    </Box>
+);
+
+// --- Основной компонент ---
+export const ActionModalFilters = ({ actionKey }) => {
+    const { getValues, reset } = useFormContext();
+
+    const onApplyPreset = (preset) => {
+        const currentValues = getValues();
+        reset({
+            ...currentValues,
+            filters: preset.filters
+        });
+    };
+
+    let FilterComponent;
+    switch (actionKey) {
+        case 'remove_friends':
+            FilterComponent = <RemoveFriendsFilters />;
+            break;
+        case 'leave_groups':
+            FilterComponent = <KeywordFilter title="Критерии для отписки" name="filters.status_keyword" placeholder="Например: барахолка, новости" helperText="Оставьте пустым, чтобы отписываться от всех подряд." />;
+            break;
+        case 'join_groups':
+            FilterComponent = <KeywordFilter title="Критерии для вступления" name="filters.status_keyword" placeholder="Например: SMM, дизайн, маркетинг" helperText="Введите ключевые слова для поиска релевантных групп." />;
+            break;
+        default:
+            FilterComponent = <CommonFiltersSettings actionKey={actionKey} />;
+    }
+
+    return (
+        <Box>
+            <PresetManager actionKey={actionKey} onApply={onApplyPreset} />
+            <Divider sx={{ my: 2 }} />
+            {FilterComponent}
+        </Box>
+    );
+};
+
+// --- frontend/src\pages\Dashboard\components\ActionModal\fields\AddFriendsSettingsFields.js ---
+
+// frontend/src/pages/Dashboard/components/ActionModal/fields/AddFriendsSettingsFields.js
+import React from 'react';
+import { Box, Stack, Collapse } from '@mui/material';
+import { useFormContext } from 'react-hook-form';
+import { SwitchField } from './SwitchField';
+import { TextField } from './TextField';
+import { LabelWithTooltip } from './LabelWithTooltip';
+import { content } from '../../../../../content/content';
+
+const { modal: modalContent } = content;
+
+export const AddFriendsSettingsFields = () => {
+    const { watch } = useFormContext();
+    const sendMessageEnabled = watch('send_message_on_add', false);
+
+    return (
+        <Stack spacing={1}>
+            <SwitchField
+                name="like_config.enabled"
+                label={
+                    <LabelWithTooltip
+                        title={modalContent.likeAfterRequest.label}
+                        tooltipText={modalContent.likeAfterRequest.tooltip}
+                    />
+                }
+            />
+            <SwitchField
+                name="send_message_on_add"
+                label={
+                    <LabelWithTooltip
+                        title={modalContent.messageOnAdd.label}
+                        tooltipText={modalContent.messageOnAdd.tooltip}
+                    />
+                }
+            />
+            <Collapse in={sendMessageEnabled}>
+                <Box sx={{ pt: 1 }}>
+                    <TextField
+                        name="message_text"
+                        defaultValue="Привет, {name}! Увидел(а) твой профиль в рекомендациях, буду рад(а) знакомству."
+                        label="Текст сообщения"
+                        multiline
+                        rows={3}
+                        helperText={modalContent.messageOnAdd.helperText}
+                    />
+                </Box>
+            </Collapse>
+        </Stack>
+    );
+};
+
+// --- frontend/src\pages\Dashboard\components\ActionModal\fields\CountSliderField.js ---
+
+// frontend/src/pages/Dashboard/components/ActionModal/fields/CountSliderField.js
+import React from 'react';
+import { useFormContext, Controller } from 'react-hook-form';
+// ИСПРАВЛЕНО
+import CountSlider from '../../../../../components/CountSlider';
+
+export const CountSliderField = ({ name, label, max, defaultValue, ...props }) => {
+    const { control } = useFormContext();
+
+    return (
+        <Controller
+            name={name}
+            control={control}
+            defaultValue={defaultValue}
+            render={({ field }) => (
+                <CountSlider
+                    label={label}
+                    value={field.value}
+                    onChange={field.onChange}
+                    max={max}
+                    {...props}
+                />
+            )}
+        />
+    );
+};
+
+// --- frontend/src\pages\Dashboard\components\ActionModal\fields\LabelWithTooltip.js ---
+
+// frontend/src/pages/Dashboard/components/ActionModal/fields/LabelWithTooltip.js
+import React from 'react';
+// ИСПРАВЛЕНИЕ: Добавлен IconButton в импорт
+import { Box, Tooltip, Typography, IconButton } from '@mui/material';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+
+export const LabelWithTooltip = ({ title, tooltipText, ...props }) => {
+    return (
+        <Box 
+            display="flex" 
+            alignItems="center" 
+            component="span" 
+            {...props}
+        >
+            <Typography 
+                variant="body1"
+                component="span" 
+                sx={{ lineHeight: 1 }}
+            >
+                {title}
+            </Typography>
+            <Tooltip title={tooltipText} placement="top" arrow>
+                {/* IconButton делает иконку кликабельной и улучшает a11y (доступность) */}
+                <IconButton 
+                    size="small" 
+                    sx={{ 
+                        ml: 0.5, 
+                        p: 0.25, 
+                        color: 'secondary.main', 
+                        cursor: 'help' 
+                    }}
+                    aria-label={tooltipText} // Для скринридеров
+                >
+                    <InfoOutlinedIcon fontSize="small" />
+                </IconButton>
+            </Tooltip>
+        </Box>
+    );
+};
+
+// --- frontend/src\pages\Dashboard\components\ActionModal\fields\LikeFeedSettingsFields.js ---
+
+// frontend/src/pages/Dashboard/components/ActionModal/fields/LikeFeedSettingsFields.js
+import React from 'react';
+import { Box } from '@mui/material';
+import { SwitchField } from './SwitchField';
+import { LabelWithTooltip } from './LabelWithTooltip';
+
+export const LikeFeedSettingsFields = () => {
+    return (
+        <Box>
+            <SwitchField
+                name="filters.only_with_photo"
+                label={
+                    <LabelWithTooltip
+                        title="Лайкать только посты с фото"
+                        tooltipText="Игнорировать текстовые посты без изображений."
+                    />
+                }
+            />
+        </Box>
+    );
+};
+
+// --- frontend/src\pages\Dashboard\components\ActionModal\fields\MassMessageSettingsFields.js ---
+
+// frontend/src/pages/Dashboard/components/ActionModal/fields/MassMessageSettingsFields.js
+import React from 'react';
+import { Stack } from '@mui/material';
+import { SwitchField } from './SwitchField';
+import { TextField } from './TextField';
+import { LabelWithTooltip } from './LabelWithTooltip';
+import { content } from '../../../../../content/content';
+
+const { modal: modalContent } = content;
+
+export const MassMessageSettingsFields = () => {
+    return (
+        <Stack spacing={2}>
+            <TextField
+                name="message_text"
+                label="Текст сообщения"
+                multiline
+                rows={4}
+                rules={{ required: "Текст сообщения не может быть пустым." }}
+                helperText={modalContent.messageOnAdd.helperText}
+            />
+            <SwitchField
+                name="only_new_dialogs"
+                label={
+                    <LabelWithTooltip
+                        title={modalContent.massMessage.onlyNewDialogsLabel}
+                        tooltipText={modalContent.massMessage.tooltip}
+                    />
+                }
+            />
+        </Stack>
+    );
+};
+
+// --- frontend/src\pages\Dashboard\components\ActionModal\fields\SelectField.js ---
+
+// frontend/src/pages/Dashboard/components/ActionModal/fields/SelectField.js
+import React from 'react';
+import { FormControl, InputLabel, Select as MuiSelect, FormHelperText } from '@mui/material';
+import { useFormContext, Controller } from 'react-hook-form';
+
+export const SelectField = ({ name, label, defaultValue = '', children, rules, ...props }) => {
+    const { control } = useFormContext();
+
+    return (
+        <Controller
+            name={name}
+            control={control}
+            defaultValue={defaultValue}
+            rules={rules}
+            render={({ field, fieldState: { error } }) => (
+                <FormControl fullWidth size="small" error={!!error}>
+                    <InputLabel>{label}</InputLabel>
+                    <MuiSelect
+                        {...field}
+                        label={label}
+                        {...props}
+                    >
+                        {children}
+                    </MuiSelect>
+                    {error && <FormHelperText>{error.message}</FormHelperText>}
+                </FormControl>
+            )}
+        />
+    );
+};
+
+// --- frontend/src\pages\Dashboard\components\ActionModal\fields\SwitchField.js ---
+
+// frontend/src/pages/Dashboard/components/ActionModal/fields/SwitchField.js
+import React from 'react';
+import { FormControlLabel, Switch as MuiSwitch } from '@mui/material';
+import { useFormContext, Controller } from 'react-hook-form';
+
+export const SwitchField = ({ name, label, defaultValue = false, rules, ...props }) => {
+    const { control } = useFormContext();
+
+    return (
+        <FormControlLabel
+            control={
+                <Controller
+                    name={name}
+                    control={control}
+                    defaultValue={defaultValue}
+                    rules={rules}
+                    render={({ field }) => (
+                        <MuiSwitch
+                            {...field}
+                            checked={!!field.value} // Убедимся, что значение всегда boolean
+                            onChange={(e) => field.onChange(e.target.checked)}
+                        />
+                    )}
+                />
+            }
+            label={label}
+            {...props}
+        />
+    );
+};
+
+// --- frontend/src\pages\Dashboard\components\ActionModal\fields\TextField.js ---
+
+// frontend/src/pages/Dashboard/components/ActionModal/fields/TextField.js
+import React from 'react';
+import { TextField as MuiTextField } from '@mui/material';
+import { useFormContext, Controller } from 'react-hook-form';
+
+export const TextField = ({ name, label, defaultValue = '', rules, ...props }) => {
+    const { control } = useFormContext();
+
+    return (
+        <Controller
+            name={name}
+            control={control}
+            defaultValue={defaultValue}
+            rules={rules}
+            render={({ field, fieldState: { error } }) => (
+                <MuiTextField
+                    {...field}
+                    label={label}
+                    error={!!error}
+                    helperText={error ? error.message : props.helperText}
+                    fullWidth
+                    size="small"
+                    variant="outlined"
+                    {...props}
+                />
+            )}
+        />
+    );
+};
 
 // --- frontend/src\pages\Forbidden\ForbiddenPage.js ---
 
@@ -4737,9 +4958,9 @@ import React, { useState } from 'react';
 import { Paper, Typography, TextField, Button, CircularProgress, Alert, Box, Tooltip, Container } from '@mui/material';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import { motion } from 'framer-motion';
-import { loginWithVkToken } from 'api.js';
-import { useUserActions } from 'store/userStore';
-import { content } from 'content/content';
+import { loginWithVkToken } from '../../api';
+import { useStoreActions } from '../../store';
+import { content } from '../../content/content';
 
 const getErrorMessage = (error) => {
     if (typeof error?.response?.data?.detail === 'string') {
@@ -4749,7 +4970,7 @@ const getErrorMessage = (error) => {
 };
 
 export default function LoginPage() {
-    const { login } = useUserActions();
+    const { login } = useStoreActions();
     const [vkTokenInput, setVkTokenInput] = useState('');
     const [message, setMessage] = useState('');
     const [loading, setLoading] = useState(false);
@@ -4847,7 +5068,7 @@ import ruLocale from 'date-fns/locale/ru';
 import AddPhotoAlternateIcon from '@mui/icons-material/AddPhotoAlternate';
 import DeleteIcon from '@mui/icons-material/Delete';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { uploadImageForPost, createPost, updatePost, deletePost } from 'api';
+import { uploadImageForPost, createPost, updatePost, deletePost } from '../../api';
 import { toast } from 'react-hot-toast';
 
 const PostEditorModal = ({ open, onClose, post, selectedDate }) => {
@@ -4995,7 +5216,7 @@ import interactionPlugin from '@fullcalendar/interaction';
 import { Box, Paper, Typography, CircularProgress, useTheme } from '@mui/material';
 import { styled, alpha } from '@mui/material/styles';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchPosts, updatePost } from 'api';
+import { fetchPosts, updatePost } from '../../api';
 import PostEditorModal from './PostEditorModal';
 import { toast } from 'react-hot-toast';
 
@@ -5136,7 +5357,7 @@ export default PostsPage;
 import React, { useState, useEffect, useRef } from 'react';
 import { Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Stack, CircularProgress } from '@mui/material';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { createScenario, updateScenario } from 'api';
+import { createScenario, updateScenario } from '../../../api';
 import { toast } from 'react-hot-toast';
 import AddIcon from '@mui/icons-material/Add';
 import { CronBuilder } from './components/CronBuilder';
@@ -5248,7 +5469,7 @@ import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchScenarios, deleteScenario } from 'api';
+import { fetchScenarios, deleteScenario } from '../../api';
 import { toast } from 'react-hot-toast';
 import cronstrue from 'cronstrue/i18n';
 import { useNavigate } from 'react-router-dom';
@@ -5484,7 +5705,7 @@ import { Stack, Typography, FormControl, Select, MenuItem, InputLabel } from '@m
 import ActionModalFilters from 'pages/Dashboard/components/ActionModalFilters';
 import { content } from 'content/content';
 import CountSlider from 'components/CountSlider';
-import { useUserStore } from 'store/userStore';
+import { useUserStore } from 'store';
 
 // --- ИСПРАВЛЕНИЕ: Этот код был по ошибке перемещен в другой файл. Теперь он на своем месте. ---
 export const StepSettings = ({ step, onSettingsChange, onBatchChange }) => {
@@ -5571,7 +5792,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
 
-import { fetchScenarioById, createScenario, updateScenario } from 'api';
+import { fetchScenarioById, createScenario, updateScenario } from '../../../api';
 import { CronBuilder } from '../components/CronBuilder';
 import Sidebar from './Sidebar';
 import ActionNode from './nodes/ActionNode';
@@ -5774,7 +5995,7 @@ export default Sidebar;
 import React, { useState } from 'react';
 import { FormControl, Select, MenuItem } from '@mui/material';
 import { NodeWrapper, InputHandle, OutputHandle } from './common';
-import { content } from 'content/content';
+import { content } from '../../../../content/content';
 
 const ActionNode = ({ data }) => {
     const [action, setAction] = useState(data.actionType || '');
@@ -5901,7 +6122,7 @@ export default StartNode;
 import React, { useState, useEffect } from 'react';
 import { Dialog, DialogTitle, DialogContent, DialogActions, Button, List, ListItem, ListItemText, Checkbox, ListItemIcon, Avatar, CircularProgress, Typography } from '@mui/material';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { updateMemberAccess } from 'api';
+import { updateMemberAccess } from '../../api';
 import { toast } from 'react-hot-toast';
 
 const AccessControlModal = ({ open, onClose, member }) => {
@@ -5983,7 +6204,7 @@ export default AccessControlModal;
 import React, { useState } from 'react';
 import { Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, CircularProgress } from '@mui/material';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { inviteTeamMember } from 'api';
+import { inviteTeamMember } from '../../api';
 import { toast } from 'react-hot-toast';
 
 const InviteMemberModal = ({ open, onClose }) => {
@@ -6043,7 +6264,7 @@ export default InviteMemberModal;
 import React, { useState } from 'react';
 import { Container, Typography, Box, Button, CircularProgress, Paper, Stack, Avatar, IconButton, Tooltip, alpha } from '@mui/material';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchMyTeam, removeTeamMember } from 'api';
+import { fetchMyTeam, removeTeamMember } from '../../api';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
@@ -6148,146 +6369,113 @@ const TeamPage = () => {
 
 export default TeamPage;
 
-// --- frontend/src\store\authSlice.js ---
+// --- frontend/src\store\auth.store.js ---
 
-// --- frontend/src/store/authSlice.js ---
-import { disconnectWebSocket } from '../websocket';
-import { jwtDecode } from 'jwt-decode';
-import { switchProfile } from 'api';
+// frontend/src/store/auth.store.js
+// Rationale: Этот стор теперь соответствует своему названию и хранит ТОЛЬКО состояние аутентификации.
+// Вся информация о пользователе (имя, тариф и т.д.) теперь живет в кэше React Query и доступна через хук useCurrentUser.
+// Это устраняет дублирование данных и делает React Query единственным источником правды для серверного состояния.
+import { switchProfile } from '../api';
 import { toast } from 'react-hot-toast';
-import { queryClient } from 'queryClient';
+import { queryClient } from '../queryClient';
 
 export const createAuthSlice = (set, get) => ({
-  jwtToken: localStorage.getItem('jwtToken') || null,
-  isLoading: true,
-  // ИЗМЕНЕНИЕ: ID теперь хранятся в сторе, чтобы быть доступными сразу после логина
-  activeProfileId: null,
-  managerId: null,
+  token: localStorage.getItem('zenith_token') || null,
+  isAuthenticated: !!localStorage.getItem('zenith_token'),
+  managerId: localStorage.getItem('zenith_manager_id') || null,
+  activeProfileId: localStorage.getItem('zenith_profile_id') || null,
 
   actions: {
-    login: (token) => {
-      localStorage.setItem('jwtToken', token);
-      set({ jwtToken: token });
-      get().actions.decodeAndSetIds(); // Сразу декодируем и устанавливаем ID
+    login: ({ access_token, manager_id, active_profile_id }) => {
+      localStorage.setItem('zenith_token', access_token);
+      localStorage.setItem('zenith_manager_id', manager_id);
+      localStorage.setItem('zenith_profile_id', active_profile_id);
+      set({ token: access_token, isAuthenticated: true, managerId: manager_id, activeProfileId: active_profile_id });
     },
     logout: () => {
-      localStorage.removeItem('jwtToken');
-      disconnectWebSocket();
-      get().actions.resetUserSlice(); 
-      queryClient.clear(); // Очищаем весь кэш React Query при выходе
-      set({ jwtToken: null, isLoading: false, activeProfileId: null, managerId: null });
+      localStorage.removeItem('zenith_token');
+      localStorage.removeItem('zenith_manager_id');
+      localStorage.removeItem('zenith_profile_id');
+      queryClient.clear(); // Полная очистка кэша при выходе
+      set({ token: null, isAuthenticated: false, managerId: null, activeProfileId: null });
+    },
+    // Этот экшен вызывается из useCurrentUser при ошибке 401
+    setUnauthenticated: () => {
+        if (get().isAuthenticated) {
+            get().actions.logout();
+        }
     },
     setActiveProfile: async (profileId) => {
       if (profileId === get().activeProfileId) return;
 
       const toastId = toast.loading("Переключение профиля...");
       try {
-        const { access_token } = await switchProfile(profileId);
-        get().actions.login(access_token);
+        const response = await switchProfile(profileId);
+        get().actions.login(response); // login теперь принимает весь объект ответа
         toast.success("Профиль успешно изменен!", { id: toastId });
+        // Сброс кэша React Query, чтобы все данные были загружены для нового профиля
         await queryClient.resetQueries();
-        window.location.hash = '/dashboard'; // Можно просто перенаправить
       } catch (error) {
         toast.error("Не удалось переключить профиль.", { id: toastId });
         console.error("Profile switch failed:", error);
       }
     },
-    finishInitialLoad: () => {
-      set({ isLoading: false });
-    },
-    // НОВАЯ ФУНКЦИЯ: Декодирует токен и сохраняет ID в стор
-    decodeAndSetIds: () => {
-      const token = get().jwtToken;
-      if (token) {
-        try {
-          const decoded = jwtDecode(token);
-          set({
-            managerId: parseInt(decoded.sub, 10),
-            activeProfileId: parseInt(decoded.profile_id || decoded.sub, 10)
-          });
-        } catch (e) {
-          console.error("Invalid token:", e);
-          get().actions.logout();
-        }
-      }
-    }
-  }
+  },
 });
 
-// --- frontend/src\store\userSlice.js ---
+// --- frontend/src\store\index.js ---
 
-// frontend/src/store/userSlice.js
-const initialState = {
-    // В будущем здесь может быть состояние, не связанное с сервером,
-    // например, тема оформления (light/dark), состояние открытых панелей и т.д.
-};
-
-export const createUserSlice = (set) => ({
-    ...initialState,
-
-    actions: {
-        // Эта функция теперь не нужна, так как загрузка данных
-        // происходит через хуки useQuery в компонентах.
-        // loadUser: async () => { ... } // УДАЛЕНО
-
-        resetUserSlice: () => set(initialState),
-    }
-});
-
-// --- frontend/src\store\userStore.js ---
-
-// frontend/src/store/userStore.js
+// frontend/src/store/index.js
+// Rationale: Главный файл стора, который собирает все слайсы.
+// Логика подписки на изменение токена для управления WebSocket соединением находится здесь.
 import { create } from 'zustand';
-import { createAuthSlice } from './authSlice';
-import { createUserSlice } from './userSlice';
+import { createAuthSlice } from './auth.store';
+import { createWebSocketSlice } from './websocket.store';
 import { connectWebSocket, disconnectWebSocket } from '../websocket';
 
-const createWebSocketSlice = (set) => ({
+export const useStore = create((set, get) => {
+    const authSlice = createAuthSlice(set, get);
+    const webSocketSlice = createWebSocketSlice(set, get);
+
+    return {
+        ...authSlice,
+        ...webSocketSlice,
+        // Объединяем все actions в один объект для удобного доступа
+        actions: {
+            ...authSlice.actions,
+            ...webSocketSlice.actions,
+        },
+    };
+});
+
+// Хук для удобного доступа к actions
+export const useStoreActions = () => useStore(state => state.actions);
+
+// Инициализация WebSocket соединения при загрузке приложения, если токен уже есть
+const initialToken = useStore.getState().token;
+if (initialToken) {
+    connectWebSocket(initialToken);
+}
+
+// Подписка на изменение состояния токена
+useStore.subscribe(
+    (state, prevState) => {
+        if (state.token && !prevState.token) {
+            connectWebSocket(state.token);
+        } else if (!state.token && prevState.token) {
+            disconnectWebSocket();
+            state.actions.setConnectionStatus('Отключено');
+        }
+    }
+);
+
+// --- frontend/src\store\websocket.store.js ---
+
+// frontend/src/store/websocket.store.js
+// Rationale: Логика WebSocket вынесена в отдельный слайс для лучшей организации кода.
+export const createWebSocketSlice = (set) => ({
     connectionStatus: 'Соединение...',
     actions: {
         setConnectionStatus: (status) => set({ connectionStatus: status }),
     }
 });
-
-export const useUserStore = create((set, get) => {
-    const authSlice = createAuthSlice(set, get);
-    const userSlice = createUserSlice(set, get);
-    const webSocketSlice = createWebSocketSlice(set, get);
-
-    const combinedState = {
-        ...authSlice,
-        ...userSlice,
-        ...webSocketSlice,
-        actions: {
-            ...authSlice.actions,
-            ...userSlice.actions,
-            ...webSocketSlice.actions,
-        },
-    };
-    
-    delete combinedState.actions.actions;
-
-    return combinedState;
-});
-
-export const useUserActions = () => useUserStore(state => state.actions);
-
-useUserStore.subscribe(
-    (state, prevState) => {
-        // Логика подключения/отключения WebSocket остается прежней
-        if (state.jwtToken && !prevState.jwtToken) {
-            connectWebSocket(state.jwtToken);
-            // ИЗМЕНЕНИЕ: После логина мы сразу декодируем токен для установки ID
-            state.actions.decodeAndSetIds();
-        } else if (!state.jwtToken && prevState.jwtToken) {
-            disconnectWebSocket();
-        }
-    }
-);
-
-const initialToken = useUserStore.getState().jwtToken;
-if (initialToken) {
-    // ИЗМЕНЕНИЕ: При первоначальной загрузке также декодируем токен
-    useUserStore.getState().actions.decodeAndSetIds();
-    connectWebSocket(initialToken);
-}

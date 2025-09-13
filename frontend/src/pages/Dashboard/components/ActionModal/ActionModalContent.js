@@ -1,13 +1,12 @@
 // frontend/src/pages/Dashboard/components/ActionModal/ActionModalContent.js
-// Rationale: Компонент больше не принимает `params`, `onParamChange`.
-// Он просто рендерит поля, которые сами регистрируются в форме через `useFormContext`.
 import React from 'react';
 import { Stack, Divider } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
 
-import { fetchTaskInfo } from 'api';
-import { content } from 'content/content';
-import { useCurrentUser } from 'hooks/useCurrentUser';
+// ИСПРАВЛЕНИЕ: Пути к API, контенту и хукам
+import { fetchTaskInfo } from '../../../../api';
+import { content } from '../../../../content/content';
+import { useCurrentUser } from '../../../../hooks/useCurrentUser';
 
 import { ActionModalFilters } from './ActionModalFilters';
 import { CountSliderField } from './fields/CountSliderField';

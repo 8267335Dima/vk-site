@@ -9,7 +9,8 @@ import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import ReplayIcon from '@mui/icons-material/Replay';
 import CancelIcon from '@mui/icons-material/Cancel';
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchTaskHistory, cancelTask, retryTask } from 'api.js';
+// ИСПРАВЛЕНО
+import { fetchTaskHistory, cancelTask, retryTask } from '../../../api';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { AnimatePresence, motion } from 'framer-motion';

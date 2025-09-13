@@ -3,10 +3,12 @@ import React, { useMemo } from 'react';
 import { Paper, Typography, useTheme, Grid, Skeleton, Tooltip, IconButton, Stack, alpha, Box } from '@mui/material';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip as RechartsTooltip, PieChart, Pie, Cell, Sector } from 'recharts';
 import { useQuery } from '@tanstack/react-query';
-import { fetchAudienceAnalytics } from 'api.js';
+// ИСПРАВЛЕНО
+import { fetchAudienceAnalytics } from '../../../api';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { motion } from 'framer-motion';
 
+// ... (остальной код без изменений)
 const CustomTooltip = ({ active, payload, label }) => {
     if (active && payload && payload.length) {
         return (

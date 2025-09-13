@@ -1,13 +1,13 @@
 // frontend/src/hooks/useActionModalState.js
 import { useState, useEffect, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { fetchTaskInfo } from 'api.js';
-import { useUserStore } from 'store';
+import { fetchTaskInfo } from '../api';
+import { useStore } from '../store';
 
 export const useActionModalState = (open, actionKey, title) => {
     const [params, setParams] = useState({});
-    const daily_add_friends_limit = useUserStore(state => state.userInfo?.daily_add_friends_limit);
-    const daily_likes_limit = useUserStore(state => state.userInfo?.daily_likes_limit);
+    const daily_add_friends_limit = useStore(state => state.userInfo?.daily_add_friends_limit);
+    const daily_likes_limit = useStore(state => state.userInfo?.daily_likes_limit);
 
     const { data: taskInfo, isLoading: isLoadingInfo } = useQuery({
         queryKey: ['taskInfo', actionKey],

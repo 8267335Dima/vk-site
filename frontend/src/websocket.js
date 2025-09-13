@@ -1,6 +1,6 @@
 // frontend/src/websocket.js
 import { toast } from 'react-hot-toast';
-import { useUserStore } from 'store';
+import { useStore } from './store';
 import { queryClient } from './queryClient';
 
 let socket = null;
@@ -18,7 +18,7 @@ const getSocketUrl = () => {
 const handleMessage = (event) => {
     try {
         const { type, payload } = JSON.parse(event.data);
-        const { setDailyLimits } = useUserStore.getState().actions;
+        const { setDailyLimits } = useStore.getState().actions;
 
         switch (type) {
             case 'log':
@@ -77,16 +77,16 @@ export const connectWebSocket = (token) => {
 
     socket.onopen = () => {
         console.log('WebSocket connected');
-        useUserStore.getState().actions.setConnectionStatus('На связи');
+        useStore.getState().actions.setConnectionStatus('На связи');
         if (reconnectTimeout) clearTimeout(reconnectTimeout);
     };
 
     socket.onclose = (event) => {
         console.log(`WebSocket disconnected: ${event.code}`);
         socket = null;
-        useUserStore.getState().actions.setConnectionStatus('Переподключение...');
+        useStore.getState().actions.setConnectionStatus('Переподключение...');
         
-        const currentToken = useUserStore.getState().jwtToken;
+        const currentToken = useStore.getState().jwtToken;
         if (currentToken) {
            reconnectTimeout = setTimeout(() => connectWebSocket(currentToken), reconnectInterval);
         }
@@ -108,6 +108,6 @@ export const disconnectWebSocket = () => {
     if (socket) {
         socket.close();
         socket = null;
-        useUserStore.getState().actions.setConnectionStatus('Отключено');
+        useStore.getState().actions.setConnectionStatus('Отключено');
     }
 };

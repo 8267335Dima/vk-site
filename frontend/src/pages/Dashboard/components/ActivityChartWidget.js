@@ -3,11 +3,13 @@ import React, { useState, useMemo } from 'react';
 import { Paper, Typography, Box, useTheme, ButtonGroup, Button, Skeleton } from '@mui/material';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, Legend } from 'recharts';
 import { useQuery } from '@tanstack/react-query';
-import { fetchActivityStats } from 'api.js';
+// ИСПРАВЛЕНО
+import { fetchActivityStats } from '../../../api';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { motion } from 'framer-motion';
 
+// ... (остальной код без изменений)
 const CustomTooltip = ({ active, payload, label }) => {
     if (active && payload && payload.length) {
         return (
@@ -102,6 +104,3 @@ export default function ActivityChartWidget() {
         </Paper>
     );
 }
-
-
-

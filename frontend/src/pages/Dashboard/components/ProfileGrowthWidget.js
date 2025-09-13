@@ -3,7 +3,8 @@ import React, { useState, useMemo } from 'react';
 import { Paper, Typography, Box, useTheme, Skeleton, Button, ButtonGroup, Chip, Stack } from '@mui/material';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { useQuery } from '@tanstack/react-query';
-import { fetchProfileGrowth } from 'api.js';
+// ИСПРАВЛЕНО
+import { fetchProfileGrowth } from '../../../api';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';

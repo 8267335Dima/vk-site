@@ -1,19 +1,15 @@
 // --- frontend/src/pages/Dashboard/DashboardPage.js ---
-// Rationale: Этот компонент теперь является "дирижером" страницы, а не исполнителем.
-// Вся логика получения данных делегирована хуку useCurrentUser.
-// Управление состоянием модальных окон инкапсулировано в useDashboardManager.
-// Сами модальные окна (например, ActionModal) теперь содержат собственную логику отправки форм.
-// Это делает DashboardPage чистым, декларативным и легким для понимания.
 import React, { useState, useEffect, Suspense, lazy } from 'react';
-import { Box, Grid, Typography, motion, Stack } from '@mui/material';
+import { Box, Grid, Typography, Stack } from '@mui/material';
+import { motion } from 'framer-motion';
 import Joyride, { STATUS } from 'react-joyride';
 
-import { useStore } from 'store';
-import { useCurrentUser } from 'hooks/useCurrentUser';
-import { useDashboardManager } from 'hooks/useDashboardManager';
-import { useFeatureFlag } from 'hooks/useFeatureFlag';
+import { useStore } from '../../store';
+import { useCurrentUser } from '../../hooks/useCurrentUser';
+import { useDashboardManager } from '../../hooks/useDashboardManager';
+import { useFeatureFlag } from '../../hooks/useFeatureFlag';
 
-import LazyLoader from 'components/LazyLoader';
+import LazyLoader from '../../components/LazyLoader';
 import ActionModal from './components/ActionModal/ActionModal';
 import TaskLogWidget from './components/TaskLogWidget';
 import ProfileSummaryWidget from './components/ProfileSummaryWidget';
@@ -63,7 +59,6 @@ export default function DashboardPage() {
     useEffect(() => {
         const hasSeenTour = localStorage.getItem('zenith_tour_completed');
         if (!hasSeenTour) {
-            // Небольшая задержка, чтобы дать странице прогрузиться перед туром
             setTimeout(() => setRunTour(true), 1500);
         }
     }, []);
@@ -95,7 +90,7 @@ export default function DashboardPage() {
                       backgroundColor: '#161618',
                       primaryColor: '#5E5CE6',
                       textColor: '#F5F5F7',
-                      zIndex: 1301, // Выше чем у AppBar
+                      zIndex: 1301,
                     },
                 }}
             />

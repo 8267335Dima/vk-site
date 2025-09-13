@@ -3,9 +3,9 @@ import React, { useState } from 'react';
 import { Paper, Typography, TextField, Button, CircularProgress, Alert, Box, Tooltip, Container } from '@mui/material';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import { motion } from 'framer-motion';
-import { loginWithVkToken } from 'api.js';
-import { useUserActions } from 'store';
-import { content } from 'content/content';
+import { loginWithVkToken } from '../../api';
+import { useStoreActions } from '../../store';
+import { content } from '../../content/content';
 
 const getErrorMessage = (error) => {
     if (typeof error?.response?.data?.detail === 'string') {
@@ -15,7 +15,7 @@ const getErrorMessage = (error) => {
 };
 
 export default function LoginPage() {
-    const { login } = useUserActions();
+    const { login } = useStoreActions();
     const [vkTokenInput, setVkTokenInput] = useState('');
     const [message, setMessage] = useState('');
     const [loading, setLoading] = useState(false);

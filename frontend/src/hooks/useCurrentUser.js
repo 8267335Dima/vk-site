@@ -3,8 +3,8 @@
 // Он не только предоставляет данные, но и синхронизирует состояние аутентификации в Zustand
 // при получении ошибки 401, делая систему самовосстанавливающейся.
 import { useQuery } from '@tanstack/react-query';
-import { fetchUserInfo } from 'api';
-import { useStore } from 'store';
+import { fetchUserInfo } from '../api';
+import { useStore } from '../store';
 
 export const useCurrentUser = () => {
     const token = useStore(state => state.token);

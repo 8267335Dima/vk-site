@@ -5,15 +5,19 @@ import {
     useTheme, useMediaQuery, IconButton, Drawer, List, ListItem, ListItemButton
 } from '@mui/material';
 import { Link as RouterLink, useLocation, Outlet } from 'react-router-dom';
-import { useUserStore, useUserActions } from 'store';
+// ИСПРАВЛЕНИЕ: Правильный относительный путь
+import { useStore, useStoreActions } from '../store';
 import HubIcon from '@mui/icons-material/Hub';
 import MenuIcon from '@mui/icons-material/Menu';
-import { content } from 'content/content';
+// ИСПРАВЛЕНИЕ: Правильный относительный путь
+import { content } from '../content/content';
 import NotificationsBell from './NotificationsBell';
 import Footer from './Footer';
-import { useFeatureFlag } from 'hooks/useFeatureFlag';
+// ИСПРАВЛЕНИЕ: Правильный относительный путь
+import { useFeatureFlag } from '../hooks/useFeatureFlag';
 import ProfileSwitcher from './ProfileSwitcher';
 
+// ... (остальной код компонента без изменений)
 const navItems = [
     { label: content.nav.dashboard, to: "/dashboard", feature: null }, 
     { label: content.nav.scenarios, to: "/scenarios", feature: "scenarios" },
@@ -78,8 +82,8 @@ const MobileDrawer = ({ open, onClose, onLogout, visibleNavItems }) => (
 
 
 export default function Layout() {
-    const jwtToken = useUserStore(state => state.jwtToken);
-    const { logout } = useUserActions();
+    const isAuthenticated = useStore(state => state.isAuthenticated);
+    const { logout } = useStoreActions();
     const { isFeatureAvailable } = useFeatureFlag();
     
     const theme = useTheme();
@@ -104,7 +108,7 @@ export default function Layout() {
 
                         {isMobile ? (
                              <>
-                                {jwtToken ? (
+                                {isAuthenticated ? (
                                     <>
                                         {isFeatureAvailable('agency_mode') && <ProfileSwitcher isMobile />}
                                         <NotificationsBell />
@@ -116,9 +120,9 @@ export default function Layout() {
                              </>
                         ) : (
                             <Stack direction="row" spacing={1} alignItems="center">
-                                {jwtToken && isFeatureAvailable('agency_mode') && <ProfileSwitcher />}
-                                {jwtToken && visibleNavItems.map(item => <NavButton key={item.to} to={item.to}>{item.label}</NavButton>)}
-                                {jwtToken ? (
+                                {isAuthenticated && isFeatureAvailable('agency_mode') && <ProfileSwitcher />}
+                                {isAuthenticated && visibleNavItems.map(item => <NavButton key={item.to} to={item.to}>{item.label}</NavButton>)}
+                                {isAuthenticated ? (
                                     <>
                                         <NotificationsBell />
                                         <Button onClick={logout} variant="outlined" color="primary" sx={{ ml: 2 }}>{content.nav.logout}</Button>
@@ -134,7 +138,7 @@ export default function Layout() {
                 </Container>
             </AppBar>
             
-            {isMobile && jwtToken && <MobileDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} onLogout={() => { setDrawerOpen(false); logout(); }} visibleNavItems={visibleNavItems} />}
+            {isMobile && isAuthenticated && <MobileDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} onLogout={() => { setDrawerOpen(false); logout(); }} visibleNavItems={visibleNavItems} />}
 
             <Box component="main" sx={{ flexGrow: 1 }}>
                  <Outlet />

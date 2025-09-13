@@ -8,7 +8,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
 
-import { fetchScenarioById, createScenario, updateScenario } from 'api';
+import { fetchScenarioById, createScenario, updateScenario } from '../../../api';
 import { CronBuilder } from '../components/CronBuilder';
 import Sidebar from './Sidebar';
 import ActionNode from './nodes/ActionNode';

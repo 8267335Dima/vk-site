@@ -2,7 +2,8 @@
 import React from 'react';
 import { Paper, Typography, Box, Skeleton, Tooltip, Stack, alpha } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
-import { fetchPostActivityHeatmap } from 'api';
+// ИСПРАВЛЕНО
+import { fetchPostActivityHeatmap } from '../../../api';
 import { motion } from 'framer-motion';
 
 const daysOfWeek = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];

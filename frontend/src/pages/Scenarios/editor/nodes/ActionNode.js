@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { FormControl, Select, MenuItem } from '@mui/material';
 import { NodeWrapper, InputHandle, OutputHandle } from './common';
-import { content } from 'content/content';
+import { content } from '../../../../content/content';
 
 const ActionNode = ({ data }) => {
     const [action, setAction] = useState(data.actionType || '');

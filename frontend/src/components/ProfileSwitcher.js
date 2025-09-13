@@ -3,13 +3,15 @@ import React, { useState } from 'react';
 import { Box, Typography, Menu, MenuItem, Button, Avatar, ListItemIcon, ListItemText, CircularProgress, Tooltip, IconButton } from '@mui/material';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import AddIcon from '@mui/icons-material/Add';
-import { useUserStore, useUserActions } from 'store';
+import { useStore, useStoreActions } from '../store';
 import { useQuery } from '@tanstack/react-query';
-import { getManagedProfiles } from 'api';
+import { getManagedProfiles } from '../api';
 
 const ProfileSwitcher = ({ isMobile }) => {
-    const { setActiveProfile } = useUserActions();
-    const activeProfileId = useUserStore(state => state.activeProfileId);
+    // ИСПРАВЛЕНИЕ: Используем новый экшен из useStoreActions
+    const { setActiveProfile } = useStoreActions();
+    // ИСПРАВЛЕНИЕ: Получаем ID из useStore
+    const activeProfileId = useStore(state => state.activeProfileId);
     
     const { data: profiles, isLoading } = useQuery({
         queryKey: ['managedProfiles'],
@@ -23,7 +25,10 @@ const ProfileSwitcher = ({ isMobile }) => {
     const handleClose = () => setAnchorEl(null);
 
     const handleSelectProfile = (profileId) => {
-        setActiveProfile(profileId);
+        // Конвертируем в число для строгого сравнения
+        if (Number(profileId) !== Number(activeProfileId)) {
+            setActiveProfile(profileId);
+        }
         handleClose();
     };
 
@@ -32,9 +37,9 @@ const ProfileSwitcher = ({ isMobile }) => {
         handleClose();
     };
     
-    const currentProfile = profiles?.find(p => p.id === activeProfileId);
+    const currentProfile = profiles?.find(p => Number(p.id) === Number(activeProfileId));
 
-    if (isLoading && !currentProfile) {
+    if (isLoading) {
         return <CircularProgress size={24} />;
     }
 
@@ -57,7 +62,7 @@ const ProfileSwitcher = ({ isMobile }) => {
                 endIcon={<KeyboardArrowDownIcon />}
             >
                 <Typography sx={{ display: { xs: 'none', md: 'block' }, fontWeight: 600, mx: 1 }}>
-                    {isLoading ? 'Загрузка...' : `${currentProfile?.first_name} ${currentProfile?.last_name}`}
+                    {isLoading || !currentProfile ? 'Загрузка...' : `${currentProfile?.first_name} ${currentProfile?.last_name}`}
                 </Typography>
             </Button>
             <Menu anchorEl={anchorEl} open={open} onClose={handleClose}>
@@ -70,7 +75,7 @@ const ProfileSwitcher = ({ isMobile }) => {
                         <MenuItem 
                             key={profile.id} 
                             onClick={() => handleSelectProfile(profile.id)}
-                            selected={profile.id === activeProfileId}
+                            selected={Number(profile.id) === Number(activeProfileId)}
                         >
                             <ListItemIcon>
                                 <Avatar src={profile.photo_50} sx={{ width: 28, height: 28 }} />

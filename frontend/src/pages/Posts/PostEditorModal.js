@@ -3,12 +3,12 @@ import React, { useState, useEffect } from 'react';
 import { Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Stack, Box, Chip, CircularProgress } from '@mui/material';
 import { DateTimePicker } from '@mui/x-date-pickers/DateTimePicker';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
-import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
+import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFnsV3';
 import ruLocale from 'date-fns/locale/ru';
 import AddPhotoAlternateIcon from '@mui/icons-material/AddPhotoAlternate';
 import DeleteIcon from '@mui/icons-material/Delete';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { uploadImageForPost, createPost, updatePost, deletePost } from 'api';
+import { uploadImageForPost, createPost, updatePost, deletePost } from '../../api';
 import { toast } from 'react-hot-toast';
 
 const PostEditorModal = ({ open, onClose, post, selectedDate }) => {

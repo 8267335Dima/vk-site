@@ -1,33 +1,31 @@
 // frontend/src/pages/Scenarios/components/ScenarioStepSettings.js
 import React from 'react';
 import { Stack, Typography, FormControl, Select, MenuItem, InputLabel } from '@mui/material';
-import ActionModalFilters from 'pages/Dashboard/components/ActionModalFilters';
-import { content } from 'content/content';
-import CountSlider from 'components/CountSlider';
-import { useUserStore } from 'store';
+// ИСПРАВЛЕНО: относительные пути
+import { ActionModalFilters } from '../../Dashboard/components/ActionModal/ActionModalFilters'; 
+import { content } from '../../../content/content';
+import CountSlider from '../../../components/CountSlider';
+import { useCurrentUser } from '../../../hooks/useCurrentUser'; // <-- Правильный хук
 
-// --- ИСПРАВЛЕНИЕ: Этот код был по ошибке перемещен в другой файл. Теперь он на своем месте. ---
 export const StepSettings = ({ step, onSettingsChange, onBatchChange }) => {
-    const userInfo = useUserStore(state => state.userInfo);
+    const { data: userInfo } = useCurrentUser(); // <-- Получаем данные пользователя из React Query
 
     const handleFieldChange = (name, value) => {
         const newSettings = { ...step.settings, [name]: value };
         onSettingsChange(newSettings);
     };
+    
+    // Эта функция теперь не нужна, т.к. ActionModalFilters использует react-hook-form
+    // и управляет своим состоянием самостоятельно.
+    // onSettingsChange будет вызываться только для слайдера и других полей здесь.
 
-    const handleFilterChange = (name, value) => {
-        const filterName = name.replace('filters.', '');
-        const newFilters = { ...step.settings.filters, [filterName]: value };
-        onSettingsChange({ ...step.settings, filters: newFilters });
-    };
-
+    // ИСПРАВЛЕНО: Получаем конфиг по ключу из content.actions
     const actionConfig = content.actions[step.action_type];
-    // --- ИСПРАВЛЕНИЕ: Правильный поиск конфига автоматизации в массиве ---
     const automationConfig = content.automations.find(a => a.id === step.action_type);
 
     if (!actionConfig || !automationConfig) return null;
 
-    const hasSettings = !['view_stories', 'eternal_online'].includes(step.action_type);
+    const hasSettings = automationConfig.has_count_slider || automationConfig.has_filters;
 
     if (!hasSettings) {
         return <Typography variant="body2" color="text.secondary" sx={{ mt: 2, pl: 1 }}>Для этого действия нет дополнительных настроек.</Typography>;
@@ -43,7 +41,7 @@ export const StepSettings = ({ step, onSettingsChange, onBatchChange }) => {
 
     return (
         <Stack spacing={3} sx={{ mt: 2, p: 2, borderTop: '1px solid', borderColor: 'divider' }}>
-            {actionConfig.modal_count_label && (
+            {automationConfig.has_count_slider && (
                 <CountSlider
                     label={actionConfig.modal_count_label}
                     value={step.settings.count || 20}
@@ -54,9 +52,9 @@ export const StepSettings = ({ step, onSettingsChange, onBatchChange }) => {
             
             {automationConfig.has_filters && (
                  <ActionModalFilters 
-                    filters={step.settings.filters || {}} 
-                    onChange={handleFilterChange} 
                     actionKey={step.action_type} 
+                    // Компонент теперь работает с react-hook-form, 
+                    // ему не нужны пропсы filters и onChange
                 />
             )}
 

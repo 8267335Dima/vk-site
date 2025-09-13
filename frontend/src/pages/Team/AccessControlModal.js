@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { Dialog, DialogTitle, DialogContent, DialogActions, Button, List, ListItem, ListItemText, Checkbox, ListItemIcon, Avatar, CircularProgress, Typography } from '@mui/material';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { updateMemberAccess } from 'api';
+import { updateMemberAccess } from '../../api';
 import { toast } from 'react-hot-toast';
 
 const AccessControlModal = ({ open, onClose, member }) => {

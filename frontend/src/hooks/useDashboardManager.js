@@ -1,7 +1,7 @@
 // frontend/src/hooks/useDashboardManager.js
 import { useState, useCallback } from 'react';
 import { toast } from 'react-hot-toast';
-import { runTask } from 'api.js';
+import { runTask } from '../api';
 
 const getErrorMessage = (error) => {
     if (typeof error?.response?.data?.detail === 'string') {

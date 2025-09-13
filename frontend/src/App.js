@@ -1,4 +1,4 @@
-// --- frontend/src/App.js ---
+// frontend/src/App.js
 import React, { Suspense, lazy } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { ThemeProvider, CssBaseline, Box, CircularProgress } from '@mui/material';
@@ -10,8 +10,8 @@ import { theme } from './theme.js';
 import { useStore } from './store';
 import Layout from './components/Layout.js';
 import ErrorBoundary from './components/ErrorBoundary.js';
-import { useCurrentUser } from 'hooks/useCurrentUser.js';
-import { useFeatureFlag } from 'hooks/useFeatureFlag.js';
+import { useCurrentUser } from './hooks/useCurrentUser.js';
+import { useFeatureFlag } from './hooks/useFeatureFlag.js';
 
 // Lazy-loaded pages
 const HomePage = lazy(() => import('./pages/Home/HomePage.js'));

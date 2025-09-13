@@ -1,7 +1,8 @@
 // frontend/src/pages/Dashboard/components/ActionModal/fields/CountSliderField.js
 import React from 'react';
 import { useFormContext, Controller } from 'react-hook-form';
-import CountSlider from 'components/CountSlider'; // Наш UI компонент
+// ИСПРАВЛЕНО
+import CountSlider from '../../../../../components/CountSlider';
 
 export const CountSliderField = ({ name, label, max, defaultValue, ...props }) => {
     const { control } = useFormContext();

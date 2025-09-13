@@ -2,14 +2,16 @@
 import React, { useState } from 'react';
 import { Container, Typography, Grid, Skeleton, Stack, ToggleButtonGroup, ToggleButton, Box, Paper, alpha } from '@mui/material';
 import { motion } from 'framer-motion';
-import { useUserStore } from 'store';
-import { createPayment, fetchAvailablePlans } from 'api.js';
-import { toast } from 'react-hot-toast';
 import { useQuery } from '@tanstack/react-query';
+import { toast } from 'react-hot-toast';
+
+// ИСПРАВЛЕНИЕ: Все пути исправлены на корректные относительные пути
+import { useCurrentUser } from '../../hooks/useCurrentUser';
+import { createPayment, fetchAvailablePlans } from '../../api';
 import PlanCard from './components/PlanCard';
-import { ReactComponent as VisaLogo } from './assets/visa.svg';
-import { ReactComponent as MastercardLogo } from './assets/mastercard.svg';
-import { ReactComponent as MirLogo } from './assets/mir.svg';
+import { ReactComponent as VisaLogo } from '../../assets/icons/visa.svg';
+import { ReactComponent as MastercardLogo } from '../../assets/icons/mastercard.svg';
+import { ReactComponent as MirLogo } from '../../assets/icons/mir.svg';
 
 const periodOptions = [
     { months: 1, label: '1 месяц' },
@@ -19,7 +21,8 @@ const periodOptions = [
 ];
 
 export default function BillingPage() {
-    const userInfo = useUserStore((state) => state.userInfo);
+    // ИСПРАВЛЕНИЕ: Используем хук useCurrentUser для получения данных о пользователе
+    const { data: userInfo } = useCurrentUser();
     const [loadingPlan, setLoadingPlan] = useState(null);
     const [selectedMonths, setSelectedMonths] = useState(1);
 

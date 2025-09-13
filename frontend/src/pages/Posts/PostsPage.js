@@ -7,7 +7,7 @@ import interactionPlugin from '@fullcalendar/interaction';
 import { Box, Paper, Typography, CircularProgress, useTheme } from '@mui/material';
 import { styled, alpha } from '@mui/material/styles';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchPosts, updatePost } from 'api';
+import { fetchPosts, updatePost } from '../../api';
 import PostEditorModal from './PostEditorModal';
 import { toast } from 'react-hot-toast';
 

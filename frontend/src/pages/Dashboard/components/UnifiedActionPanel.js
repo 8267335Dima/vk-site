@@ -5,12 +5,14 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import LockIcon from '@mui/icons-material/Lock';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchAutomations, updateAutomation } from 'api.js';
+// ИСПРАВЛЕНО
+import { fetchAutomations, updateAutomation } from '../../../api';
 import { toast } from 'react-hot-toast';
-import { content } from 'content/content';
+// ИСПРАВЛЕНО
+import { content } from '../../../content/content';
 import { motion } from 'framer-motion';
-import { useFeatureFlag } from 'hooks/useFeatureFlag';
-
+// ИСПРАВЛЕНО
+import { useFeatureFlag } from '../../../hooks/useFeatureFlag';
 const ActionRow = ({ action, automation, onRun, onSettings, onToggle, isToggling }) => {
     const { isFeatureAvailable } = useFeatureFlag();
     const isAutomationAvailable = isFeatureAvailable(action.id);

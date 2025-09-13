@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Stack, CircularProgress } from '@mui/material';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { createScenario, updateScenario } from 'api';
+import { createScenario, updateScenario } from '../../../api';
 import { toast } from 'react-hot-toast';
 import AddIcon from '@mui/icons-material/Add';
 import { CronBuilder } from './components/CronBuilder';
