@@ -4,7 +4,7 @@ import { Stack, Typography, FormControl, Select, MenuItem, InputLabel } from '@m
 import ActionModalFilters from 'pages/Dashboard/components/ActionModalFilters';
 import { content } from 'content/content';
 import CountSlider from 'components/CountSlider';
-import { useUserStore } from 'store/userStore';
+import { useUserStore } from 'store';
 
 // --- ИСПРАВЛЕНИЕ: Этот код был по ошибке перемещен в другой файл. Теперь он на своем месте. ---
 export const StepSettings = ({ step, onSettingsChange, onBatchChange }) => {

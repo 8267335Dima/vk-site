@@ -1,12 +1,12 @@
 // frontend/src/hooks/useFeatureFlag.js
-import { useUserStore } from 'store/userStore';
+// Rationale: Хук обновлен для получения данных из useCurrentUser, а не из Zustand.
+// Это гарантирует, что флаги всегда соответствуют данным с сервера.
+import { useCurrentUser } from './useCurrentUser';
 
-/**
- * Хук для проверки доступности фич на основе данных, полученных с бэкенда.
- * @returns {{isFeatureAvailable: (featureKey: string) => boolean}}
- */
 export const useFeatureFlag = () => {
-    const availableFeatures = useUserStore(state => state.availableFeatures);
+    // Получаем данные о пользователе напрямую из кэша React Query
+    const { data: currentUser } = useCurrentUser();
+    const availableFeatures = currentUser?.available_features || [];
 
     const isFeatureAvailable = (featureKey) => {
         return availableFeatures.includes(featureKey);

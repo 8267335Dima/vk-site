@@ -1,134 +1,60 @@
-// --- frontend/src/pages/Dashboard/components/ActionModalContent.js ---
+// frontend/src/pages/Dashboard/components/ActionModal/ActionModalContent.js
+// Rationale: Компонент больше не принимает `params`, `onParamChange`.
+// Он просто рендерит поля, которые сами регистрируются в форме через `useFormContext`.
 import React from 'react';
-import { TextField, Box, FormControlLabel, Switch, Divider, Tooltip, Stack } from '@mui/material';
-import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import { Stack, Divider } from '@mui/material';
+import { useQuery } from '@tanstack/react-query';
+
+import { fetchTaskInfo } from 'api';
 import { content } from 'content/content';
-import ActionModalFilters from './ActionModalFilters';
-import CountSlider from 'components/CountSlider';
+import { useCurrentUser } from 'hooks/useCurrentUser';
 
+import { ActionModalFilters } from './ActionModalFilters';
+import { CountSliderField } from './fields/CountSliderField';
+import { LikeFeedSettingsFields } from './fields/LikeFeedSettingsFields';
+import { AddFriendsSettingsFields } from './fields/AddFriendsSettingsFields';
+import { MassMessageSettingsFields } from './fields/MassMessageSettingsFields';
 
-const { modal: modalContent } = content;
-
-const LikeAfterAdd = ({ enabled, onChange }) => (
-    <FormControlLabel
-        control={<Switch checked={enabled} onChange={(e) => onChange('like_config.enabled', e.target.checked)} />}
-        label={
-            <Box display="flex" alignItems="center" component="span">
-                {modalContent.likeAfterRequest.label}
-                <Tooltip title={modalContent.likeAfterRequest.tooltip} placement="top" arrow>
-                    <InfoOutlinedIcon fontSize="small" color="secondary" sx={{ ml: 0.5, cursor: 'help' }} />
-                </Tooltip>
-            </Box>
-        }
-    />
-);
-
-const MessageOnAdd = ({ enabled, text, onChange }) => (
-    <Stack spacing={1} sx={{mt: 2}}>
-         <FormControlLabel
-            control={<Switch checked={enabled} onChange={(e) => onChange('send_message_on_add', e.target.checked)} />}
-            label={
-                <Box display="flex" alignItems="center" component="span">
-                    {modalContent.messageOnAdd.label}
-                    <Tooltip title={modalContent.messageOnAdd.tooltip} placement="top" arrow>
-                         <InfoOutlinedIcon fontSize="small" color="secondary" sx={{ ml: 0.5, cursor: 'help' }} />
-                    </Tooltip>
-                </Box>
-            }
-        />
-        {enabled && (
-             <TextField
-                fullWidth multiline rows={3}
-                label="Текст сообщения"
-                value={text} onChange={(e) => onChange('message_text', e.target.value)}
-                helperText={modalContent.messageOnAdd.helperText}
-            />
-        )}
-    </Stack>
-);
-
-const MassMessageSettings = ({ params, onChange }) => (
-    <Stack spacing={2} sx={{mt: 2}}>
-        <TextField
-            fullWidth multiline rows={4}
-            label="Текст сообщения"
-            value={params.message_text || ''} onChange={(e) => onChange('message_text', e.target.value)}
-            helperText={modalContent.messageOnAdd.helperText}
-        />
-        <FormControlLabel
-            control={<Switch checked={params.only_new_dialogs || false} onChange={(e) => onChange('only_new_dialogs', e.target.checked)} />}
-            label={
-                <Box display="flex" alignItems="center" component="span">
-                    {modalContent.massMessage.onlyNewDialogsLabel}
-                    <Tooltip title={modalContent.massMessage.tooltip} placement="top" arrow>
-                         <InfoOutlinedIcon fontSize="small" color="secondary" sx={{ ml: 0.5, cursor: 'help' }} />
-                    </Tooltip>
-                </Box>
-            }
-        />
-    </Stack>
-);
-
-const LikeFeedSettings = ({ params, onChange }) => (
-    <FormControlLabel
-        control={<Switch checked={params.filters?.only_with_photo || false} onChange={(e) => onChange('filters.only_with_photo', e.target.checked)} />}
-        label={
-             <Box display="flex" alignItems="center" component="span">
-                Лайкать только посты с фото
-                <Tooltip title="Игнорировать текстовые посты без изображений." placement="top" arrow>
-                     <InfoOutlinedIcon fontSize="small" color="secondary" sx={{ ml: 0.5, cursor: 'help' }} />
-                </Tooltip>
-            </Box>
-        }
-    />
-);
-
-const ActionModalContent = ({ actionKey, params, onParamChange, limit }) => {
-    const actionConfig = content.actions[actionKey];
-    if (!actionConfig) return null;
-
-    const needsCount = !!actionConfig.modal_count_label;
-    const automationConfig = content.automations.find(a => a.id === actionKey);
-    const hasFilters = automationConfig?.has_filters ?? false;
+export const ActionModalContent = ({ actionKey }) => {
+    const { data: userInfo } = useCurrentUser();
+    const { data: taskInfo } = useQuery({
+        queryKey: ['taskInfo', actionKey],
+        queryFn: () => fetchTaskInfo(actionKey),
+        enabled: !!actionKey,
+    });
     
+    // Получаем конфиг для текущего действия из центрального источника
+    const automationConfig = content.automations.find(a => a.id === actionKey);
+    if (!automationConfig) return null;
+
+    const getActionLimit = () => {
+        if (actionKey.includes('add')) return userInfo?.daily_add_friends_limit || 40;
+        if (actionKey.includes('like')) return userInfo?.daily_likes_limit || 1000;
+        if (actionKey === 'remove_friends') return taskInfo?.count || 5000;
+        return 1000;
+    };
+
     return (
         <Stack spacing={3} py={1}>
-            {needsCount && (
-                <CountSlider
-                    label={actionConfig.modal_count_label}
-                    value={params.count || 0}
-                    onChange={(val) => onParamChange('count', val)}
-                    max={limit}
+            {automationConfig.has_count_slider && (
+                <CountSliderField
+                    name="count"
+                    label={automationConfig.modal_count_label}
+                    max={getActionLimit()}
+                    defaultValue={automationConfig.default_count}
                 />
             )}
             
-            {actionKey === 'like_feed' && (
-                <LikeFeedSettings params={params} onChange={onParamChange} />
-            )}
+            {actionKey === 'like_feed' && <LikeFeedSettingsFields />}
+            {actionKey === 'add_recommended' && <AddFriendsSettingsFields />}
+            {actionKey === 'mass_messaging' && <MassMessageSettingsFields />}
             
-            {actionKey === 'add_recommended' && (
-                <Box>
-                    <LikeAfterAdd enabled={params.like_config?.enabled || false} onChange={onParamChange} />
-                    <MessageOnAdd 
-                        enabled={params.send_message_on_add || false}
-                        text={params.message_text || ''}
-                        onChange={onParamChange}
-                    />
-                </Box>
-            )}
-
-            {actionKey === 'mass_messaging' && (
-                <MassMessageSettings params={params} onChange={onParamChange} />
-            )}
-            
-            {hasFilters && (
+            {automationConfig.has_filters && (
                 <>
                     <Divider />
-                    <ActionModalFilters filters={params.filters || {}} onChange={onParamChange} actionKey={actionKey} />
+                    <ActionModalFilters actionKey={actionKey} />
                 </>
             )}
         </Stack>
     );
 };
-
-export default ActionModalContent;

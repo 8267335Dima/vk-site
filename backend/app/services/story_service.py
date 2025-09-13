@@ -1,10 +1,10 @@
 # backend/app/services/story_service.py
-from typing import Dict, Any
 from app.services.base import BaseVKService
+from app.api.schemas.actions import EmptyRequest
 
 class StoryService(BaseVKService):
 
-    async def view_stories(self, **kwargs):
+    async def view_stories(self, params: EmptyRequest):
         return await self._execute_logic(self._view_stories_logic)
 
     async def _view_stories_logic(self):

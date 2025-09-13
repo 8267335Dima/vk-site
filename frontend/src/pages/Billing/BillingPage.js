@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { Container, Typography, Grid, Skeleton, Stack, ToggleButtonGroup, ToggleButton, Box, Paper, alpha } from '@mui/material';
 import { motion } from 'framer-motion';
-import { useUserStore } from 'store/userStore';
+import { useUserStore } from 'store';
 import { createPayment, fetchAvailablePlans } from 'api.js';
 import { toast } from 'react-hot-toast';
 import { useQuery } from '@tanstack/react-query';

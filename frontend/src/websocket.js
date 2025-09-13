@@ -1,6 +1,6 @@
 // frontend/src/websocket.js
 import { toast } from 'react-hot-toast';
-import { useUserStore } from 'store/userStore';
+import { useUserStore } from 'store';
 import { queryClient } from './queryClient';
 
 let socket = null;

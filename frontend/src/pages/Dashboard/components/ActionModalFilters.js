@@ -1,204 +1,153 @@
-// --- frontend/src/pages/Dashboard/components/ActionModalFilters.js ---
+// frontend/src/pages/Dashboard/components/ActionModal/ActionModalFilters.js
+// Rationale: Этот компонент стал чисто декларативным. Он не управляет состоянием,
+// а только описывает, какие поля должны быть отрендерены для каждого типа действия.
+// Логика полей инкапсулирована в самих компонентах полей (TextField, SelectField и т.д.),
+// которые работают с React Hook Form через useFormContext.
 import React from 'react';
-import {
-    FormControlLabel, Switch, Select, MenuItem, InputLabel, FormControl, Grid, Typography, Box, Tooltip, TextField, Divider
-} from '@mui/material';
-import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import { Box, Grid, Typography, Divider, MenuItem } from '@mui/material';
+import { useFormContext } from 'react-hook-form';
+
 import { content } from 'content/content';
-import PresetManager from './PresetManager';
+import PresetManager from '../PresetManager';
 
-const FilterWrapper = ({ children }) => (
-    <Box>
-        <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 600 }}>{content.modal.filtersTitle}</Typography>
-        {children}
-    </Box>
-);
+// Импортируем наши новые, умные компоненты полей
+import { SwitchField } from './fields/SwitchField';
+import { SelectField } from './fields/SelectField';
+import { TextField } from './fields/TextField';
+import { LabelWithTooltip } from './fields/LabelWithTooltip';
 
-const LabelWithTooltip = ({ title, tooltipText }) => (
-    <Box display="flex" alignItems="center" component="span">
-        {title}
-        <Tooltip title={tooltipText} placement="top" arrow>
-            <InfoOutlinedIcon fontSize="small" color="secondary" sx={{ ml: 0.5, cursor: 'help' }} />
-        </Tooltip>
-    </Box>
-);
+// --- Внутренние компоненты для разных наборов фильтров ---
 
-const NumberFilterField = ({ name, value, label, onChange }) => (
-    <TextField
-        name={name}
-        value={value || ''}
-        onChange={onChange}
-        label={label}
-        type="number"
-        size="small"
-        fullWidth
-        placeholder="Любое"
-        inputProps={{ min: 0 }}
-        helperText="Оставьте пустым, чтобы не использовать"
-    />
-);
-
-
-export const CommonFiltersSettings = ({ filters, onChange, actionKey }) => {
+const CommonFiltersSettings = ({ actionKey }) => {
     const showClosedProfilesFilter = ['accept_friends', 'add_recommended', 'mass_messaging'].includes(actionKey);
     const isAcceptFriends = actionKey === 'accept_friends';
 
-    const handleChange = (e) => {
-        const { name, value, type, checked } = e.target;
-        const val = type === 'checkbox' ? checked : (type === 'number' ? (value ? parseInt(value, 10) : null) : value);
-        onChange(name, val);
-    };
-
     return (
-        <FilterWrapper>
+        <Box>
+            <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 600 }}>{content.modal.filtersTitle}</Typography>
             <Grid container spacing={2} alignItems="center">
                 <Grid item xs={12} sm={6}>
-                    <FormControlLabel control={<Switch name="is_online" checked={filters.is_online || false} onChange={handleChange} />} label="Только онлайн" />
+                    <SwitchField name="filters.is_online" label="Только онлайн" />
                 </Grid>
                 {showClosedProfilesFilter && (
                     <Grid item xs={12} sm={6}>
-                        <FormControlLabel
-                            control={<Switch name="allow_closed_profiles" checked={filters.allow_closed_profiles || false} onChange={handleChange} />}
+                        <SwitchField
+                            name="filters.allow_closed_profiles"
                             label={<LabelWithTooltip title="Закрытые профили" tooltipText="Разрешить взаимодействие с пользователями, у которых закрыт профиль. Часть фильтров (статус, кол-во друзей) не будет применяться." />}
                         />
                     </Grid>
                 )}
                 <Grid item xs={12}>
-                    <FormControl fullWidth size="small">
-                        <InputLabel>Был(а) в сети</InputLabel>
-                        <Select name="last_seen_hours" value={filters.last_seen_hours || 0} label="Был(а) в сети" onChange={handleChange}>
-                            <MenuItem value={0}>Неважно</MenuItem>
-                            <MenuItem value={1}>В течение часа</MenuItem>
-                            <MenuItem value={3}>В течение 3 часов</MenuItem>
-                            <MenuItem value={12}>В течение 12 часов</MenuItem>
-                            <MenuItem value={24}>В течение суток</MenuItem>
-                        </Select>
-                    </FormControl>
+                    <SelectField name="filters.last_seen_hours" label="Был(а) в сети" defaultValue={null}>
+                        <MenuItem value={null}><em>Неважно</em></MenuItem>
+                        <MenuItem value={1}>В течение часа</MenuItem>
+                        <MenuItem value={3}>В течение 3 часов</MenuItem>
+                        <MenuItem value={12}>В течение 12 часов</MenuItem>
+                        <MenuItem value={24}>В течение суток</MenuItem>
+                    </SelectField>
                 </Grid>
                 <Grid item xs={12}>
-                    <FormControl fullWidth size="small">
-                        <InputLabel>Пол</InputLabel>
-                        <Select name="sex" value={filters.sex || 0} label="Пол" onChange={handleChange}>
-                            <MenuItem value={0}>Любой</MenuItem>
-                            <MenuItem value={1}>Женский</MenuItem>
-                            <MenuItem value={2}>Мужской</MenuItem>
-                        </Select>
-                    </FormControl>
+                    <SelectField name="filters.sex" label="Пол" defaultValue={0}>
+                        <MenuItem value={0}>Любой</MenuItem>
+                        <MenuItem value={1}>Женский</MenuItem>
+                        <MenuItem value={2}>Мужской</MenuItem>
+                    </SelectField>
                 </Grid>
                 <Grid item xs={12}>
-                    <TextField
-                        name="status_keyword"
-                        value={filters.status_keyword || ''}
-                        onChange={handleChange}
-                        label="Ключевое слово в статусе"
-                        size="small"
-                        fullWidth
-                        placeholder="Например: ищу работу, спб"
-                    />
+                    <TextField name="filters.status_keyword" label="Ключевое слово в статусе" placeholder="Например: ищу работу, спб" />
                 </Grid>
-                 {isAcceptFriends && (
+                {isAcceptFriends && (
                     <>
-                        <Grid item xs={6}><NumberFilterField name="min_friends" value={filters.min_friends} label="Мин. друзей" onChange={handleChange} /></Grid>
-                        <Grid item xs={6}><NumberFilterField name="max_friends" value={filters.max_friends} label="Макс. друзей" onChange={handleChange} /></Grid>
-                        <Grid item xs={6}><NumberFilterField name="min_followers" value={filters.min_followers} label="Мин. подписчиков" onChange={handleChange} /></Grid>
-                        <Grid item xs={6}><NumberFilterField name="max_followers" value={filters.max_followers} label="Макс. подписчиков" onChange={handleChange} /></Grid>
+                        <Grid item xs={6}><TextField name="filters.min_friends" label="Мин. друзей" type="number" helperText="Оставьте пустым, чтобы не использовать" /></Grid>
+                        <Grid item xs={6}><TextField name="filters.max_friends" label="Макс. друзей" type="number" helperText="Оставьте пустым, чтобы не использовать" /></Grid>
+                        <Grid item xs={6}><TextField name="filters.min_followers" label="Мин. подписчиков" type="number" helperText="Оставьте пустым, чтобы не использовать" /></Grid>
+                        <Grid item xs={6}><TextField name="filters.max_followers" label="Макс. подписчиков" type="number" helperText="Оставьте пустым, чтобы не использовать" /></Grid>
                     </>
                 )}
             </Grid>
-        </FilterWrapper>
+        </Box>
     );
 };
 
-export const RemoveFriendsFilters = ({ filters, onChange }) => {
-    const handleChange = (e) => {
-        const { name, value, type, checked } = e.target;
-        const val = type === 'checkbox' ? checked : value;
-        onChange(name, val);
-    };
+const RemoveFriendsFilters = () => {
     return (
         <Box>
-             <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 600 }}>Критерии для чистки</Typography>
+            <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 600 }}>Критерии для чистки</Typography>
             <Grid container spacing={2} alignItems="center">
-                 <Grid item xs={12}>
-                    <FormControlLabel
-                        control={<Switch name="remove_banned" checked={filters.remove_banned !== false} onChange={handleChange} />}
+                <Grid item xs={12}>
+                    <SwitchField
+                        name="filters.remove_banned"
+                        defaultValue={true}
                         label={<LabelWithTooltip title="Удаленные / забаненные" tooltipText="Удалить пользователей, чьи страницы были удалены или заблокированы." />}
                     />
                 </Grid>
                 <Grid item xs={12}>
-                    <FormControl fullWidth size="small">
-                        <InputLabel>Неактивные (не заходили более)</InputLabel>
-                        <Select name="last_seen_days" value={filters.last_seen_days || 0} label="Неактивные (не заходили более)" onChange={handleChange}>
-                           <MenuItem value={0}>Не удалять по неактивности</MenuItem>
-                           <MenuItem value={30}>1 месяца</MenuItem>
-                           <MenuItem value={90}>3 месяцев</MenuItem>
-                           <MenuItem value={180}>6 месяцев</MenuItem>
-                           <MenuItem value={365}>1 года</MenuItem>
-                        </Select>
-                    </FormControl>
+                    <SelectField name="filters.last_seen_days" label="Неактивные (не заходили более)" defaultValue={null}>
+                        <MenuItem value={null}><em>Не удалять по неактивности</em></MenuItem>
+                        <MenuItem value={30}>1 месяца</MenuItem>
+                        <MenuItem value={90}>3 месяцев</MenuItem>
+                        <MenuItem value={180}>6 месяцев</MenuItem>
+                        <MenuItem value={365}>1 года</MenuItem>
+                    </SelectField>
                 </Grid>
-                 <Grid item xs={12}>
-                    <FormControl fullWidth size="small">
-                        <InputLabel>Пол</InputLabel>
-                        <Select name="sex" value={filters.sex || 0} label="Пол" onChange={handleChange}>
-                           <MenuItem value={0}>Любой</MenuItem>
-                           <MenuItem value={1}>Женский</MenuItem>
-                           <MenuItem value={2}>Мужской</MenuItem>
-                        </Select>
-                    </FormControl>
+                <Grid item xs={12}>
+                    <SelectField name="filters.sex" label="Пол" defaultValue={0}>
+                        <MenuItem value={0}>Любой</MenuItem>
+                        <MenuItem value={1}>Женский</MenuItem>
+                        <MenuItem value={2}>Мужской</MenuItem>
+                    </SelectField>
                 </Grid>
             </Grid>
         </Box>
     );
 };
 
-const KeywordFilter = ({ title, keyword, onChange, placeholder, helperText }) => (
+const KeywordFilter = ({ title, name, placeholder, helperText }) => (
     <Box>
         <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 600 }}>{title}</Typography>
         <TextField
-            name="status_keyword"
-            value={keyword || ''}
-            onChange={onChange}
+            name={name}
             label="Ключевое слово или фраза"
-            size="small"
-            fullWidth
             placeholder={placeholder}
             helperText={helperText}
         />
     </Box>
 );
 
-export default function ActionModalFilters({ filters, onChange, actionKey }) {
-    const onApplyPreset = (newFilters) => {
-        onChange('filters', newFilters);
+// --- Основной компонент ---
+export const ActionModalFilters = ({ actionKey }) => {
+    const { getValues, reset } = useFormContext();
+
+    const onApplyPreset = (preset) => {
+        // Получаем текущие значения формы (например, `count`)
+        const currentValues = getValues();
+        // Сбрасываем форму, объединяя текущие значения с фильтрами из пресета
+        reset({
+            ...currentValues,
+            filters: preset.filters
+        });
     };
 
-    const automationConfig = content.automations.find(a => a.id === actionKey);
-    const hasFilters = automationConfig?.has_filters ?? false;
-    if (!hasFilters) return null;
-    
     let FilterComponent;
-    const handleChange = (e) => onChange(`filters.${e.target.name}`, e.target.value);
-
     switch (actionKey) {
         case 'remove_friends':
-            FilterComponent = <RemoveFriendsFilters filters={filters} onChange={(name, val) => onChange(`filters.${name}`, val)} />;
+            FilterComponent = <RemoveFriendsFilters />;
             break;
         case 'leave_groups':
-            FilterComponent = <KeywordFilter title="Критерии для отписки" keyword={filters.status_keyword} onChange={handleChange} placeholder="Например: барахолка, новости" helperText="Оставьте пустым, чтобы отписываться от всех подряд." />;
+            FilterComponent = <KeywordFilter title="Критерии для отписки" name="filters.status_keyword" placeholder="Например: барахолка, новости" helperText="Оставьте пустым, чтобы отписываться от всех подряд." />;
             break;
         case 'join_groups':
-            FilterComponent = <KeywordFilter title="Критерии для вступления" keyword={filters.status_keyword} onChange={handleChange} placeholder="Например: SMM, дизайн, маркетинг" helperText="Введите ключевые слова для поиска релевантных групп." />;
+            FilterComponent = <KeywordFilter title="Критерии для вступления" name="filters.status_keyword" placeholder="Например: SMM, дизайн, маркетинг" helperText="Введите ключевые слова для поиска релевантных групп." />;
             break;
         default:
-            FilterComponent = <CommonFiltersSettings filters={filters} onChange={(name, val) => onChange(`filters.${name}`, val)} actionKey={actionKey} />;
+            FilterComponent = <CommonFiltersSettings actionKey={actionKey} />;
     }
 
     return (
         <Box>
-            <PresetManager actionKey={actionKey} currentFilters={filters} onApply={onApplyPreset} />
+            <PresetManager actionKey={actionKey} onApply={onApplyPreset} />
             <Divider sx={{ my: 2 }} />
             {FilterComponent}
         </Box>
     );
-}
+};

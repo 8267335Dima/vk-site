@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchTaskInfo } from 'api.js';
-import { useUserStore } from 'store/userStore';
+import { useUserStore } from 'store';
 
 export const useActionModalState = (open, actionKey, title) => {
     const [params, setParams] = useState({});

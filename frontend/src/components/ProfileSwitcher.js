@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import { Box, Typography, Menu, MenuItem, Button, Avatar, ListItemIcon, ListItemText, CircularProgress, Tooltip, IconButton } from '@mui/material';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import AddIcon from '@mui/icons-material/Add';
-import { useUserStore, useUserActions } from 'store/userStore';
+import { useUserStore, useUserActions } from 'store';
 import { useQuery } from '@tanstack/react-query';
 import { getManagedProfiles } from 'api';
 

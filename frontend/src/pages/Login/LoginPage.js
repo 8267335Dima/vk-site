@@ -4,7 +4,7 @@ import { Paper, Typography, TextField, Button, CircularProgress, Alert, Box, Too
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import { motion } from 'framer-motion';
 import { loginWithVkToken } from 'api.js';
-import { useUserActions } from 'store/userStore';
+import { useUserActions } from 'store';
 import { content } from 'content/content';
 
 const getErrorMessage = (error) => {

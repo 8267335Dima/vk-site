@@ -1,34 +1,42 @@
-// frontend/src/pages/Dashboard/components/ActionModal.js
+// frontend/src/pages/Dashboard/components/ActionModal/ActionModal.js
+// Rationale: Полная переработка с использованием React Hook Form.
+// Теперь компонент не управляет состоянием полей. Он получает `control` от RHF
+// и передает его дочерним компонентам. Логика отправки вынесена в кастомный хук useActionTask.
 import React from 'react';
-import { Dialog, DialogTitle, DialogContent, DialogActions, Button } from '@mui/material';
-import ActionModalContent from './ActionModalContent';
-import { useActionModalState } from 'hooks/useActionModalState';
-import { content } from 'content/content';
+import { Dialog, DialogTitle, DialogContent, DialogActions, Button, CircularProgress } from '@mui/material';
+import { useForm, FormProvider } from 'react-hook-form';
+import { ActionModalContent } from './ActionModalContent';
+import { useActionTask } from 'hooks/useActionTask';
 
-const ActionModal = ({ open, onClose, onSubmit, title, actionKey }) => {
-    const { params, getModalTitle, handleParamChange, getActionLimit } = useActionModalState(open, actionKey, title);
+const ActionModal = ({ open, onClose, actionKey, title }) => {
+    const methods = useForm();
+    const { mutate: runAction, isLoading } = useActionTask(actionKey, title, onClose);
 
-    const handleSubmit = () => {
-        onSubmit(actionKey, params);
-        onClose();
+    const onSubmit = (data) => {
+        // RHF уже предоставляет данные в нужном формате.
+        // Дополнительная очистка не требуется.
+        runAction(data);
     };
-    
+
+    if (!open) return null;
+
     return (
-        <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm" PaperProps={{ sx: { borderRadius: 4 } }}>
-            <DialogTitle sx={{ fontWeight: 600, pb: 1 }}>{getModalTitle()}</DialogTitle>
-            <DialogContent dividers>
-                <ActionModalContent 
-                    actionKey={actionKey}
-                    params={params}
-                    onParamChange={handleParamChange}
-                    limit={getActionLimit()}
-                />
-            </DialogContent>
-            <DialogActions sx={{ p: 2 }}>
-                <Button onClick={onClose}>{content.modal.cancelButton}</Button>
-                <Button onClick={handleSubmit} variant="contained">{content.modal.launchButton}</Button>
-            </DialogActions>
-        </Dialog>
+        <FormProvider {...methods}>
+            <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm" PaperProps={{ sx: { borderRadius: 4 } }}>
+                <form onSubmit={methods.handleSubmit(onSubmit)}>
+                    <DialogTitle sx={{ fontWeight: 600, pb: 1 }}>{title}</DialogTitle>
+                    <DialogContent dividers>
+                        <ActionModalContent actionKey={actionKey} />
+                    </DialogContent>
+                    <DialogActions sx={{ p: 2 }}>
+                        <Button onClick={onClose} disabled={isLoading}>Отмена</Button>
+                        <Button type="submit" variant="contained" disabled={isLoading}>
+                            {isLoading ? <CircularProgress size={24} /> : 'Запустить'}
+                        </Button>
+                    </DialogActions>
+                </form>
+            </Dialog>
+        </FormProvider>
     );
 };
 

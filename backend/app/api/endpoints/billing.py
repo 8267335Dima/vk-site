@@ -26,17 +26,16 @@ async def get_available_plans():
     """
     available_plans = []
     for plan_id, config in PLAN_CONFIG.items():
-        # Отображаем только платные и бесплатные (с ценой 0)
-        if "base_price" in config:
+        if config.base_price is not None:
             available_plans.append({
                 "id": plan_id,
-                "display_name": config.get("display_name", plan_id),
-                "price": config["base_price"], 
-                "currency": config.get("currency", "RUB"),
-                "description": config.get("description", ""),
-                "features": config.get("features", []),
-                "is_popular": config.get("is_popular", False),
-                "periods": config.get("periods", [])
+                "display_name": config.display_name,
+                "price": config.base_price, 
+                "currency": "RUB", # Можно вынести в конфиг
+                "description": config.description,
+                "features": config.features,
+                "is_popular": config.is_popular,
+                "periods": [p.model_dump() for p in config.periods]
             })
     return {"plans": available_plans}
 
@@ -54,16 +53,15 @@ async def create_payment(
     months = request.months
     plan_info = PLAN_CONFIG.get(plan_id)
 
-    if not plan_info or "base_price" not in plan_info:
+    if not plan_info or plan_info.base_price is None:
         raise HTTPException(status_code=400, detail="Неверное название тарифа или тариф не является платным.")
 
-    base_price = plan_info["base_price"]
+    base_price = plan_info.base_price
     final_price = base_price * months
 
-    # Применяем скидку, если она есть для данного периода
-    period_info = next((p for p in plan_info.get("periods", []) if p["months"] == months), None)
-    if period_info and "discount_percent" in period_info:
-        final_price *= (1 - period_info["discount_percent"] / 100)
+    period_info = next((p for p in plan_info.periods if p.months == months), None)
+    if period_info:
+        final_price *= (1 - period_info.discount_percent / 100)
     
     final_price = round(final_price, 2)
 
@@ -96,52 +94,59 @@ async def create_payment(
 async def payment_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     """
     Обрабатывает вебхуки от платежной системы.
+    ВНИМАНИЕ: В production-среде необходимо добавить проверку IP-адреса
+    или подписи запроса от YooKassa для безопасности.
     """
     try:
         event = await request.json()
     except Exception:
+        log.warn("webhook.invalid_json")
         raise HTTPException(status_code=400, detail="Invalid JSON body.")
 
-    if event.get("event") == "payment.succeeded":
-        payment_data = event.get("object", {})
-        payment_system_id = payment_data.get("id")
-        
+    # ВАЖНО: Проверка подписи от YooKassa должна быть здесь
+    # signature = request.headers.get('Yoo-Kassa-Signature')
+    # if not is_valid_signature(event, signature):
+    #     log.error("webhook.invalid_signature")
+    #     raise HTTPException(status_code=403, detail="Invalid signature")
+
+    event_type = event.get("event")
+    payment_data = event.get("object", {})
+    payment_system_id = payment_data.get("id")
+    
+    log.info("webhook.received", event_type=event_type, payment_id=payment_system_id)
+    
+    if event_type == "payment.succeeded":
         if not payment_system_id:
             return {"status": "error", "message": "Payment ID missing."}
 
-        # --- ИЗМЕНЕНИЕ: Используем транзакцию и блокировку для атомарности ---
         async with db.begin():
-            # Находим платеж
             query = select(Payment).where(Payment.payment_system_id == payment_system_id)
-            result = await db.execute(query)
-            payment = result.scalar_one_or_none()
+            payment = (await db.execute(query)).scalar_one_or_none()
 
-            # Если платеж не найден или уже обработан, выходим
-            if not payment or payment.status == "succeeded":
+            if not payment:
+                log.warn("webhook.payment_not_found", payment_id=payment_system_id)
+                return {"status": "ok"} # Возвращаем 200, чтобы система не повторяла запрос
+
+            if payment.status == "succeeded":
+                log.info("webhook.already_processed", payment_id=payment.id)
                 return {"status": "ok"}
             
-            # Блокируем строку пользователя до конца транзакции
             user = await db.get(User, payment.user_id, with_for_update=True)
             if not user:
                 log.error("webhook.user_not_found", user_id=payment.user_id)
-                return {"status": "ok"} # Завершаем, чтобы платежная система не повторяла запрос
+                return {"status": "ok"} 
 
-            # Проверяем сумму платежа
             received_amount = float(payment_data.get("amount", {}).get("value", 0))
-            if abs(received_amount - payment.amount) > 0.01: # Сравнение float с погрешностью
+            if abs(received_amount - payment.amount) > 0.01:
                 payment.status = "failed"
                 log.error("webhook.amount_mismatch", payment_id=payment.id, expected=payment.amount, got=received_amount)
-                # Коммит произойдет автоматически при выходе из блока
                 return {"status": "ok"}
 
-            # Обновляем данные пользователя
-            # Если подписка еще активна - продлеваем, если нет - начинаем с текущего момента
             start_date = user.plan_expires_at if user.plan_expires_at and user.plan_expires_at > datetime.datetime.utcnow() else datetime.datetime.utcnow()
             
             user.plan = payment.plan_name
             user.plan_expires_at = start_date + datetime.timedelta(days=30 * payment.months)
             
-            # Обновляем лимиты пользователя согласно новому тарифу
             new_limits = get_limits_for_plan(user.plan)
             user.daily_likes_limit = new_limits.get("daily_likes_limit", 0)
             user.daily_add_friends_limit = new_limits.get("daily_add_friends_limit", 0)
@@ -149,6 +154,5 @@ async def payment_webhook(request: Request, db: AsyncSession = Depends(get_db)):
             payment.status = "succeeded"
             
             log.info("webhook.success", user_id=user.id, plan=user.plan, expires_at=user.plan_expires_at)
-            # Коммит произойдет автоматически
-
+            
     return {"status": "ok"}

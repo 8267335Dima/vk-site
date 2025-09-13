@@ -1,29 +1,32 @@
 // --- frontend/src/pages/Dashboard/DashboardPage.js ---
-import React, { Suspense, useState, lazy, useEffect } from 'react';
-import { Box, Grid, Typography, motion, Stack } from '@mui/material'; // ИЗМЕНЕНИЕ: Оставлены только используемые компоненты
+// Rationale: Этот компонент теперь является "дирижером" страницы, а не исполнителем.
+// Вся логика получения данных делегирована хуку useCurrentUser.
+// Управление состоянием модальных окон инкапсулировано в useDashboardManager.
+// Сами модальные окна (например, ActionModal) теперь содержат собственную логику отправки форм.
+// Это делает DashboardPage чистым, декларативным и легким для понимания.
+import React, { useState, useEffect, Suspense, lazy } from 'react';
+import { Box, Grid, Typography, motion, Stack } from '@mui/material';
 import Joyride, { STATUS } from 'react-joyride';
 
-import { useUserStore } from 'store/userStore';
+import { useStore } from 'store';
 import { useCurrentUser } from 'hooks/useCurrentUser';
 import { useDashboardManager } from 'hooks/useDashboardManager';
 import { useFeatureFlag } from 'hooks/useFeatureFlag';
 
 import LazyLoader from 'components/LazyLoader';
-import ActionModal from 'pages/Dashboard/components/ActionModal';
-import TaskLogWidget from 'pages/Dashboard/components/TaskLogWidget';
-import ProfileSummaryWidget from 'pages/Dashboard/components/ProfileSummaryWidget';
-import UnifiedActionPanel from 'pages/Dashboard/components/UnifiedActionPanel';
-import { UserProfileCard } from './components/UserProfileCard'; // Компонент теперь импортируется отсюда
+import ActionModal from './components/ActionModal/ActionModal';
+import TaskLogWidget from './components/TaskLogWidget';
+import ProfileSummaryWidget from './components/ProfileSummaryWidget';
+import UnifiedActionPanel from './components/UnifiedActionPanel';
+import { UserProfileCard } from './components/UserProfileCard';
 
-// ИЗМЕНЕНИЕ: Все неиспользуемые импорты иконок и утилит удалены
-
-const ActivityChartWidget = lazy(() => import('pages/Dashboard/components/ActivityChartWidget'));
-const AudienceAnalyticsWidget = lazy(() => import('pages/Dashboard/components/AudienceAnalyticsWidget'));
-const ProfileGrowthWidget = lazy(() => import('pages/Dashboard/components/ProfileGrowthWidget'));
-const ProxyManagerModal = lazy(() => import('pages/Dashboard/components/ProxyManagerModal'));
-const AutomationSettingsModal = lazy(() => import('pages/Dashboard/components/AutomationSettingsModal'));
-const FriendRequestConversionWidget = lazy(() => import('pages/Dashboard/components/FriendRequestConversionWidget'));
-const PostActivityHeatmapWidget = lazy(() => import('pages/Dashboard/components/PostActivityHeatmapWidget'));
+const ActivityChartWidget = lazy(() => import('./components/ActivityChartWidget'));
+const AudienceAnalyticsWidget = lazy(() => import('./components/AudienceAnalyticsWidget'));
+const ProfileGrowthWidget = lazy(() => import('./components/ProfileGrowthWidget'));
+const ProxyManagerModal = lazy(() => import('./components/ProxyManagerModal'));
+const AutomationSettingsModal = lazy(() => import('./components/AutomationSettingsModal'));
+const FriendRequestConversionWidget = lazy(() => import('./components/FriendRequestConversionWidget'));
+const PostActivityHeatmapWidget = lazy(() => import('./components/PostActivityHeatmapWidget'));
 
 const motionVariants = {
     initial: { opacity: 0, y: 20 },
@@ -32,9 +35,9 @@ const motionVariants = {
 
 export default function DashboardPage() {
     const { data: userInfo, isLoading: isUserLoading } = useCurrentUser();
-    const connectionStatus = useUserStore(state => state.connectionStatus);
+    const connectionStatus = useStore(state => state.connectionStatus);
     const { isFeatureAvailable } = useFeatureFlag();
-    const { modalState, openModal, closeModal, onActionSubmit } = useDashboardManager();
+    const { modalState, openModal, closeModal } = useDashboardManager();
     const [isProxyModalOpen, setProxyModalOpen] = useState(false);
     const [automationToEdit, setAutomationToEdit] = useState(null);
     const [runTour, setRunTour] = useState(false);
@@ -60,7 +63,8 @@ export default function DashboardPage() {
     useEffect(() => {
         const hasSeenTour = localStorage.getItem('zenith_tour_completed');
         if (!hasSeenTour) {
-            setRunTour(true);
+            // Небольшая задержка, чтобы дать странице прогрузиться перед туром
+            setTimeout(() => setRunTour(true), 1500);
         }
     }, []);
 
@@ -73,7 +77,7 @@ export default function DashboardPage() {
     };
 
     if (isUserLoading || !userInfo) {
-        return <LazyLoader />;
+        return <LazyLoader variant="circular" />;
     }
 
     return (
@@ -91,7 +95,7 @@ export default function DashboardPage() {
                       backgroundColor: '#161618',
                       primaryColor: '#5E5CE6',
                       textColor: '#F5F5F7',
-                      zIndex: 1301,
+                      zIndex: 1301, // Выше чем у AppBar
                     },
                 }}
             />
@@ -115,35 +119,35 @@ export default function DashboardPage() {
                         </motion.div>
                          <Grid container spacing={3} id="profile-summary">
                             <Grid item xs={12} md={7}>
-                                <Suspense fallback={<LazyLoader />}>
+                                <Suspense fallback={<LazyLoader variant="skeleton"/>}>
                                     <ProfileSummaryWidget />
                                 </Suspense>
                             </Grid>
                              <Grid item xs={12} md={5}>
-                                <Suspense fallback={<LazyLoader />}>
+                                <Suspense fallback={<LazyLoader variant="skeleton"/>}>
                                     <FriendRequestConversionWidget />
                                 </Suspense>
                              </Grid>
                          </Grid>
                         <motion.div custom={4} variants={motionVariants} initial="initial" animate="animate">
-                            <Suspense fallback={<LazyLoader />}>
+                            <Suspense fallback={<LazyLoader variant="skeleton"/>}>
                                 <ActivityChartWidget />
                             </Suspense>
                         </motion.div>
                         {isFeatureAvailable('profile_growth_analytics') && (
                             <motion.div custom={5} variants={motionVariants} initial="initial" animate="animate">
-                               <Suspense fallback={<LazyLoader />}>
+                               <Suspense fallback={<LazyLoader variant="skeleton"/>}>
                                     <ProfileGrowthWidget />
                                </Suspense>
                             </motion.div>
                         )}
                         <motion.div custom={6} variants={motionVariants} initial="initial" animate="animate">
-                           <Suspense fallback={<LazyLoader />}>
+                           <Suspense fallback={<LazyLoader variant="skeleton"/>}>
                                 <PostActivityHeatmapWidget />
                            </Suspense>
                         </motion.div>
                         <motion.div custom={7} variants={motionVariants} initial="initial" animate="animate">
-                           <Suspense fallback={<LazyLoader />}>
+                           <Suspense fallback={<LazyLoader variant="skeleton"/>}>
                                 <AudienceAnalyticsWidget />
                            </Suspense>
                         </motion.div>
@@ -157,7 +161,13 @@ export default function DashboardPage() {
                 </Grid>
             </Grid>
             
-            <ActionModal {...modalState} onClose={closeModal} onSubmit={onActionSubmit} />
+            <ActionModal
+                open={modalState.open}
+                onClose={closeModal}
+                actionKey={modalState.actionKey}
+                title={modalState.title}
+            />
+
             <Suspense>
                 {isProxyModalOpen && <ProxyManagerModal open={isProxyModalOpen} onClose={() => setProxyModalOpen(false)} />}
                 {automationToEdit && <AutomationSettingsModal open={!!automationToEdit} onClose={() => setAutomationToEdit(null)} automation={automationToEdit} />}

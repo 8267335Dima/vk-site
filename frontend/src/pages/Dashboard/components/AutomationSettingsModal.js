@@ -6,7 +6,7 @@ import { toast } from 'react-hot-toast';
 import { updateAutomation } from 'api';
 import { CommonFiltersSettings, RemoveFriendsFilters } from './ActionModalFilters';
 import CountSlider from 'components/CountSlider';
-import { useUserStore } from 'store/userStore';
+import { useUserStore } from 'store';
 import { content } from 'content/content';
 
 const EternalOnlineSettings = ({ settings, onChange }) => {

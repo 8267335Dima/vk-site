@@ -1,15 +1,15 @@
 # backend/app/services/friend_management_service.py
-from typing import Dict, Any
 from app.services.base import BaseVKService
 from app.services.vk_user_filter import apply_filters_to_profiles
+from app.api.schemas.actions import RemoveFriendsRequest
 
 class FriendManagementService(BaseVKService):
 
-    async def remove_friends_by_criteria(self, count: int, filters: Dict[str, Any], **kwargs):
-        return await self._execute_logic(self._remove_friends_by_criteria_logic, count, filters)
+    async def remove_friends_by_criteria(self, params: RemoveFriendsRequest):
+        return await self._execute_logic(self._remove_friends_by_criteria_logic, params)
 
-    async def _remove_friends_by_criteria_logic(self, count: int, filters: Dict[str, Any]):
-        await self.emitter.send_log(f"Начинаем чистку друзей. Цель: удалить {count} чел.", "info")
+    async def _remove_friends_by_criteria_logic(self, params: RemoveFriendsRequest):
+        await self.emitter.send_log(f"Начинаем чистку друзей. Цель: удалить до {params.count} чел.", "info")
         stats = await self._get_today_stats()
 
         all_friends = await self.vk_api.get_user_friends(self.user.vk_id, fields="sex,online,last_seen,is_closed,deactivated")
@@ -17,19 +17,19 @@ class FriendManagementService(BaseVKService):
             await self.emitter.send_log("Не удалось получить список друзей.", "warning")
             return
 
-        banned_friends = [f for f in all_friends if f.get('deactivated') in ['banned', 'deleted']]
-        active_friends = [f for f in all_friends if not f.get('deactivated')]
+        banned_friends = []
+        if params.filters.remove_banned:
+            banned_friends = [f for f in all_friends if f.get('deactivated') in ['banned', 'deleted']]
         
-        if not filters.get('remove_banned', True):
-            banned_friends = []
+        active_friends = [f for f in all_friends if not f.get('deactivated')]
         
         await self.emitter.send_log(f"Найдено забаненных/удаленных друзей: {len(banned_friends)}.", "info")
         
-        # Используем централизованную функцию фильтрации
-        filtered_active_friends = apply_filters_to_profiles(active_friends, filters)
+        # Используем централизованную функцию фильтрации со строго типизированными фильтрами
+        filtered_active_friends = apply_filters_to_profiles(active_friends, params.filters)
         await self.emitter.send_log(f"Найдено друзей по критериям неактивности/пола: {len(filtered_active_friends)}.", "info")
         
-        friends_to_remove = (banned_friends + filtered_active_friends)[:count]
+        friends_to_remove = (banned_friends + filtered_active_friends)[:params.count]
         if not friends_to_remove:
             await self.emitter.send_log("Друзей для удаления по заданным критериям не найдено.", "success")
             return
@@ -44,7 +44,6 @@ class FriendManagementService(BaseVKService):
             calls = [{"method": "friends.delete", "params": {"user_id": friend.get('id')}} for friend in batch]
             
             await self.humanizer.imitate_simple_action()
-            
             results = await self.vk_api.execute(calls)
             
             if results is None:

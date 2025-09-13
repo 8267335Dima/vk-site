@@ -8,7 +8,7 @@ from fastapi_limiter.depends import RateLimiter
 
 from app.db.session import get_db
 from app.db.models import User, LoginHistory
-from app.api.schemas.auth import TokenResponse
+from app.api.schemas.auth import TokenResponse, EnrichedTokenResponse
 from app.services.vk_api import is_token_valid
 from app.core.security import create_access_token, encrypt_data
 from app.core.config import settings
@@ -26,7 +26,7 @@ async def get_request_identifier(request: Request) -> str:
 
 @router.post(
     "/vk", 
-    response_model=TokenResponse, 
+    response_model=EnrichedTokenResponse, 
     summary="Аутентификация или регистрация по токену VK",
     dependencies=[Depends(RateLimiter(times=5, minutes=1, identifier=get_request_identifier))]
 )
@@ -35,7 +35,7 @@ async def login_via_vk(
     request: Request,
     db: AsyncSession = Depends(get_db),
     token_request: TokenRequest
-) -> TokenResponse:
+) -> EnrichedTokenResponse:
     vk_token = token_request.vk_token
     
     vk_id = await is_token_valid(vk_token)
@@ -94,17 +94,22 @@ async def login_via_vk(
         data=token_data, expires_delta=access_token_expires
     )
 
-    return TokenResponse(access_token=access_token, token_type="bearer")
+    return EnrichedTokenResponse(
+        access_token=access_token, 
+        token_type="bearer",
+        manager_id=user.id,
+        active_profile_id=user.id
+    )
 
 class SwitchProfileRequest(BaseModel):
     profile_id: int
 
-@router.post("/switch-profile", response_model=TokenResponse, summary="Переключиться на другой управляемый профиль")
+@router.post("/switch-profile", response_model=EnrichedTokenResponse, summary="Переключиться на другой управляемый профиль")
 async def switch_profile(
     request_data: SwitchProfileRequest,
     manager: User = Depends(get_current_manager_user),
     db: AsyncSession = Depends(get_db)
-) -> TokenResponse:
+) -> EnrichedTokenResponse:
     
     await db.refresh(manager, attribute_names=["managed_profiles"])
     
@@ -124,4 +129,9 @@ async def switch_profile(
         data=token_data, expires_delta=access_token_expires
     )
 
-    return TokenResponse(access_token=access_token, token_type="bearer")
+    return EnrichedTokenResponse(
+        access_token=access_token, 
+        token_type="bearer",
+        manager_id=manager.id,
+        active_profile_id=request_data.profile_id
+    )

@@ -1,14 +1,13 @@
 # backend/app/services/incoming_request_service.py
-from typing import Dict, Any
 from app.services.base import BaseVKService
 from app.services.vk_user_filter import apply_filters_to_profiles
+from app.api.schemas.actions import AcceptFriendsRequest
 
 class IncomingRequestService(BaseVKService):
-    async def accept_friend_requests(self, **kwargs):
-        filters: Dict[str, Any] = kwargs.get('filters', {})
-        return await self._execute_logic(self._accept_friend_requests_logic, filters)
+    async def accept_friend_requests(self, params: AcceptFriendsRequest):
+        return await self._execute_logic(self._accept_friend_requests_logic, params)
 
-    async def _accept_friend_requests_logic(self, filters: Dict[str, Any]):
+    async def _accept_friend_requests_logic(self, params: AcceptFriendsRequest):
         await self.emitter.send_log("Начинаем прием заявок в друзья...", "info")
         stats = await self._get_today_stats()
         
@@ -20,7 +19,7 @@ class IncomingRequestService(BaseVKService):
         profiles = response.get('items', [])
         await self.emitter.send_log(f"Найдено {len(profiles)} заявок. Начинаем фильтрацию...", "info")
         
-        filtered_profiles = apply_filters_to_profiles(profiles, filters)
+        filtered_profiles = apply_filters_to_profiles(profiles, params.filters)
 
         await self.emitter.send_log(f"После фильтрации осталось: {len(filtered_profiles)}.", "info")
         

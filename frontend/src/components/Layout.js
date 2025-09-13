@@ -5,7 +5,7 @@ import {
     useTheme, useMediaQuery, IconButton, Drawer, List, ListItem, ListItemButton
 } from '@mui/material';
 import { Link as RouterLink, useLocation, Outlet } from 'react-router-dom';
-import { useUserStore, useUserActions } from 'store/userStore';
+import { useUserStore, useUserActions } from 'store';
 import HubIcon from '@mui/icons-material/Hub';
 import MenuIcon from '@mui/icons-material/Menu';
 import { content } from 'content/content';
