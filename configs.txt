@@ -2,6 +2,8 @@
 
 # --- .env ---
 
+# --- .env ---
+
 # .env
 # --- PostgreSQL Database ---
 POSTGRES_USER=smm_user
@@ -17,7 +19,7 @@ REDIS_PORT=6379
 # --- JWT & Encryption ---
 SECRET_KEY=a3611f67fd335a325455c6d2f1b4258867d826bf354a46bd731ea75c81870bdc
 ENCRYPTION_KEY=LLn9-hFySo5xa8Xm9-W0-9Cod_uG0g1adBk3ZRmZo44=
-ALGORITHM=HS256
+ALGORITHM=HS26
 ACCESS_TOKEN_EXPIRE_MINUTES=43200
 
 # --- VK API ---
@@ -43,6 +45,8 @@ ALLOWED_ORIGINS=http://localhost,http://localhost:3000,http://127.0.0.1:3000
 
 # --- backend/app\core\configs\automations.yml ---
 
+# --- backend/app\core\configs\automations.yml ---
+
 # backend/app/core/configs/automations.yml
 # Единый источник правды обо всех возможных действиях в системе.
 
@@ -53,6 +57,7 @@ ALLOWED_ORIGINS=http://localhost,http://localhost:3000,http://127.0.0.1:3000
   has_count_slider: true
   modal_count_label: "Количество лайков"
   default_count: 50
+  group: "standard"
 
 - id: "add_recommended"
   name: "Добавление друзей"
@@ -61,12 +66,14 @@ ALLOWED_ORIGINS=http://localhost,http://localhost:3000,http://127.0.0.1:3000
   has_count_slider: true
   modal_count_label: "Количество заявок"
   default_count: 20
+  group: "standard"
 
 - id: "accept_friends"
   name: "Прием заявок в друзья"
   description: "Автоматически принимает входящие заявки в друзья на основе заданных критериев."
   has_filters: true
   has_count_slider: false
+  group: "standard"
 
 - id: "remove_friends"
   name: "Очистка списка друзей"
@@ -75,26 +82,21 @@ ALLOWED_ORIGINS=http://localhost,http://localhost:3000,http://127.0.0.1:3000
   has_count_slider: true
   modal_count_label: "Максимум удалений"
   default_count: 100
-
-- id: "like_friends_feed"
-  name: "Лайки на посты друзей"
-  description: "Проявляет активность, проставляя лайки на последние посты на стенах ваших друзей."
-  has_filters: true
-  has_count_slider: true
-  modal_count_label: "Количество лайков"
-  default_count: 30
+  group: "standard"
 
 - id: "view_stories"
   name: "Просмотр историй"
   description: "Автоматически просматривает все доступные истории, сигнализируя об активности вашего аккаунта."
   has_filters: false
   has_count_slider: false
+  group: "standard"
 
 - id: "birthday_congratulation"
   name: "Поздравления с Днем Рождения"
   description: "Автоматически отправляет персональные поздравления вашим друзьям в их день рождения."
   has_filters: false
   has_count_slider: false
+  group: "standard"
 
 - id: "mass_messaging"
   name: "Массовая рассылка"
@@ -103,12 +105,7 @@ ALLOWED_ORIGINS=http://localhost,http://localhost:3000,http://127.0.0.1:3000
   has_count_slider: true
   modal_count_label: "Количество сообщений"
   default_count: 50
-
-- id: "eternal_online"
-  name: "Статус 'Онлайн'"
-  description: "Поддерживает статус 'онлайн' для вашего аккаунта 24/7, повышая видимость в поиске."
-  has_filters: false
-  has_count_slider: false
+  group: "standard"
 
 - id: "leave_groups" 
   name: "Отписка от сообществ"
@@ -117,6 +114,7 @@ ALLOWED_ORIGINS=http://localhost,http://localhost:3000,http://127.0.0.1:3000
   has_count_slider: true
   modal_count_label: "Максимум отписок"
   default_count: 50
+  group: "standard"
   
 - id: "join_groups"
   name: "Вступление в группы"
@@ -125,6 +123,21 @@ ALLOWED_ORIGINS=http://localhost,http://localhost:3000,http://127.0.0.1:3000
   has_count_slider: true
   modal_count_label: "Максимум вступлений"
   default_count: 20
+  group: "standard"
+
+- id: "eternal_online"
+  name: "Статус 'Онлайн'"
+  description: "Поддерживает статус 'онлайн' для вашего аккаунта 24/7, повышая видимость в поиске."
+  has_filters: false
+  has_count_slider: false
+  group: "online" # <-- Указываем группу
+
+- id: "post_scheduler"
+  name: "Планировщик постов"
+  description: "Создавайте и планируйте публикации наперед."
+  has_filters: false
+  has_count_slider: false
+  group: "content" # <-- Указываем группу
 
 
 # --- backend/app\core\configs\plans.yml ---
@@ -133,6 +146,10 @@ ALLOWED_ORIGINS=http://localhost,http://localhost:3000,http://127.0.0.1:3000
 Expired:
   display_name: Истекший
   description: "Срок действия вашего тарифа истек. Функциональность ограничена."
+  features:
+    - "Ограниченные дневные лимиты"
+    - "История задач за 7 дней"
+    - "Доступ к панели управления"
   limits:
     daily_likes_limit: 50
     daily_add_friends_limit: 5
@@ -146,6 +163,7 @@ Expired:
   features:
     - "Все возможности тарифа Plus"
     - "Полный доступ на 14 дней"
+    - "Поддержка по email"
   limits:
     daily_likes_limit: 1000
     daily_add_friends_limit: 40
@@ -169,6 +187,7 @@ Plus:
     - "Все стандартные задачи"
     - "Базовая аналитика"
     - "Стандартные лимиты"
+    - "Автоматизация по расписанию"
   limits:
     daily_likes_limit: 1000
     daily_add_friends_limit: 40
@@ -185,6 +204,7 @@ Plus:
     - 'birthday_congratulation'
     - 'eternal_online'
     - 'automations_center'
+    - 'post_scheduler'
 
 PRO:
   display_name: PRO
@@ -202,6 +222,7 @@ PRO:
     - "Продвинутые сценарии"
     - "Управление прокси-серверами"
     - "Аналитика конверсии заявок"
+    - "Тепловая карта активности"
     - "Гибкая настройка скорости"
     - "Повышенные лимиты"
   limits:
@@ -225,6 +246,7 @@ Agency:
     - "Все возможности PRO"
     - "До 5 аккаунтов ВКонтакте"
     - "(+499 ₽/мес. за доп. аккаунт)"
+    - "Командный доступ"
     - "Максимальные лимиты"
     - "Приоритетная поддержка"
   limits:
@@ -232,4 +254,5 @@ Agency:
     daily_add_friends_limit: 80
     max_concurrent_tasks: 10
     max_profiles: 5
+    max_team_members: 5
   available_features: "*"

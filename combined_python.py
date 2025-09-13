@@ -2327,9 +2327,9 @@ from .billing import router as billing_router
 from .analytics import router as analytics_router
 from .scenarios import router as scenarios_router
 from .notifications import router as notifications_router
+from .posts import router as posts_router  # <--- ВОТ ЭТА СТРОКА ДОБАВЛЕНА
+from .teams import router as teams_router
 from .websockets import router as websockets_router
-from .users import router as users_router
-
 
 # --- backend/app\api\schemas\actions.py ---
 

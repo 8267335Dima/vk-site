@@ -14,9 +14,6 @@
     "@mui/material": "^5.15.20",
     "@mui/x-date-pickers": "^7.7.0",
     "@tanstack/react-query": "^5.45.1",
-    "@testing-library/jest-dom": "^5.17.0",
-    "@testing-library/react": "^13.4.0",
-    "@testing-library/user-event": "^13.5.0",
     "axios": "^1.7.2",
     "cronstrue": "^2.49.0",
     "date-fns": "^3.6.0",
@@ -27,28 +24,24 @@
     "react-hot-toast": "^2.4.1",
     "react-joyride": "^2.8.2",
     "react-router-dom": "^6.23.1",
-    "react-scripts": "5.0.1",
     "reactflow": "^11.11.3",
     "recharts": "^2.12.7",
     "web-vitals": "^2.1.4",
     "zustand": "^4.5.2"
   },
   "scripts": {
-    "start": "react-scripts start",
+    "start": "vite",
+    "dev:frontend": "vite",
     "start-backend": "cd ../backend && poetry run uvicorn app.main:app --reload",
     "start-celery": "cd ../backend && poetry run celery -A app.celery_worker.celery_app worker --loglevel=info -P gevent",
     "services:up": "cd ../ && docker-compose up",
     "services:down": "cd ../ && docker-compose down --remove-orphans",
     "dev": "concurrently --kill-others --names \"SERVICES,BACKEND,CELERY,FRONTEND\" -c \"auto\" \"npm:services:up\" \"npm:start-backend\" \"npm:start-celery\" \"npm:start\"",
-    "build": "react-scripts build",
-    "test": "react-scripts test",
-    "eject": "react-scripts eject"
-  },
-  "eslintConfig": {
-    "extends": [
-      "react-app",
-      "react-app/jest"
-    ]
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest",
+    "lint": "eslint \"src/**/*.{js,jsx}\"",
+    "format": "prettier --write \"src/**/*.{js,jsx,json,css,md}\""
   },
   "browserslist": {
     "production": [
@@ -63,7 +56,19 @@
     ]
   },
   "devDependencies": {
-    "@types/hoist-non-react-statics": "^3.3.5",
-    "concurrently": "^8.2.2"
+    "@testing-library/jest-dom": "^6.4.6",
+    "@testing-library/react": "^16.0.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "concurrently": "^8.2.2",
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-prettier": "^5.1.3",
+    "eslint-plugin-react": "^7.34.3",
+    "eslint-plugin-react-hooks": "^4.6.2",
+    "jsdom": "^24.1.0",
+    "prettier": "^3.3.2",
+    "vite": "^5.3.1",
+    "vite-plugin-svgr": "^4.2.0",
+    "vitest": "^1.6.0"
   }
 }

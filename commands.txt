@@ -10,5 +10,9 @@ docker-compose up -d
 # Выполнять в терминале в папке frontend
 npm run dev
 npm start
+npm run dev
 миграция докер: docker-compose run --rm backend /app/.venv/bin/alembic revision --autogenerate -m "my_new_migration"
-
+применить: docker-compose run --rm backend /app/.venv/bin/alembic upgrade head
+зайти и проверить таблицы:
+docker exec -it social_pilot_postgres_prod psql -U smm_user -d smm_combine
+\dt

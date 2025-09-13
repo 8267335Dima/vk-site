@@ -2,6 +2,10 @@
 Expired:
   display_name: Истекший
   description: "Срок действия вашего тарифа истек. Функциональность ограничена."
+  features:
+    - "Ограниченные дневные лимиты"
+    - "История задач за 7 дней"
+    - "Доступ к панели управления"
   limits:
     daily_likes_limit: 50
     daily_add_friends_limit: 5
@@ -15,6 +19,7 @@ Expired:
   features:
     - "Все возможности тарифа Plus"
     - "Полный доступ на 14 дней"
+    - "Поддержка по email"
   limits:
     daily_likes_limit: 1000
     daily_add_friends_limit: 40
@@ -38,6 +43,7 @@ Plus:
     - "Все стандартные задачи"
     - "Базовая аналитика"
     - "Стандартные лимиты"
+    - "Автоматизация по расписанию"
   limits:
     daily_likes_limit: 1000
     daily_add_friends_limit: 40
@@ -54,6 +60,7 @@ Plus:
     - 'birthday_congratulation'
     - 'eternal_online'
     - 'automations_center'
+    - 'post_scheduler'
 
 PRO:
   display_name: PRO
@@ -71,6 +78,7 @@ PRO:
     - "Продвинутые сценарии"
     - "Управление прокси-серверами"
     - "Аналитика конверсии заявок"
+    - "Тепловая карта активности"
     - "Гибкая настройка скорости"
     - "Повышенные лимиты"
   limits:
@@ -94,6 +102,7 @@ Agency:
     - "Все возможности PRO"
     - "До 5 аккаунтов ВКонтакте"
     - "(+499 ₽/мес. за доп. аккаунт)"
+    - "Командный доступ"
     - "Максимальные лимиты"
     - "Приоритетная поддержка"
   limits:
@@ -101,4 +110,5 @@ Agency:
     daily_add_friends_limit: 80
     max_concurrent_tasks: 10
     max_profiles: 5
+    max_team_members: 5
   available_features: "*"

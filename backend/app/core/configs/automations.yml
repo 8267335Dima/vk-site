@@ -1,3 +1,5 @@
+# --- backend/app\core\configs\automations.yml ---
+
 # backend/app/core/configs/automations.yml
 # Единый источник правды обо всех возможных действиях в системе.
 
@@ -8,6 +10,7 @@
   has_count_slider: true
   modal_count_label: "Количество лайков"
   default_count: 50
+  group: "standard"
 
 - id: "add_recommended"
   name: "Добавление друзей"
@@ -16,12 +19,14 @@
   has_count_slider: true
   modal_count_label: "Количество заявок"
   default_count: 20
+  group: "standard"
 
 - id: "accept_friends"
   name: "Прием заявок в друзья"
   description: "Автоматически принимает входящие заявки в друзья на основе заданных критериев."
   has_filters: true
   has_count_slider: false
+  group: "standard"
 
 - id: "remove_friends"
   name: "Очистка списка друзей"
@@ -30,26 +35,21 @@
   has_count_slider: true
   modal_count_label: "Максимум удалений"
   default_count: 100
-
-- id: "like_friends_feed"
-  name: "Лайки на посты друзей"
-  description: "Проявляет активность, проставляя лайки на последние посты на стенах ваших друзей."
-  has_filters: true
-  has_count_slider: true
-  modal_count_label: "Количество лайков"
-  default_count: 30
+  group: "standard"
 
 - id: "view_stories"
   name: "Просмотр историй"
   description: "Автоматически просматривает все доступные истории, сигнализируя об активности вашего аккаунта."
   has_filters: false
   has_count_slider: false
+  group: "standard"
 
 - id: "birthday_congratulation"
   name: "Поздравления с Днем Рождения"
   description: "Автоматически отправляет персональные поздравления вашим друзьям в их день рождения."
   has_filters: false
   has_count_slider: false
+  group: "standard"
 
 - id: "mass_messaging"
   name: "Массовая рассылка"
@@ -58,12 +58,7 @@
   has_count_slider: true
   modal_count_label: "Количество сообщений"
   default_count: 50
-
-- id: "eternal_online"
-  name: "Статус 'Онлайн'"
-  description: "Поддерживает статус 'онлайн' для вашего аккаунта 24/7, повышая видимость в поиске."
-  has_filters: false
-  has_count_slider: false
+  group: "standard"
 
 - id: "leave_groups" 
   name: "Отписка от сообществ"
@@ -72,6 +67,7 @@
   has_count_slider: true
   modal_count_label: "Максимум отписок"
   default_count: 50
+  group: "standard"
   
 - id: "join_groups"
   name: "Вступление в группы"
@@ -80,3 +76,18 @@
   has_count_slider: true
   modal_count_label: "Максимум вступлений"
   default_count: 20
+  group: "standard"
+
+- id: "eternal_online"
+  name: "Статус 'Онлайн'"
+  description: "Поддерживает статус 'онлайн' для вашего аккаунта 24/7, повышая видимость в поиске."
+  has_filters: false
+  has_count_slider: false
+  group: "online" # <-- Указываем группу
+
+- id: "post_scheduler"
+  name: "Планировщик постов"
+  description: "Создавайте и планируйте публикации наперед."
+  has_filters: false
+  has_count_slider: false
+  group: "content" # <-- Указываем группу
