@@ -14,7 +14,7 @@ import { styled, alpha } from '@mui/material/styles';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
 
-import { fetchPosts, updatePost } from '@/shared/api/api';
+import { fetchPosts, updatePost } from '@/shared/api';
 import PostEditorModal from './PostEditorModal';
 
 const StyledCalendarWrapper = styled(Box)(({ theme }) => ({

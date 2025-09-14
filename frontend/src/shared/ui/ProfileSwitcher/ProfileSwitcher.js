@@ -16,7 +16,7 @@ import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import AddIcon from '@mui/icons-material/Add';
 import { useStore, useStoreActions } from '@/app/store';
 import { useQuery } from '@tanstack/react-query';
-import { getManagedProfiles } from '@/shared/api/api';
+import { getManagedProfiles } from '@/shared/api';
 
 const ProfileSwitcher = ({ isMobile }) => {
   const { setActiveProfile } = useStoreActions();

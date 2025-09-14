@@ -1,5 +1,5 @@
 import { toast } from 'react-hot-toast';
-import { switchProfile } from '@/shared/api/api';
+import { switchProfile } from '@/shared/api';
 import { queryClient } from '@/shared/api/queryClient';
 
 export const createAuthSlice = (set, get) => ({

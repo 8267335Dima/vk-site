@@ -19,7 +19,7 @@ import { useTheme } from '@mui/material/styles';
 import { motion } from 'framer-motion';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 
-import { fetchFriendRequestConversion } from '@/shared/api/api';
+import { fetchFriendRequestConversion } from '@/shared/api';
 
 const FriendRequestConversionWidget = () => {
   const theme = useTheme();

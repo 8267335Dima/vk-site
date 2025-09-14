@@ -18,7 +18,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
 import { motion } from 'framer-motion';
 
-import { fetchAutomations, updateAutomation } from '@/shared/api/api';
+import { fetchAutomations, updateAutomation } from '@/shared/api';
 import { content } from '@/shared/config/content';
 import { useFeatureFlag } from '@/shared/lib/hooks/useFeatureFlag';
 

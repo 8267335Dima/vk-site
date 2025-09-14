@@ -25,7 +25,7 @@ import {
   createPost,
   updatePost,
   deletePost,
-} from '@/shared/api/api';
+} from '@/shared/api';
 
 const PostEditorModal = ({ open, onClose, post, selectedDate }) => {
   const queryClient = useQueryClient();

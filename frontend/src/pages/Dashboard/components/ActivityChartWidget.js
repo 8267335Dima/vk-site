@@ -23,7 +23,7 @@ import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { motion } from 'framer-motion';
 
-import { fetchActivityStats } from '@/shared/api/api';
+import { fetchActivityStats } from '@/shared/api';
 
 const CustomTooltip = ({ active, payload, label }) => {
   if (active && payload && payload.length) {

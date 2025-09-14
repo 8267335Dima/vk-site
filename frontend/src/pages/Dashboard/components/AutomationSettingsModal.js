@@ -19,7 +19,7 @@ import {
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
 
-import { updateAutomation } from '@/shared/api/api';
+import { updateAutomation } from '@/shared/api';
 import {
   CommonFiltersSettings,
   RemoveFriendsFilters,

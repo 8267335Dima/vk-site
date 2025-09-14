@@ -13,7 +13,7 @@ import {
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import { motion } from 'framer-motion';
 
-import { loginWithVkToken } from '@/shared/api/api';
+import { loginWithVkToken } from '@/shared/api';
 import { useStoreActions } from '@/app/store';
 import { content } from '@/shared/config/content';
 

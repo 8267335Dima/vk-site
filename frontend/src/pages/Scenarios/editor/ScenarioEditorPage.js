@@ -25,7 +25,7 @@ import {
   fetchScenarioById,
   createScenario,
   updateScenario,
-} from '@/shared/api/api';
+} from '@/shared/api';
 import { CronBuilder } from '../components/CronBuilder';
 import Sidebar from './Sidebar';
 import ActionNode from './nodes/ActionNode';

@@ -1,10 +1,14 @@
 import { toast } from 'react-hot-toast';
 import { useStore } from '@/app/store';
-import { queryClient } from './queryClient'; // Исправленный путь
+import { queryClient } from './queryClient';
 
 let socket = null;
-let reconnectInterval = 5000;
 let reconnectTimeout = null;
+
+// УЛУЧШЕНИЕ: Внедряем стратегию Exponential Backoff для переподключения
+let reconnectAttempts = 0;
+const BASE_RECONNECT_INTERVAL = 3000; // Начинаем с 3 секунд
+const MAX_RECONNECT_INTERVAL = 30000; // Максимальная задержка - 30 секунд
 
 const getSocketUrl = () => {
   const apiUrl = import.meta.env.VITE_API_BASE_URL || window.location.origin;
@@ -13,57 +17,65 @@ const getSocketUrl = () => {
   wsUrl.pathname = '/api/v1/ws';
   return wsUrl.toString();
 };
-// ... (весь остальной код из вашего `websocket.js` без изменений) ...
+
+const scheduleReconnect = (token) => {
+  if (reconnectTimeout) clearTimeout(reconnectTimeout);
+
+  const delay = Math.min(
+    MAX_RECONNECT_INTERVAL,
+    BASE_RECONNECT_INTERVAL * Math.pow(2, reconnectAttempts)
+  );
+
+  console.log(
+    `WebSocket: scheduling reconnect in ${delay / 1000}s (attempt ${reconnectAttempts + 1})`
+  );
+
+  reconnectTimeout = setTimeout(() => {
+    reconnectAttempts++;
+    connectWebSocket(token);
+  }, delay);
+};
 
 const handleMessage = (event) => {
   try {
     const { type, payload } = JSON.parse(event.data);
-    const { setDailyLimits } = useStore.getState().actions;
 
     switch (type) {
       case 'log':
+        // Можно добавить логику для отображения логов в UI, если потребуется
         console.log('WS Log:', payload);
         break;
       case 'stats_update':
-        setDailyLimits({
-          likes_today: payload.likes_count,
-          friends_add_today: payload.friends_added_count,
-        });
+        queryClient.invalidateQueries({ queryKey: ['userLimits'] });
         break;
       case 'task_history_update':
-        queryClient.setQueryData(['task_history'], (oldData) => {
-          if (!oldData) return oldData;
+        // Этот метод более надежен, чем setQueryData, так как он просто помечает данные как "устаревшие",
+        // а React Query сам решит, когда и как их обновить.
+        queryClient.invalidateQueries({ queryKey: ['task_history'] });
 
-          const newPages = oldData.pages.map((page) => ({
-            ...page,
-            items: page.items.map((task) =>
-              task.id === payload.task_history_id
-                ? { ...task, status: payload.status, result: payload.result }
-                : task
-            ),
-          }));
-
-          return { ...oldData, pages: newPages };
-        });
-
-        if (payload.status === 'SUCCESS') {
+        if (payload.status === 'SUCCESS' && payload.task_name) {
           toast.success(`Задача "${payload.task_name}" успешно завершена!`);
         }
-        if (payload.status === 'FAILURE') {
+        if (payload.status === 'FAILURE' && payload.task_name) {
           toast.error(
             `Задача "${payload.task_name}" провалена: ${payload.result}`,
             { duration: 8000 }
           );
         }
         break;
-      case 'new_notification':
+
+      case 'new_notification': {
+        // ИСПРАВЛЕНИЕ: Добавлены фигурные скобки для создания блока
         queryClient.invalidateQueries({ queryKey: ['notifications'] });
         const message = payload.message;
         const options = { duration: 8000 };
         if (payload.level === 'error') toast.error(message, options);
-        else if (payload.level === 'warning') toast.error(message, options);
+        else if (payload.level === 'warning')
+          toast.error(message, options); // toast.error для warning тоже хорошо, т.к. привлекает внимание
         else toast.success(message, { duration: 5000 });
         break;
+      } // ИСПРАВЛЕНИЕ: Закрывающая скобка
+
       default:
         break;
     }
@@ -81,6 +93,7 @@ export const connectWebSocket = (token) => {
   socket.onopen = () => {
     console.log('WebSocket connected');
     useStore.getState().actions.setConnectionStatus('На связи');
+    reconnectAttempts = 0; // Сбрасываем счетчик при успешном подключении
     if (reconnectTimeout) clearTimeout(reconnectTimeout);
   };
 
@@ -89,12 +102,9 @@ export const connectWebSocket = (token) => {
     socket = null;
     useStore.getState().actions.setConnectionStatus('Переподключение...');
 
-    const currentToken = useStore.getState().jwtToken;
+    const currentToken = useStore.getState().token;
     if (currentToken) {
-      reconnectTimeout = setTimeout(
-        () => connectWebSocket(currentToken),
-        reconnectInterval
-      );
+      scheduleReconnect(currentToken);
     }
   };
 
@@ -110,7 +120,9 @@ export const connectWebSocket = (token) => {
 
 export const disconnectWebSocket = () => {
   if (reconnectTimeout) clearTimeout(reconnectTimeout);
+  reconnectAttempts = 0;
   if (socket) {
+    socket.onclose = null;
     socket.close();
     socket = null;
     useStore.getState().actions.setConnectionStatus('Отключено');

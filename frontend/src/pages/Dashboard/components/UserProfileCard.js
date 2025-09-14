@@ -23,7 +23,7 @@ import ShutterSpeedIcon from '@mui/icons-material/ShutterSpeed';
 import SlowMotionVideoIcon from '@mui/icons-material/SlowMotionVideo';
 
 import { useFeatureFlag } from '@/shared/lib/hooks/useFeatureFlag';
-import { updateUserDelayProfile } from '@/shared/api/api';
+import { updateUserDelayProfile } from '@/shared/api'; // Используем новый центральный экспорт
 
 const pulseAnimation = keyframes`
   0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(50, 215, 75, 0.7); }
@@ -31,7 +31,7 @@ const pulseAnimation = keyframes`
   100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(50, 215, 75, 0); }
 `;
 
-const ConnectionStatusIndicator = ({ status }) => {
+const ConnectionStatusIndicator = React.memo(({ status }) => {
   const statusConfig = {
     'На связи': {
       label: 'Онлайн',
@@ -68,8 +68,11 @@ const ConnectionStatusIndicator = ({ status }) => {
       icon={<span />}
     />
   );
-};
+});
+ConnectionStatusIndicator.displayName = 'ConnectionStatusIndicator';
 
+// УЛУЧШЕНИЕ: Оборачиваем всю карточку в React.memo, так как она получает много данных,
+// но меняется нечасто. Это предотвратит ее ререндер при обновлении других виджетов.
 export const UserProfileCard = React.memo(
   ({ userInfo, connectionStatus, onProxyManagerOpen }) => {
     const queryClient = useQueryClient();

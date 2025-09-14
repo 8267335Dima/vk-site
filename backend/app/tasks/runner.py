@@ -6,7 +6,7 @@ from redis.asyncio.lock import Lock
 from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 
-from app.db.models import Scenario, User, TaskHistory, ScheduledPost, ScheduledPostStatus, Automation
+from app.db.models import User, TaskHistory, ScheduledPost, ScheduledPostStatus, Automation
 from app.services.event_emitter import RedisEventEmitter
 from app.services.feed_service import FeedService
 from app.services.incoming_request_service import IncomingRequestService
@@ -78,7 +78,6 @@ class BaseTaskWithContext(Task):
             ServiceClass, method_name, ParamsModel = TASK_CONFIG_MAP[TaskKey(task_name_key)]
             
             try:
-                # Валидация параметров через Pydantic-модель
                 params = ParamsModel(**kwargs)
             except Exception as e:
                 raise UserActionException(f"Неверные параметры для задачи: {e}")
@@ -89,28 +88,36 @@ class BaseTaskWithContext(Task):
 
             service_instance = ServiceClass(db=self.session, user=self.user, emitter=self.emitter)
             
-            # В сервисы теперь передается строго типизированный Pydantic-объект
             await getattr(service_instance, method_name)(params)
             
             self.task_history.status = "SUCCESS"
             self.task_history.result = "Задача успешно выполнена."
 
         except VKAuthError as e:
-            redis_lock_client = AsyncRedis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/2")
-            auth_error_key = f"auth_error_count:{self.user.id}"
-            error_count = await redis_lock_client.incr(auth_error_key)
-            await redis_lock_client.expire(auth_error_key, 3600)
+            # УЛУЧШЕНИЕ: Критическая обработка ошибки авторизации.
+            # Ошибка токена не является временной, поэтому нет смысла в повторных попытках.
+            # Мы немедленно останавливаем все автоматизации пользователя и отправляем
+            # критическое уведомление, чтобы он мог сразу принять меры.
+            log.error("task_runner.auth_error_critical", user_id=self.user.id, error=str(e))
             
-            if error_count >= 3:
-                log.error("task_runner.auth_error_persistent", user_id=self.user.id, error=str(e))
-                await self.emitter.send_system_notification(self.session, "Критическая ошибка авторизации VK. Ваш токен недействителен. Все автоматизации остановлены. Пожалуйста, войдите в систему заново.", "error")
-                await self.session.execute(update(Automation).where(Automation.user_id == self.user.id).values(is_active=False))
-            else:
-                 log.warn("task_runner.auth_error_transient", user_id=self.user.id, error=str(e), attempt=error_count)
-                 await self.emitter.send_system_notification(self.session, "Произошла ошибка авторизации VK. Если ошибка повторится, автоматизации будут остановлены.", "warning")
-
-            await redis_lock_client.close()
-            raise e 
+            # Отправляем системное уведомление через WebSocket, которое будет видно в UI
+            await self.emitter.send_system_notification(
+                self.session, 
+                "Критическая ошибка: ваш токен VK недействителен. Все автоматизации остановлены. Пожалуйста, выйдите и войдите в систему заново, чтобы обновить токен.",
+                "error"
+            )
+            
+            # Деактивируем все автоматизации пользователя в базе данных
+            deactivate_stmt = update(Automation).where(Automation.user_id == self.user.id).values(is_active=False)
+            await self.session.execute(deactivate_stmt)
+            
+            # "Проваливаем" текущую задачу с информативным сообщением
+            self.task_history.status = "FAILURE"
+            self.task_history.result = f"Ошибка авторизации VK. Токен невалиден. Автоматизации остановлены."
+            await self.session.commit() # Сохраняем изменения до того, как выбросить исключение
+            
+            # Перевыбрасываем исключение, чтобы Celery корректно обработал его как on_failure
+            raise e
 
         except (VKRateLimitError, VKAPIError) as e:
             retry_delay = 60 * (self.request.retries + 1)
@@ -137,9 +144,12 @@ class BaseTaskWithContext(Task):
             task_history_id = kwargs.get('task_history_id')
             if not await self._setup_context(task_history_id): return
             
-            self.task_history.status = "FAILURE"
-            self.task_history.result = f"Задача провалена: {exc!r}"
-            await self.session.commit()
+            # Если статус уже FAILURE (как в случае с VKAuthError), не перезаписываем его
+            if self.task_history.status != "FAILURE":
+                self.task_history.status = "FAILURE"
+                self.task_history.result = f"Задача провалена: {exc!r}"
+                await self.session.commit()
+
             await self.emitter.send_task_status_update(status="FAILURE", result=self.task_history.result, task_name=self.task_history.task_name, created_at=self.task_history.created_at)
             await self._teardown_context()
         
@@ -234,9 +244,12 @@ def publish_scheduled_post(self: Task, post_id: int):
             vk_api = VKAPI(access_token=vk_token)
 
             try:
+                # УЛУЧШЕНИЕ: Убедимся, что owner_id передается как integer
+                owner_id = int(post.vk_profile_id)
+                
                 result = await vk_api.wall_post(
-                    owner_id=post.vk_profile_id,
-                    message=post.post_text,
+                    owner_id=owner_id,
+                    message=post.post_text or "", # Передаем пустую строку, если текста нет
                     attachments=",".join(post.attachments or [])
                 )
                 post.status = ScheduledPostStatus.published

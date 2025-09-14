@@ -21,7 +21,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 
-import { fetchProxies, addProxy, deleteProxy } from '@/shared/api/api';
+import { fetchProxies, addProxy, deleteProxy } from '@/shared/api';
 
 const ProxyManagerModal = ({ open, onClose }) => {
   const queryClient = useQueryClient();

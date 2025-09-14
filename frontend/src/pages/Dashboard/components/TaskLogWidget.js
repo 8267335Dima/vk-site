@@ -38,7 +38,7 @@ import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import SendIcon from '@mui/icons-material/Send';
 import GroupRemoveIcon from '@mui/icons-material/GroupRemove';
 
-import { fetchTaskHistory, cancelTask, retryTask } from '@/shared/api/api';
+import { fetchTaskHistory, cancelTask, retryTask } from '@/shared/api';
 import TaskParametersViewer from './TaskParametersViewer';
 
 const statusMap = {

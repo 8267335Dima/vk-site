@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { runTask } from '@/shared/api/api';
+import { runTask } from '@/shared/api';
 import { toast } from 'react-hot-toast';
 
 const getErrorMessage = (error) => {

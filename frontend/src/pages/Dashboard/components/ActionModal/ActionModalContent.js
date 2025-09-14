@@ -2,7 +2,8 @@ import React from 'react';
 import { Stack, Divider } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
 
-import { fetchTaskInfo } from '@/shared/api/api';
+// ИСПРАВЛЕНИЕ: Путь изменен
+import { fetchTaskInfo } from '@/shared/api';
 import { content } from '@/shared/config/content';
 import { useCurrentUser } from '@/shared/lib/hooks/useCurrentUser';
 

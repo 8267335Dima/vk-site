@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { toast } from 'react-hot-toast';
-import { runTask } from '@/shared/api/api';
+import { runTask } from '@/shared/api';
 
 const getErrorMessage = (error) => {
   if (typeof error?.response?.data?.detail === 'string') {

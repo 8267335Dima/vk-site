@@ -12,9 +12,10 @@ from fastapi_cache.backends.redis import RedisBackend
 from contextlib import asynccontextmanager
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
+# УЛУЧШЕНИЕ: Импортируем инструментатор для метрик Prometheus
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.celery_app import celery_app
-
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.db.session import engine
@@ -30,20 +31,12 @@ from app.services.websocket_manager import redis_listener
 configure_logging()
 log = structlog.get_logger(__name__)
 
-# ИЗМЕНЕНИЕ: Улучшенная идентификация клиента для Rate Limiter
 async def get_request_identifier(request: Request) -> str:
-    """
-    Получает реальный IP-адрес клиента, даже если приложение за прокси.
-    Важно: Убедитесь, что ваш прокси (Nginx, Traefik) устанавливает заголовок 'X-Forwarded-For'.
-    """
     forwarded_for = request.headers.get("x-forwarded-for")
     if forwarded_for:
-        # Самый левый IP в списке - это исходный IP клиента
         return forwarded_for.split(',')[0].strip()
-    # Fallback на прямое подключение
     return request.client.host if request.client else "unknown"
 
-# Зависимости Rate Limiter
 rate_limit_dependency = Depends(RateLimiter(times=20, minutes=1, identifier=get_request_identifier))
 
 @asynccontextmanager
@@ -76,6 +69,15 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Zenith API", version="4.0.0", docs_url="/api/docs", redoc_url="/api/redoc", lifespan=lifespan)
 
+# УЛУЧШЕНИЕ: Подключаем инструментатор Prometheus
+# Он автоматически создаст эндпоинт /metrics, который можно будет скрейпить
+instrumentator = Instrumentator().instrument(app)
+
+@app.on_event("startup")
+async def _startup():
+    instrumentator.expose(app, endpoint="/api/metrics")
+
+
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 init_admin(app, engine)
@@ -93,7 +95,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Объявление тегов для OpenAPI ---
 class Tags:
     AUTH = "Аутентификация"
     USERS = "Пользователи и Профили"

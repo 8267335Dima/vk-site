@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { fetchUserInfo } from '@/shared/api/api';
+import { fetchUserInfo } from '@/shared/api';
 import { useStore } from '@/app/store';
 
 export const useCurrentUser = () => {

@@ -7,7 +7,7 @@ import RssFeedIcon from '@mui/icons-material/RssFeed';
 import PhotoLibraryIcon from '@mui/icons-material/PhotoLibrary';
 import ArticleIcon from '@mui/icons-material/Article';
 
-import { fetchProfileSummary } from '@/shared/api/api';
+import { fetchProfileSummary } from '@/shared/api';
 import StatCard from '@/shared/ui/StatCard/StatCard';
 
 const ProfileSummaryWidget = () => {

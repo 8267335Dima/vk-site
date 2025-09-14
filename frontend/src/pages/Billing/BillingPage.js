@@ -15,12 +15,13 @@ import { motion } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
 
+// УЛУЧШЕНИЕ: Заменяем отсутствующую иконку SiMir на надежную RiBankCardFill
+import { FaCcVisa, FaCcMastercard } from 'react-icons/fa';
+import { RiBankCardFill } from 'react-icons/ri'; // <-- ИЗМЕНЕНИЕ ЗДЕСЬ
+
 import { useCurrentUser } from '@/shared/lib/hooks/useCurrentUser';
-import { createPayment, fetchAvailablePlans } from '@/shared/api/api';
+import { createPayment, fetchAvailablePlans } from '@/shared/api';
 import PlanCard from './components/PlanCard';
-import { ReactComponent as VisaLogo } from '@/shared/assets/icons/visa.svg';
-import { ReactComponent as MastercardLogo } from '@/shared/assets/icons/mastercard.svg';
-import { ReactComponent as MirLogo } from '@/shared/assets/icons/mir.svg';
 
 const periodOptions = [
   { months: 1, label: '1 месяц' },
@@ -146,12 +147,11 @@ export default function BillingPage() {
           {isLoading
             ? Array.from(new Array(3)).map((_, index) => (
                 <Grid item xs={12} md={4} key={index}>
-                  {' '}
                   <Skeleton
                     variant="rounded"
                     height={600}
                     sx={{ borderRadius: 4 }}
-                  />{' '}
+                  />
                 </Grid>
               ))
             : plansData?.plans.map((plan) => (
@@ -204,10 +204,16 @@ export default function BillingPage() {
               <Typography variant="body2" color="text.secondary">
                 Безопасная оплата:
               </Typography>
-              <Stack direction="row" spacing={2} alignItems="center">
-                <VisaLogo height={24} />
-                <MastercardLogo height={24} />
-                <MirLogo height={24} />
+              <Stack
+                direction="row"
+                spacing={2}
+                alignItems="center"
+                sx={{ color: 'text.secondary', fontSize: '28px' }}
+              >
+                <FaCcVisa />
+                <FaCcMastercard />
+                {/* ИСПРАВЛЕНИЕ: Используем новую иконку */}
+                <RiBankCardFill title="МИР" />
               </Stack>
             </Stack>
           </Paper>

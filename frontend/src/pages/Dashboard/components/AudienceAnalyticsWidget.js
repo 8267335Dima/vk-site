@@ -27,7 +27,7 @@ import { useQuery } from '@tanstack/react-query';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { motion } from 'framer-motion';
 
-import { fetchAudienceAnalytics } from '@/shared/api/api';
+import { fetchAudienceAnalytics } from '@/shared/api';
 
 const CustomTooltip = ({ active, payload, label }) => {
   if (active && payload && payload.length) {

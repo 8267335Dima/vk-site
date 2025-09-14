@@ -18,7 +18,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
 import { toast } from 'react-hot-toast';
 
-import { fetchMyTeam, removeTeamMember } from '@/shared/api/api';
+import { fetchMyTeam, removeTeamMember } from '@/shared/api';
 import AccessControlModal from './AccessControlModal';
 import InviteMemberModal from './InviteMemberModal';
 

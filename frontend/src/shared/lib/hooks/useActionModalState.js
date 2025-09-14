@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { fetchTaskInfo } from '@/shared/api/api';
+import { fetchTaskInfo } from '@/shared/api';
 import { useStore } from '@/app/store';
 
 export const useActionModalState = (open, actionKey, title) => {

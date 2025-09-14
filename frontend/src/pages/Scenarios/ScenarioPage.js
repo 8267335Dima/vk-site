@@ -20,7 +20,8 @@ import { toast } from 'react-hot-toast';
 import cronstrue from 'cronstrue/i18n';
 import { useNavigate } from 'react-router-dom';
 
-import { fetchScenarios, deleteScenario } from '@/shared/api/api';
+// ИСПРАВЛЕНИЕ: Путь к API изменен на правильный
+import { fetchScenarios, deleteScenario } from '@/shared/api';
 
 const ScenarioCard = ({ scenario, onEdit, onDelete }) => {
   return (

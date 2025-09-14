@@ -11,7 +11,7 @@ import {
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
 
-import { inviteTeamMember } from '@/shared/api/api';
+import { inviteTeamMember } from '@/shared/api';
 
 const InviteMemberModal = ({ open, onClose }) => {
   const queryClient = useQueryClient();

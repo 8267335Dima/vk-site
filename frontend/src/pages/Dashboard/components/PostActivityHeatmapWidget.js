@@ -11,7 +11,7 @@ import {
 import { useQuery } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 
-import { fetchPostActivityHeatmap } from '@/shared/api/api';
+import { fetchPostActivityHeatmap } from '@/shared/api';
 
 const daysOfWeek = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 const hoursOfDay = Array.from({ length: 24 }, (_, i) =>

@@ -6,6 +6,7 @@ from sqladmin import Admin, ModelView
 from sqladmin.authentication import AuthenticationBackend
 from jose import jwt, JWTError
 
+# УЛУЧШЕНИЕ: Импортируем модели из нового структурированного пакета
 from app.db.models import User, Payment, Automation, DailyStats, ActionLog
 from app.core.config import settings
 from app.core.security import create_access_token

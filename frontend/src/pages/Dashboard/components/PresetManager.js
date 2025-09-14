@@ -27,7 +27,7 @@ import {
   fetchFilterPresets,
   createFilterPreset,
   deleteFilterPreset,
-} from '@/shared/api/api';
+} from '@/shared/api';
 
 const PresetManager = ({ actionKey, currentFilters, onApply }) => {
   const queryClient = useQueryClient();

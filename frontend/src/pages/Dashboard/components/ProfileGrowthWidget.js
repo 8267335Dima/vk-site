@@ -26,7 +26,7 @@ import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import { motion } from 'framer-motion';
 
-import { fetchProfileGrowth } from '@/shared/api/api';
+import { fetchProfileGrowth } from '@/shared/api';
 
 const CustomTooltip = ({ active, payload, label }) => {
   if (active && payload && payload.length) {

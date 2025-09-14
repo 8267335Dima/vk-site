@@ -17,7 +17,7 @@ import {
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
 
-import { updateMemberAccess } from '@/shared/api/api';
+import { updateMemberAccess } from '@/shared/api';
 
 const AccessControlModal = ({ open, onClose, member }) => {
   const queryClient = useQueryClient();
