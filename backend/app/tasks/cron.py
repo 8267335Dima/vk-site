@@ -45,8 +45,8 @@ async def _create_and_run_task(session, user_id, task_name, settings):
         log.warn("cron.task_not_found", task_name=task_name)
         return
     
-    task_config = next((item for item in AUTOMATIONS_CONFIG if item['id'] == task_name), {})
-    display_name = task_config.get('name', "Неизвестная задача")
+    task_config = next((item for item in AUTOMATIONS_CONFIG if item.id == task_name), None)
+    display_name = task_config.name if task_config else "Неизвестная задача"
 
     task_kwargs = settings.copy() if settings else {}
     if 'task_history_id' in task_kwargs:
@@ -118,7 +118,7 @@ async def _run_daily_automations_async(automation_group: str):
             moscow_tz = pytz.timezone("Europe/Moscow")
             now_moscow = now_utc.astimezone(moscow_tz)
 
-            automation_ids_in_group = [item['id'] for item in AUTOMATIONS_CONFIG if item.get('group') == automation_group]
+            automation_ids_in_group = [item.id for item in AUTOMATIONS_CONFIG if item.group == automation_group]
 
             if not automation_ids_in_group:
                 log.warn("run_daily_automations.unknown_group", group=automation_group)

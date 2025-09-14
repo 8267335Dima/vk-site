@@ -18,3 +18,4 @@ docker exec -it social_pilot_postgres_prod psql -U smm_user -d smm_combine
 \dt
 
 тесты: docker-compose exec backend pytest
+После внесения изменений выполните docker-compose up -d --force-recreate, чтобы пересоздать контейнеры с новыми сетевыми настройками

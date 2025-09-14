@@ -71,8 +71,8 @@ async def _enqueue_task(
     
     task_display_name = original_task_name
     if not task_display_name:
-        task_config = next((item for item in AUTOMATIONS_CONFIG if item['id'] == task_key), {})
-        task_display_name = task_config.get('name', "Неизвестная задача")
+        task_config = next((item for item in AUTOMATIONS_CONFIG if item.id == task_key), None)
+        task_display_name = task_config.name if task_config else "Неизвестная задача"
 
     task_history = TaskHistory(
         user_id=user.id, task_name=task_display_name, status="PENDING",
@@ -94,21 +94,24 @@ async def _enqueue_task(
         task_id=task_result.id
     )
 
-# НОВЫЙ ЭНДПОИНТ: Отдает конфигурацию для модального окна на фронтенде
+
 @router.get("/{task_key}/config", response_model=TaskConfigResponse, summary="Получить конфигурацию для задачи")
 async def get_task_config(task_key: TaskKey, current_user: User = Depends(get_current_active_profile)):
     """
     Возвращает структуру для динамического рендеринга модального окна
     настройки и запуска задачи, учитывая лимиты пользователя.
     """
-    task_config = next((item for item in AUTOMATIONS_CONFIG if item.get('id') == task_key.value), None)
+    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+    task_config = next((item for item in AUTOMATIONS_CONFIG if item.id == task_key.value), None)
+    # -------------------------
     if not task_config:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Конфигурация для задачи не найдена.")
 
     user_limits = get_plan_config(current_user.plan).get("limits", {})
     fields = []
     
-    if task_config.get("has_count_slider", False):
+    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+    if task_config.has_count_slider:
         max_val = 1000
         if task_key == TaskKey.ADD_RECOMMENDED:
             max_val = user_limits.get("daily_add_friends_limit", 40)
@@ -118,14 +121,14 @@ async def get_task_config(task_key: TaskKey, current_user: User = Depends(get_cu
         fields.append(TaskField(
             name="count",
             type="slider",
-            label=task_config.get("modal_count_label", "Количество"),
-            default_value=task_config.get("default_count", 20),
+            label=task_config.modal_count_label or "Количество", # Добавил or для безопасности
+            default_value=task_config.default_count or 20, # Добавил or для безопасности
             max_value=max_val
         ))
 
     return TaskConfigResponse(
-        display_name=task_config.get("name"),
-        has_filters=task_config.get("has_filters", False),
+        display_name=task_config.name,
+        has_filters=task_config.has_filters,
         fields=fields
     )
 

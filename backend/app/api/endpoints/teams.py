@@ -62,29 +62,23 @@ async def get_my_team(
     all_profiles_map = {mp.profile_user_id: mp.profile for mp in managed_profiles_db}
     
     # --- РЕШЕНИЕ ПРОБЛЕМЫ N+1 ---
-    # 1. Собираем все уникальные VK ID, которые нужно запросить
+    # 1. Собираем все уникальные VK ID, информацию о которых нужно запросить
     all_vk_ids_to_fetch = set()
-    all_users_to_fetch_tokens = {} # {vk_id: encrypted_token}
-    
     for member in team_details.members:
         all_vk_ids_to_fetch.add(member.user.vk_id)
-        all_users_to_fetch_tokens[member.user.vk_id] = member.user.encrypted_vk_token
-    
     for profile in all_profiles_map.values():
         all_vk_ids_to_fetch.add(profile.vk_id)
-        all_users_to_fetch_tokens[profile.vk_id] = profile.encrypted_vk_token
 
-    # 2. Делаем один батч-запрос к VK API
+    # 2. Делаем один-единственный пакетный запрос к VK API
     vk_info_map = {}
     if all_vk_ids_to_fetch:
-        # Используем любой валидный токен для запроса, например, токен менеджера
         vk_api = VKAPI(decrypt_data(manager.encrypted_vk_token))
         vk_ids_str = ",".join(map(str, all_vk_ids_to_fetch))
         user_infos = await vk_api.get_user_info(user_ids=vk_ids_str, fields="photo_50")
         if user_infos:
             vk_info_map = {info['id']: info for info in user_infos}
 
-    # 3. Собираем ответ, используя полученные данные
+    # 3. Собираем ответ, используя предзагруженные данные из vk_info_map
     members_response = []
     for member in team_details.members:
         member_vk_info = vk_info_map.get(member.user.vk_id, {})

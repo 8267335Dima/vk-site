@@ -254,20 +254,19 @@ async def create_scenario(
         is_active=scenario_data.is_active,
     )
 
-    # шаги без связей
     node_map = _build_steps_from_nodes(scenario_data.nodes)
     new_scenario.steps = list(node_map.values())
     db.add(new_scenario)
     await db.flush()
 
-    # связи
     _apply_edges(node_map, scenario_data.edges)
-
-    # стартовый шаг
     new_scenario.first_step_id = _find_start_step(node_map, scenario_data.nodes)
 
     await db.commit()
+
+    await db.refresh(new_scenario)
     await db.refresh(new_scenario, attribute_names=["steps"])
+    # -------------------------
 
     nodes, edges = _db_to_graph(new_scenario)
     return ScenarioSchema(
@@ -278,6 +277,7 @@ async def create_scenario(
         nodes=nodes,
         edges=edges,
     )
+
 
 
 @router.put("/{scenario_id}", response_model=ScenarioSchema)
@@ -327,7 +327,11 @@ async def update_scenario(
         db_scenario.first_step_id = _find_start_step(node_map, scenario_data.nodes)
 
     await db.commit()
+
+    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ (аналогичное) ---
+    await db.refresh(db_scenario)
     await db.refresh(db_scenario, attribute_names=["steps"])
+    # -------------------------
 
     nodes, edges = _db_to_graph(db_scenario)
     return ScenarioSchema(
@@ -338,6 +342,7 @@ async def update_scenario(
         nodes=nodes,
         edges=edges,
     )
+
 
 
 @router.delete("/{scenario_id}", status_code=status.HTTP_204_NO_CONTENT)

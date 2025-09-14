@@ -51,7 +51,7 @@ class Scenario(Base):
     schedule = Column(String, nullable=False)
     is_active = Column(Boolean, default=False, nullable=False)
     
-    # Столбец для хранения ID
+    # --- ИЗМЕНЕНИЕ: Столбец для ID, а не сама связь ---
     first_step_id = Column(Integer, nullable=True)
 
     # Отношения
@@ -63,8 +63,6 @@ class Scenario(Base):
         foreign_keys="[ScenarioStep.scenario_id]"
     )
 
-    # Явное объявление ограничения.
-    # Это самый чистый и надежный способ для работы с кольцевыми зависимостями.
     __table_args__ = (
         ForeignKeyConstraint(
             ['first_step_id'], 

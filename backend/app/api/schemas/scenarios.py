@@ -37,8 +37,6 @@ class Scenario(ScenarioBase):
     id: int
     nodes: List[ScenarioStepNode]
     edges: List[ScenarioEdge]
-
-    # ИСПРАВЛЕНО: Замена устаревшего Config на model_config
     model_config = ConfigDict(from_attributes=True)
 
 # Схема для нового эндпоинта

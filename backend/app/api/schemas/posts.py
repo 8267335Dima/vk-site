@@ -20,8 +20,6 @@ class PostRead(PostBase):
     status: str
     vk_post_id: Optional[str] = None
     error_message: Optional[str] = None
-
-    # ИСПРАВЛЕНО: Замена устаревшего Config на model_config
     model_config = ConfigDict(from_attributes=True)
 
 class UploadedImageResponse(BaseModel):

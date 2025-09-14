@@ -9,8 +9,6 @@ class Notification(BaseModel):
     level: str
     is_read: bool
     created_at: datetime
-
-    # ИСПРАВЛЕНО: Замена устаревшего Config на model_config
     model_config = ConfigDict(from_attributes=True)
 
 class NotificationsResponse(BaseModel):

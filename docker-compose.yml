@@ -1,17 +1,12 @@
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: social_pilot_postgres_prod
-    env_file: ./.env
-    # ДОБАВЛЕНО: Переменная для имени тестовой БД
-    environment:
-      - POSTGRES_DB_TEST=test_db
+    container_name: social_pilot_postgres_local_dev
+    env_file: ./backend/.env # <-- Указываем путь к .env бэкенда
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "5432:5432"
     volumes:
-      - postgres_data_prod:/var/lib/postgresql/data
-      # ДОБАВЛЕНО: Монтируем скрипт для создания тестовой БД
-      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+      - postgres_data_dev:/var/lib/postgresql/data
     restart: always
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
@@ -21,12 +16,11 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: social_pilot_redis_prod
-    env_file: ./.env
+    container_name: social_pilot_redis_local_dev
     ports:
       - "6379:6379"
     volumes:
-      - redis_data_prod:/data
+      - redis_data_dev:/data
     restart: always
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -34,132 +28,6 @@ services:
       timeout: 5s
       retries: 5
 
-  backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: social_pilot_backend_prod
-    env_file: ./.env
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./backend/app:/app/app
-      - ./backend/alembic.ini:/app/alembic.ini
-      - ./backend/migrations:/app/migrations
-      - ./backend/pyproject.toml:/app/pyproject.toml
-      - ./backend/poetry.lock:/app/poetry.lock
-      - ./backend/tests:/app/tests
-    depends_on:
-      postgres: { condition: service_healthy }
-      redis: { condition: service_healthy }
-    command: >
-      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
-    restart: always
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
-  celery_worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: social_pilot_celery_worker_prod
-    env_file: ./.env
-    depends_on:
-      - redis
-      - backend
-    volumes:
-      - ./backend/app:/app/app
-    command: >
-      celery -A app.celery_worker.celery_app worker 
-      --loglevel=info -c 10 -Q high_priority,default,low_priority
-    restart: always
-
-  celery_beat:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: social_pilot_celery_beat_prod
-    env_file: ./.env
-    depends_on:
-      - redis
-      - backend
-    volumes:
-      - ./backend/app:/app/app
-    command: >
-      celery -A app.celery_worker.celery_app beat 
-      --loglevel=info 
-      --scheduler=sqlalchemy_celery_beat.schedulers:DatabaseScheduler
-    restart: always
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-      target: production
-      args:
-        - REACT_APP_API_BASE_URL=${REACT_APP_API_BASE_URL}
-    container_name: social_pilot_frontend_prod
-    ports:
-      - "80:80"
-    depends_on:
-      - backend
-    restart: always
-
-  loki:
-    image: grafana/loki:latest
-    container_name: social_pilot_loki_prod
-    ports:
-      - "3100:3100"
-    volumes:
-      - ./loki-config.yaml:/etc/loki/local-config.yaml
-    command: -config.file=/etc/loki/local-config.yaml
-    restart: always
-
-  promtail:
-    image: grafana/promtail:latest
-    container_name: social_pilot_promtail_prod
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./promtail-config.yaml:/etc/promtail/config.yml
-    command: -config.file=/etc/promtail/config.yml
-    restart: always
-    depends_on:
-      - loki
-
-  grafana:
-    image: grafana/grafana:latest
-    container_name: social_pilot_grafana_prod
-    ports:
-      - "3001:3000"
-    volumes:
-      - grafana_data_prod:/var/lib/grafana
-    restart: always
-    depends_on:
-      - loki
-
-  flower:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: social_pilot_flower_prod
-    ports:
-      - "5555:5555"
-    env_file: ./.env
-    depends_on:
-      - redis
-    volumes:
-      - ./backend/app:/app/app
-    command: >
-      celery -A app.celery_worker.celery_app flower 
-      --broker=redis://${REDIS_HOST}:${REDIS_PORT}/0
-      --persistent=True --db=/home/appuser/flower.db
-    restart: always
-
 volumes:
-  postgres_data_prod: {}
-  redis_data_prod: {}
-  grafana_data_prod: {}
+  postgres_data_dev: {}
+  redis_data_dev: {}

@@ -75,13 +75,10 @@ async def login_via_vk(
     await db.flush()
     await db.refresh(user)
 
-    # >>>>>>>>>> КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ <<<<<<<<<<
-    # Получаем ID пользователя ДО того, как db.commit() сделает объект 'user' просроченным
     user_id = user.id
-    # >>>>>>>>>> КОНЕЦ ИСПРАВЛЕНИЯ <<<<<<<<<<
 
     login_entry = LoginHistory(
-        user_id=user_id,
+        user_id=user_id, # Используем сохраненный ID
         ip_address=request.client.host if request.client else "unknown",
         user_agent=request.headers.get("user-agent", "unknown")
     )
@@ -91,7 +88,7 @@ async def login_via_vk(
 
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     
-    # Используем сохраненный ID
+    # Используем сохраненный ID для создания токена
     token_data = {"sub": str(user_id), "profile_id": str(user_id)}
     
     access_token = create_access_token(
@@ -104,7 +101,6 @@ async def login_via_vk(
         manager_id=user_id,
         active_profile_id=user_id
     )
-
 
 
 class SwitchProfileRequest(BaseModel):

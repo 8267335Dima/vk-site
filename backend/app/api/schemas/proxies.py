@@ -13,8 +13,6 @@ class ProxyRead(ProxyBase):
     is_working: bool
     last_checked_at: datetime
     check_status_message: str | None = None
-
-    # ИСПРАВЛЕНО: Замена устаревшего Config на model_config
     model_config = ConfigDict(from_attributes=True)
 
 class ProxyTestResponse(BaseModel):

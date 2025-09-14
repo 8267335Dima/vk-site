@@ -28,6 +28,4 @@ class ManagedProfileRead(BaseModel):
     first_name: str
     last_name: str
     photo_50: str
-    
-    # ИСПРАВЛЕНО: Замена устаревшего Config на model_config
     model_config = ConfigDict(from_attributes=True)

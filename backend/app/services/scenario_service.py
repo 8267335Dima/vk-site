@@ -9,7 +9,8 @@ from redis.asyncio import Redis
 from app.db.models import Scenario, ScenarioStep, User
 from app.services.vk_api import VKAPI
 from app.core.security import decrypt_data
-from app.tasks.service_maps import TASK_SERVICE_MAP  # ИЗМЕНЕНИЕ: Импорт из нового файла
+# --- ИЗМЕНЕНИЕ: Импортируем обе карты из нового, безопасного места ---
+from app.tasks.service_maps import TASK_SERVICE_MAP, TASK_CONFIG_MAP
 from app.services.event_emitter import RedisEventEmitter
 from app.core.config import settings
 
@@ -54,7 +55,6 @@ class ScenarioExecutionService:
              return False
         
         try:
-            # Преобразуем значение в число, если это возможно
             numeric_value = float(value)
         except (ValueError, TypeError):
             numeric_value = value
@@ -64,17 +64,15 @@ class ScenarioExecutionService:
             user_info_list = await self.vk_api.get_user_info(user_ids=str(self.user.vk_id), fields="counters")
             current_value = user_info_list[0].get("counters", {}).get("friends", 0) if user_info_list else 0
         elif metric == "day_of_week":
-            # isoweekday() Понедельник = 1 ... Воскресенье = 7
             current_value = datetime.datetime.utcnow().isoweekday()
         else:
             return False
 
-        # Сравнение
         if operator == ">": return current_value > numeric_value
         if operator == "<": return current_value < numeric_value
         if operator == ">=": return current_value >= numeric_value
         if operator == "<=": return current_value <= numeric_value
-        if operator == "==": return str(current_value) == str(value) # Сравниваем как строки для универсальности
+        if operator == "==": return str(current_value) == str(value)
         if operator == "!=": return str(current_value) != str(value)
         
         return False
@@ -114,7 +112,6 @@ class ScenarioExecutionService:
                 
                 service_instance = ServiceClass(db=self.db, user=self.user, emitter=emitter)
                 
-                # ИСПОЛЬЗУЕМ Pydantic-модель для валидации и передачи параметров
                 ParamsModel = next((m for k, (_,_,m) in TASK_CONFIG_MAP.items() if k.value == action_type), None)
                 if ParamsModel:
                     params = ParamsModel(**current_step.details.get('data', {}).get("settings", {}))

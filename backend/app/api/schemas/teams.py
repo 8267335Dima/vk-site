@@ -8,8 +8,6 @@ class ProfileInfo(BaseModel):
     first_name: str
     last_name: str
     photo_50: str
-    
-    # ДОБАВЛЕНО: Для корректной работы с ORM-моделями
     model_config = ConfigDict(from_attributes=True)
 
 class TeamMemberAccess(BaseModel):
@@ -25,8 +23,6 @@ class TeamMemberRead(BaseModel):
     user_info: ProfileInfo
     role: str
     accesses: List[TeamMemberAccess]
-    
-    # ДОБАВЛЕНО: Для корректной работы с ORM-моделями
     model_config = ConfigDict(from_attributes=True)
 
 class TeamRead(BaseModel):
@@ -34,8 +30,6 @@ class TeamRead(BaseModel):
     name: str
     owner_id: int
     members: List[TeamMemberRead]
-    
-    # ДОБАВЛЕНО: Для корректной работы с ORM-моделями
     model_config = ConfigDict(from_attributes=True)
 
 class TeamCreate(BaseModel):

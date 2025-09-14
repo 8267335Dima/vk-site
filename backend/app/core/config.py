@@ -3,7 +3,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 from pathlib import Path
 
-# ИЗМЕНЕНИЕ: Определяем абсолютный путь к .env файлу
+# --- ИЗМЕНЕНИЕ: Определяем абсолютный путь к .env файлу ---
+# Это гарантирует, что .env будет найден, независимо от точки запуска приложения.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 ENV_FILE = BASE_DIR / ".env"
 
@@ -17,7 +18,6 @@ class Settings(BaseSettings):
     REDIS_HOST: str
     REDIS_PORT: int
 
-    # ИЗМЕНЕНИЕ: Добавляем тестовые переменные, чтобы pydantic их распознавал
     VK_HEALTH_CHECK_TOKEN: Optional[str] = None
     VK_TEST_USER_ID: Optional[str] = None
     VK_TEST_FRIEND_ID: Optional[str] = None
@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: str
 
     model_config = SettingsConfigDict(
-        # ИЗМЕНЕНИЕ: Указываем путь к файлу
+        # --- ИЗМЕНЕНИЕ: Указываем вычисленный путь к файлу ---
         env_file=ENV_FILE,
         env_file_encoding='utf-8',
         extra='ignore'

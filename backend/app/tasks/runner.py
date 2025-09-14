@@ -8,14 +8,7 @@ from sqlalchemy.orm import selectinload
 
 from app.db.models import User, TaskHistory, ScheduledPost, ScheduledPostStatus, Automation
 from app.services.event_emitter import RedisEventEmitter
-from app.services.feed_service import FeedService
-from app.services.incoming_request_service import IncomingRequestService
-from app.services.outgoing_request_service import OutgoingRequestService
-from app.services.friend_management_service import FriendManagementService
-from app.services.story_service import StoryService
-from app.services.automation_service import AutomationService
-from app.services.message_service import MessageService
-from app.services.group_management_service import GroupManagementService
+# --- ИЗМЕНЕНИЕ: Убираем прямые импорты сервисов, так как они есть в service_maps ---
 from app.core.config import settings
 from app.core.exceptions import UserActionException
 from app.services.vk_api import VKAPI, VKAuthError, VKRateLimitError, VKAPIError
@@ -24,24 +17,13 @@ from app.db.session import AsyncSessionFactory
 import structlog
 from app.tasks.utils import run_async_from_sync
 from app.services.scenario_service import ScenarioExecutionService
-from app.api.schemas import actions as ActionSchemas
+# --- ИЗМЕНЕНИЕ: Импортируем карту из нового места ---
+from app.tasks.service_maps import TASK_CONFIG_MAP
 from app.core.security import decrypt_data
 
 log = structlog.get_logger(__name__)
 
-# Карта соответствия ключа задачи, сервиса и Pydantic-модели для параметров
-TASK_CONFIG_MAP = {
-    TaskKey.LIKE_FEED: (FeedService, "like_newsfeed", ActionSchemas.LikeFeedRequest),
-    TaskKey.ADD_RECOMMENDED: (OutgoingRequestService, "add_recommended_friends", ActionSchemas.AddFriendsRequest),
-    TaskKey.ACCEPT_FRIENDS: (IncomingRequestService, "accept_friend_requests", ActionSchemas.AcceptFriendsRequest),
-    TaskKey.REMOVE_FRIENDS: (FriendManagementService, "remove_friends_by_criteria", ActionSchemas.RemoveFriendsRequest),
-    TaskKey.VIEW_STORIES: (StoryService, "view_stories", ActionSchemas.EmptyRequest),
-    TaskKey.BIRTHDAY_CONGRATULATION: (AutomationService, "congratulate_friends_with_birthday", ActionSchemas.BirthdayCongratulationRequest),
-    TaskKey.MASS_MESSAGING: (MessageService, "send_mass_message", ActionSchemas.MassMessagingRequest),
-    TaskKey.ETERNAL_ONLINE: (AutomationService, "set_online_status", ActionSchemas.EmptyRequest),
-    TaskKey.LEAVE_GROUPS: (GroupManagementService, "leave_groups_by_criteria", ActionSchemas.LeaveGroupsRequest),
-    TaskKey.JOIN_GROUPS: (GroupManagementService, "join_groups_by_criteria", ActionSchemas.JoinGroupsRequest),
-}
+# --- УДАЛЕНО: Определение TASK_CONFIG_MAP переехало в service_maps.py ---
 
 class BaseTaskWithContext(Task):
     acks_late = True
@@ -67,14 +49,12 @@ class BaseTaskWithContext(Task):
         self.emitter.set_context(self.user.id, self.task_history.id)
         return True
 
-    async def _teardown_context(self):
-        if self.redis: await self.redis.close()
-        if self.session: await self.session.close()
-
+    # ... (остальной код класса BaseTaskWithContext без изменений) ...
     async def _run_task(self, task_history_id: int, task_name_key: str, **kwargs):
         if not await self._setup_context(task_history_id): return
         
         try:
+            # --- ИЗМЕНЕНИЕ: Используем импортированную карту ---
             ServiceClass, method_name, ParamsModel = TASK_CONFIG_MAP[TaskKey(task_name_key)]
             
             try:
@@ -94,29 +74,17 @@ class BaseTaskWithContext(Task):
             self.task_history.result = "Задача успешно выполнена."
 
         except VKAuthError as e:
-            # УЛУЧШЕНИЕ: Критическая обработка ошибки авторизации.
-            # Ошибка токена не является временной, поэтому нет смысла в повторных попытках.
-            # Мы немедленно останавливаем все автоматизации пользователя и отправляем
-            # критическое уведомление, чтобы он мог сразу принять меры.
             log.error("task_runner.auth_error_critical", user_id=self.user.id, error=str(e))
-            
-            # Отправляем системное уведомление через WebSocket, которое будет видно в UI
             await self.emitter.send_system_notification(
                 self.session, 
                 "Критическая ошибка: ваш токен VK недействителен. Все автоматизации остановлены. Пожалуйста, выйдите и войдите в систему заново, чтобы обновить токен.",
                 "error"
             )
-            
-            # Деактивируем все автоматизации пользователя в базе данных
             deactivate_stmt = update(Automation).where(Automation.user_id == self.user.id).values(is_active=False)
             await self.session.execute(deactivate_stmt)
-            
-            # "Проваливаем" текущую задачу с информативным сообщением
             self.task_history.status = "FAILURE"
             self.task_history.result = f"Ошибка авторизации VK. Токен невалиден. Автоматизации остановлены."
-            await self.session.commit() # Сохраняем изменения до того, как выбросить исключение
-            
-            # Перевыбрасываем исключение, чтобы Celery корректно обработал его как on_failure
+            await self.session.commit()
             raise e
 
         except (VKRateLimitError, VKAPIError) as e:
@@ -143,31 +111,27 @@ class BaseTaskWithContext(Task):
         async def _async_on_failure():
             task_history_id = kwargs.get('task_history_id')
             if not await self._setup_context(task_history_id): return
-            
-            # Если статус уже FAILURE (как в случае с VKAuthError), не перезаписываем его
             if self.task_history.status != "FAILURE":
                 self.task_history.status = "FAILURE"
                 self.task_history.result = f"Задача провалена: {exc!r}"
                 await self.session.commit()
-
             await self.emitter.send_task_status_update(status="FAILURE", result=self.task_history.result, task_name=self.task_history.task_name, created_at=self.task_history.created_at)
             await self._teardown_context()
-        
         run_async_from_sync(_async_on_failure())
 
     def on_success(self, retval, task_id, args, kwargs):
         async def _async_on_success():
             task_history_id = kwargs.get('task_history_id')
             if not await self._setup_context(task_history_id): return
-            
             await self.emitter.send_task_status_update(status="SUCCESS", result=self.task_history.result, task_name=self.task_history.task_name, created_at=self.task_history.created_at)
             await self._teardown_context()
-        
         run_async_from_sync(_async_on_success())
         
     def __call__(self, *args, **kwargs):
         return run_async_from_sync(self.run(*args, **kwargs))
 
+
+# ... (остальной код файла с определением задач и publish_scheduled_post без изменений) ...
 def _create_task(name: TaskKey, **celery_options):
     task_config = {
         'max_retries': 3, 'default_retry_delay': 300,
@@ -244,12 +208,11 @@ def publish_scheduled_post(self: Task, post_id: int):
             vk_api = VKAPI(access_token=vk_token)
 
             try:
-                # УЛУЧШЕНИЕ: Убедимся, что owner_id передается как integer
                 owner_id = int(post.vk_profile_id)
                 
                 result = await vk_api.wall_post(
                     owner_id=owner_id,
-                    message=post.post_text or "", # Передаем пустую строку, если текста нет
+                    message=post.post_text or "",
                     attachments=",".join(post.attachments or [])
                 )
                 post.status = ScheduledPostStatus.published
