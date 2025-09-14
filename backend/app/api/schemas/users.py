@@ -1,6 +1,6 @@
 # --- backend/app/api/schemas/users.py ---
 from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 
 class UserBase(BaseModel):
     id: int
@@ -20,4 +20,14 @@ class FilterPresetCreate(FilterPresetBase):
 
 class FilterPresetRead(FilterPresetBase):
     id: int
+    model_config = ConfigDict(from_attributes=True)
+
+class ManagedProfileRead(BaseModel):
+    id: int
+    vk_id: int
+    first_name: str
+    last_name: str
+    photo_50: str
+    
+    # ИСПРАВЛЕНО: Замена устаревшего Config на model_config
     model_config = ConfigDict(from_attributes=True)

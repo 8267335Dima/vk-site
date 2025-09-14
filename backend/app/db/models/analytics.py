@@ -1,17 +1,16 @@
-# РЕФАКТОРИНГ: Модели, используемые для сбора статистики и аналитики.
-
 import datetime
-import enum
 from sqlalchemy import (
     Column, Integer, String, DateTime, ForeignKey, BigInteger,
-    UniqueConstraint, JSON, Index, Date
+    UniqueConstraint, JSON, Index, Date, Enum  # <-- УБЕДИТЕСЬ, ЧТО Enum ИМПОРТИРУЕТСЯ ЗДЕСЬ
 )
 from sqlalchemy.orm import relationship
 from app.db.base import Base
+from app.db.enums import FriendRequestStatus
 
-class FriendRequestStatus(enum.Enum):
-    pending = "pending"
-    accepted = "accepted"
+# Этот класс можно удалить, так как он импортируется из enums.py
+# class FriendRequestStatus(enum.Enum):
+#     pending = "pending"
+#     accepted = "accepted"
 
 class DailyStats(Base):
     __tablename__ = "daily_stats"
@@ -90,7 +89,9 @@ class FriendRequestLog(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     target_vk_id = Column(BigInteger, nullable=False, index=True)
-    status = Column(enum.Enum(FriendRequestStatus), nullable=False, default=FriendRequestStatus.pending, index=True)
+    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+    status = Column(Enum(FriendRequestStatus), nullable=False, default=FriendRequestStatus.pending, index=True)
+    # -------------------------
     created_at = Column(DateTime, default=datetime.datetime.utcnow, index=True)
     resolved_at = Column(DateTime, nullable=True)
     user = relationship("User", back_populates="friend_requests")

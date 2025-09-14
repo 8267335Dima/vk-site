@@ -1,17 +1,17 @@
 # --- backend/app/api/schemas/scenarios.py ---
 import enum
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Dict, Any, Optional
 
 class ScenarioStepType(str, enum.Enum):
     action = "action"
     condition = "condition"
 
-# Схемы для шагов (теперь это "узлы" графа)
 class ScenarioStepNode(BaseModel):
-    id: str # Фронтенд-ID узла (например, 'node_1')
-    step_type: ScenarioStepType
-    details: Dict[str, Any]
+    id: str
+    # ИЗМЕНЕНИЕ: Добавляем 'start' в возможные типы
+    type: str # Должно быть Literal['start', 'action', 'condition'], но для простоты оставим str
+    data: Dict[str, Any]
     position: Dict[str, float]
 
 class ScenarioEdge(BaseModel):
@@ -38,8 +38,8 @@ class Scenario(ScenarioBase):
     nodes: List[ScenarioStepNode]
     edges: List[ScenarioEdge]
 
-    class Config:
-        from_attributes = True
+    # ИСПРАВЛЕНО: Замена устаревшего Config на model_config
+    model_config = ConfigDict(from_attributes=True)
 
 # Схема для нового эндпоинта
 class ConditionOption(BaseModel):

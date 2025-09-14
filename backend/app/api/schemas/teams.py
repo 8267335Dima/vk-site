@@ -1,5 +1,5 @@
-# --- backend/app/api/schemas/teams.py --- (НОВЫЙ ФАЙЛ)
-from pydantic import BaseModel, Field
+# --- backend/app/api/schemas/teams.py ---
+from pydantic import BaseModel, Field, ConfigDict
 from typing import List
 
 class ProfileInfo(BaseModel):
@@ -8,10 +8,16 @@ class ProfileInfo(BaseModel):
     first_name: str
     last_name: str
     photo_50: str
+    
+    # ДОБАВЛЕНО: Для корректной работы с ORM-моделями
+    model_config = ConfigDict(from_attributes=True)
 
 class TeamMemberAccess(BaseModel):
     profile: ProfileInfo
     has_access: bool
+    
+    # ДОБАВЛЕНО: Для корректной работы с ORM-моделями
+    model_config = ConfigDict(from_attributes=True)
 
 class TeamMemberRead(BaseModel):
     id: int
@@ -19,12 +25,18 @@ class TeamMemberRead(BaseModel):
     user_info: ProfileInfo
     role: str
     accesses: List[TeamMemberAccess]
+    
+    # ДОБАВЛЕНО: Для корректной работы с ORM-моделями
+    model_config = ConfigDict(from_attributes=True)
 
 class TeamRead(BaseModel):
     id: int
     name: str
     owner_id: int
     members: List[TeamMemberRead]
+    
+    # ДОБАВЛЕНО: Для корректной работы с ORM-моделями
+    model_config = ConfigDict(from_attributes=True)
 
 class TeamCreate(BaseModel):
     name: str = Field(..., min_length=3, max_length=50)

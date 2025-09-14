@@ -1,6 +1,6 @@
 # --- backend/app/api/dependencies.py ---
 from typing import Annotated, Dict, Any
-from fastapi import Depends, HTTPException, status, Query
+from fastapi import Depends, HTTPException, Request, status, Query
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from pydantic import ValidationError
@@ -12,6 +12,8 @@ from app.core.config import settings
 from app.db.models import User, ManagedProfile, TeamMember, TeamProfileAccess
 from app.db.session import get_db, AsyncSessionFactory
 from app.repositories.user import UserRepository
+from fastapi_limiter.depends import RateLimiter
+
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/vk")
 
@@ -20,6 +22,15 @@ credentials_exception = HTTPException(
     detail="Не удалось проверить учетные данные",
     headers={"WWW-Authenticate": "Bearer"},
 )
+
+async def get_request_identifier(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        return forwarded_for.split(',')[0].strip()
+    return request.client.host if request.client else "unknown"
+
+# Создаем экземпляр нашего лимитера. Это и есть наша зависимость.
+limiter = RateLimiter(times=5, minutes=1, identifier=get_request_identifier)
 
 async def get_payload_from_token(token: str) -> Dict[str, Any]:
     try:

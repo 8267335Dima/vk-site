@@ -1,5 +1,5 @@
-# backend/app/api/schemas/proxies.py
-from pydantic import BaseModel, Field
+# --- backend/app/api/schemas/proxies.py ---
+from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime
 
 class ProxyBase(BaseModel):
@@ -14,8 +14,8 @@ class ProxyRead(ProxyBase):
     last_checked_at: datetime
     check_status_message: str | None = None
 
-    class Config:
-        from_attributes = True
+    # ИСПРАВЛЕНО: Замена устаревшего Config на model_config
+    model_config = ConfigDict(from_attributes=True)
 
 class ProxyTestResponse(BaseModel):
     is_working: bool

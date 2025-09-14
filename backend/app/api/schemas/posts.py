@@ -1,5 +1,5 @@
-# --- backend/app/api/schemas/posts.py --- (НОВЫЙ ФАЙЛ)
-from pydantic import BaseModel, Field
+# --- backend/app/api/schemas/posts.py ---
+from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime
 from typing import List, Optional
 
@@ -21,8 +21,8 @@ class PostRead(PostBase):
     vk_post_id: Optional[str] = None
     error_message: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    # ИСПРАВЛЕНО: Замена устаревшего Config на model_config
+    model_config = ConfigDict(from_attributes=True)
 
 class UploadedImageResponse(BaseModel):
     attachment_id: str

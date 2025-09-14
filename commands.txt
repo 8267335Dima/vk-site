@@ -17,6 +17,4 @@ npm run dev
 docker exec -it social_pilot_postgres_prod psql -U smm_user -d smm_combine
 \dt
 
-Запустите тестовый контейнер с базой данных (или локальную БД) на порту 5433, как указано в pytest.ini: 
-docker run --name test-postgres -e POSTGRES_USER=test_user -e POSTGRES_PASSWORD=test_password -e POSTGRES_DB=test_db -p 5433:5432 -d postgres:15
-Находясь в директории backend/, выполните команду: pytest
+тесты: docker-compose exec backend pytest

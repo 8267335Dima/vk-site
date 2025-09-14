@@ -10,6 +10,7 @@ from sqladmin import Admin, ModelView
 from sqladmin.authentication import AuthenticationBackend
 from jose import jwt, JWTError
 
+# УЛУЧШЕНИЕ: Импортируем модели из нового структурированного пакета
 from app.db.models import User, Payment, Automation, DailyStats, ActionLog
 from app.core.config import settings
 from app.core.security import create_access_token
@@ -104,7 +105,6 @@ def init_admin(app, engine):
     admin.add_view(DailyStatsAdmin)
     admin.add_view(ActionLogAdmin)
 
-
 # --- backend/app\celery_app.py ---
 
 # backend/app/celery_app.py
@@ -132,6 +132,16 @@ celery_app.conf.update(
     task_track_started=True,
     task_default_queue='default',
     beat_dburi=settings.database_url.replace("+asyncpg", ""),
+    
+    # УЛУЧШЕНИЕ: Продакшн-настройки для повышения надежности и производительности
+    # Гарантирует, что задача будет подтверждена только после ее успешного выполнения (или провала),
+    # а не в момент получения воркером. Защищает от потери задач при сбое воркера.
+    task_acks_late = True,
+
+    # Оптимизация для I/O-bound задач (наши запросы к VK API).
+    # Воркер будет брать только одну задачу за раз, что предотвращает "зависание"
+    # других задач в его очереди, если текущая выполняется долго.
+    worker_prefetch_multiplier = 1,
 )
 
 # --- backend/app\celery_worker.py ---
@@ -215,16 +225,15 @@ from fastapi import APIRouter, FastAPI, Request, status, Depends
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
-from redis.asyncio import Redis 
+from redis.asyncio import Redis
 from redis.exceptions import RedisError
 from fastapi_cache import FastAPICache
 from fastapi_cache.backends.redis import RedisBackend
 from contextlib import asynccontextmanager
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
-
+from prometheus_fastapi_instrumentator import Instrumentator
 from app.celery_app import celery_app
-
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.db.session import engine
@@ -240,41 +249,27 @@ from app.services.websocket_manager import redis_listener
 configure_logging()
 log = structlog.get_logger(__name__)
 
-# ИЗМЕНЕНИЕ: Улучшенная идентификация клиента для Rate Limiter
-async def get_request_identifier(request: Request) -> str:
-    """
-    Получает реальный IP-адрес клиента, даже если приложение за прокси.
-    Важно: Убедитесь, что ваш прокси (Nginx, Traefik) устанавливает заголовок 'X-Forwarded-For'.
-    """
-    forwarded_for = request.headers.get("x-forwarded-for")
-    if forwarded_for:
-        # Самый левый IP в списке - это исходный IP клиента
-        return forwarded_for.split(',')[0].strip()
-    # Fallback на прямое подключение
-    return request.client.host if request.client else "unknown"
-
-# Зависимости Rate Limiter
-rate_limit_dependency = Depends(RateLimiter(times=20, minutes=1, identifier=get_request_identifier))
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # --- ИЗМЕНЕНИЕ: Логика инструментария Prometheus убрана отсюда ---
     redis_task = None
     try:
         redis_connection = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/0", encoding="utf-8", decode_responses=True)
         await FastAPILimiter.init(redis_connection)
-        
+
         redis_cache_connection = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/3", encoding="utf-8")
         FastAPICache.init(RedisBackend(redis_cache_connection), prefix="fastapi-cache")
-        
+
         redis_pubsub_connection = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/1", decode_responses=True)
         redis_task = asyncio.create_task(redis_listener(redis_pubsub_connection))
-        
+
         log.info("lifespan.startup", message="Dependencies initialized.")
     except RedisError as e:
         log.error("lifespan.startup.error", error=str(e), message="Could not connect to Redis.")
-    
+
     yield
-    
+
+    # Логика остановки
     if redis_task:
         redis_task.cancel()
         try: await redis_task
@@ -284,7 +279,14 @@ async def lifespan(app: FastAPI):
         await FastAPICache.clear()
     log.info("lifespan.shutdown", message="Resources cleaned up.")
 
+# --- ОСНОВНОЕ ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+# 1. Сначала создаем приложение
 app = FastAPI(title="Zenith API", version="4.0.0", docs_url="/api/docs", redoc_url="/api/redoc", lifespan=lifespan)
+
+# 2. Затем конфигурируем middleware и инструментарий
+# Инициализация инструментария должна происходить ДО добавления других middleware и роутеров
+instrumentator = Instrumentator().instrument(app)
+instrumentator.expose(app, endpoint="/api/metrics")
 
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
@@ -302,8 +304,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# --- КОНЕЦ ИСПРАВЛЕНИЯ ---
 
-# --- Объявление тегов для OpenAPI ---
+
 class Tags:
     AUTH = "Аутентификация"
     USERS = "Пользователи и Профили"
@@ -324,13 +327,13 @@ class Tags:
 api_router_v1 = APIRouter()
 api_router_v1.include_router(auth_router, prefix="/auth", tags=[Tags.AUTH])
 api_router_v1.include_router(users_router, prefix="/users", tags=[Tags.USERS])
-api_router_v1.include_router(proxies_router, prefix="/proxies", tags=[Tags.PROXIES], dependencies=[rate_limit_dependency])
+api_router_v1.include_router(proxies_router, prefix="/proxies", tags=[Tags.PROXIES])
 api_router_v1.include_router(tasks_router, prefix="/tasks", tags=[Tags.TASKS])
 api_router_v1.include_router(stats_router, prefix="/stats", tags=[Tags.STATS])
 api_router_v1.include_router(automations_router, prefix="/automations", tags=[Tags.AUTOMATIONS])
-api_router_v1.include_router(billing_router, prefix="/billing", tags=[Tags.BILLING], dependencies=[rate_limit_dependency])
+api_router_v1.include_router(billing_router, prefix="/billing", tags=[Tags.BILLING])
 api_router_v1.include_router(analytics_router, prefix="/analytics", tags=[Tags.ANALYTICS])
-api_router_v1.include_router(scenarios_router, prefix="/scenarios", tags=[Tags.SCENARIOS], dependencies=[rate_limit_dependency])
+api_router_v1.include_router(scenarios_router, prefix="/scenarios", tags=[Tags.SCENARIOS])
 api_router_v1.include_router(notifications_router, prefix="/notifications", tags=[Tags.NOTIFICATIONS])
 api_router_v1.include_router(posts_router, prefix="/posts", tags=[Tags.POSTS])
 api_router_v1.include_router(teams_router, prefix="/teams", tags=[Tags.TEAMS])
@@ -350,7 +353,7 @@ async def health_check():
 
 # --- backend/app/api/dependencies.py ---
 from typing import Annotated, Dict, Any
-from fastapi import Depends, HTTPException, status, Query
+from fastapi import Depends, HTTPException, Request, status, Query
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from pydantic import ValidationError
@@ -362,6 +365,8 @@ from app.core.config import settings
 from app.db.models import User, ManagedProfile, TeamMember, TeamProfileAccess
 from app.db.session import get_db, AsyncSessionFactory
 from app.repositories.user import UserRepository
+from fastapi_limiter.depends import RateLimiter
+
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/vk")
 
@@ -370,6 +375,15 @@ credentials_exception = HTTPException(
     detail="Не удалось проверить учетные данные",
     headers={"WWW-Authenticate": "Bearer"},
 )
+
+async def get_request_identifier(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        return forwarded_for.split(',')[0].strip()
+    return request.client.host if request.client else "unknown"
+
+# Создаем экземпляр нашего лимитера. Это и есть наша зависимость.
+limiter = RateLimiter(times=5, minutes=1, identifier=get_request_identifier)
 
 async def get_payload_from_token(token: str) -> Dict[str, Any]:
     try:
@@ -636,36 +650,34 @@ async def get_post_activity_heatmap(
 # --- backend/app\api\endpoints\auth.py ---
 
 # backend/app/api/endpoints/auth.py
+
 from datetime import timedelta, datetime
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from fastapi_limiter.depends import RateLimiter
 
 from app.db.session import get_db
 from app.db.models import User, LoginHistory
-from app.api.schemas.auth import TokenResponse, EnrichedTokenResponse
+from app.api.schemas.auth import EnrichedTokenResponse
 from app.services.vk_api import is_token_valid
 from app.core.security import create_access_token, encrypt_data
 from app.core.config import settings
 from app.core.plans import get_limits_for_plan
 from app.core.constants import PlanName
-from app.api.dependencies import get_current_manager_user
+from app.api.dependencies import get_current_manager_user, limiter # Импортируем limiter
 
 router = APIRouter()
 
 class TokenRequest(BaseModel):
     vk_token: str
 
-async def get_request_identifier(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
 
 @router.post(
-    "/vk", 
-    response_model=EnrichedTokenResponse, 
+    "/vk",
+    response_model=EnrichedTokenResponse,
     summary="Аутентификация или регистрация по токену VK",
-    dependencies=[Depends(RateLimiter(times=5, minutes=1, identifier=get_request_identifier))]
+    dependencies=[Depends(limiter)] # Оставляем защиту для production
 )
 async def login_via_vk(
     *,
@@ -674,7 +686,7 @@ async def login_via_vk(
     token_request: TokenRequest
 ) -> EnrichedTokenResponse:
     vk_token = token_request.vk_token
-    
+
     vk_id = await is_token_valid(vk_token)
     if not vk_id:
         raise HTTPException(
@@ -694,7 +706,7 @@ async def login_via_vk(
         user.encrypted_vk_token = encrypted_token
     else:
         user = User(
-            vk_id=vk_id, 
+            vk_id=vk_id,
             encrypted_vk_token=encrypted_token,
             plan=PlanName.BASE,
             plan_expires_at=datetime.utcnow() + timedelta(days=14),
@@ -714,8 +726,13 @@ async def login_via_vk(
     await db.flush()
     await db.refresh(user)
 
+    # >>>>>>>>>> КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ <<<<<<<<<<
+    # Получаем ID пользователя ДО того, как db.commit() сделает объект 'user' просроченным
+    user_id = user.id
+    # >>>>>>>>>> КОНЕЦ ИСПРАВЛЕНИЯ <<<<<<<<<<
+
     login_entry = LoginHistory(
-        user_id=user.id,
+        user_id=user_id,
         ip_address=request.client.host if request.client else "unknown",
         user_agent=request.headers.get("user-agent", "unknown")
     )
@@ -725,18 +742,21 @@ async def login_via_vk(
 
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     
-    token_data = {"sub": str(user.id), "profile_id": str(user.id)}
+    # Используем сохраненный ID
+    token_data = {"sub": str(user_id), "profile_id": str(user_id)}
     
     access_token = create_access_token(
         data=token_data, expires_delta=access_token_expires
     )
 
     return EnrichedTokenResponse(
-        access_token=access_token, 
+        access_token=access_token,
         token_type="bearer",
-        manager_id=user.id,
-        active_profile_id=user.id
+        manager_id=user_id,
+        active_profile_id=user_id
     )
+
+
 
 class SwitchProfileRequest(BaseModel):
     profile_id: int
@@ -1272,6 +1292,7 @@ from app.api.schemas.scenarios import (
 )
 from sqlalchemy_celery_beat.models import PeriodicTask, CrontabSchedule
 from app.tasks.runner import run_scenario_from_scheduler
+from app.api.dependencies import get_current_active_profile
 
 router = APIRouter()
 
@@ -1451,7 +1472,12 @@ async def get_scenario(scenario_id: int, current_user: User = Depends(get_curren
     return ScenarioSchema(id=scenario.id, name=scenario.name, schedule=scenario.schedule, is_active=scenario.is_active, nodes=nodes, edges=edges)
 
 @router.post("", response_model=ScenarioSchema, status_code=status.HTTP_201_CREATED)
-async def create_scenario(scenario_data: ScenarioCreate, current_user: User = Depends(get_current_active_profile), db: AsyncSession = Depends(get_db)):
+async def create_scenario(
+    scenario_data: ScenarioCreate, 
+    # ВОТ ИСПРАВЛЕНИЕ: Используем зависимость для API, которая ищет токен в заголовке
+    current_user: User = Depends(get_current_active_profile), 
+    db: AsyncSession = Depends(get_db)
+):
     if not croniter.is_valid(scenario_data.schedule):
         raise HTTPException(status_code=400, detail="Неверный формат CRON-строки.")
     
@@ -2344,7 +2370,7 @@ class ActionFilters(BaseModel):
     allow_closed_profiles: bool = False
     status_keyword: Optional[str] = Field(None, max_length=100)
     only_with_photo: Optional[bool] = Field(False, description="Применять только к постам с фото (для like_feed)")
-    
+
     # Для remove_friends
     remove_banned: Optional[bool] = True
     last_seen_days: Optional[int] = Field(None, ge=1, description="Фильтр по последнему визиту в днях")
@@ -2400,7 +2426,7 @@ class BirthdayCongratulationRequest(BaseModel):
     message_template_default: str = "С Днем Рождения, {name}!"
     message_template_male: Optional[str] = None
     message_template_female: Optional[str] = None
-    
+
 # --- Для динамической конфигурации UI ---
 class TaskField(BaseModel):
     name: str
@@ -2479,36 +2505,45 @@ class EnrichedTokenResponse(TokenResponse):
 
 # --- backend/app\api\schemas\billing.py ---
 
-# backend/app/api/schemas/billing.py
+# --- backend/app/api/schemas/billing.py ---
 from pydantic import BaseModel, Field
-from typing import Literal, List, Optional
+from typing import List, Optional
+
+class PlanPeriod(BaseModel):
+    """Схема для описания периода подписки и скидки."""
+    months: int
+    discount_percent: float
 
 class PlanDetail(BaseModel):
     """Детальная информация о тарифном плане для отображения на фронтенде."""
     id: str = Field(..., description="Идентификатор плана (напр., 'Plus', 'PRO')")
     display_name: str = Field(..., description="Человекочитаемое название тарифа")
-    price: float = Field(..., description="Цена тарифа")
-    currency: str = Field(..., description="Валюта")
+    price: float = Field(..., description="Цена тарифа за 1 месяц")
+    currency: str = Field("RUB", description="Валюта")
     description: str = Field(..., description="Описание тарифа")
-    # --- ИСПРАВЛЕНИЕ: Добавлены новые поля ---
     features: List[str] = Field([], description="Список возможностей тарифа")
     is_popular: Optional[bool] = Field(False, description="Является ли тариф популярным выбором")
-
+    periods: List[PlanPeriod] = Field([], description="Доступные периоды подписки со скидками")
 
 class AvailablePlansResponse(BaseModel):
     """Ответ со списком доступных для покупки планов."""
     plans: List[PlanDetail]
 
 class CreatePaymentRequest(BaseModel):
-    plan_name: str = Field(..., description="Идентификатор тарифа для покупки (напр., 'Plus')")
+    """
+    Схема для создания платежа.
+    ИСПРАВЛЕНО: Поля plan_id и months соответствуют логике эндпоинта.
+    """
+    plan_id: str = Field(..., description="Идентификатор тарифа для покупки (напр., 'Plus')")
+    months: int = Field(..., ge=1, description="Количество месяцев для покупки")
 
 class CreatePaymentResponse(BaseModel):
     confirmation_url: str
 
 # --- backend/app\api\schemas\notifications.py ---
 
-# backend/app/api/schemas/notifications.py
-from pydantic import BaseModel
+# --- backend/app/api/schemas/notifications.py ---
+from pydantic import BaseModel, ConfigDict
 from datetime import datetime
 from typing import List
 
@@ -2519,8 +2554,8 @@ class Notification(BaseModel):
     is_read: bool
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    # ИСПРАВЛЕНО: Замена устаревшего Config на model_config
+    model_config = ConfigDict(from_attributes=True)
 
 class NotificationsResponse(BaseModel):
     items: List[Notification]
@@ -2528,8 +2563,8 @@ class NotificationsResponse(BaseModel):
 
 # --- backend/app\api\schemas\posts.py ---
 
-# --- backend/app/api/schemas/posts.py --- (НОВЫЙ ФАЙЛ)
-from pydantic import BaseModel, Field
+# --- backend/app/api/schemas/posts.py ---
+from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime
 from typing import List, Optional
 
@@ -2551,16 +2586,16 @@ class PostRead(PostBase):
     vk_post_id: Optional[str] = None
     error_message: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    # ИСПРАВЛЕНО: Замена устаревшего Config на model_config
+    model_config = ConfigDict(from_attributes=True)
 
 class UploadedImageResponse(BaseModel):
     attachment_id: str
 
 # --- backend/app\api\schemas\proxies.py ---
 
-# backend/app/api/schemas/proxies.py
-from pydantic import BaseModel, Field
+# --- backend/app/api/schemas/proxies.py ---
+from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime
 
 class ProxyBase(BaseModel):
@@ -2575,8 +2610,8 @@ class ProxyRead(ProxyBase):
     last_checked_at: datetime
     check_status_message: str | None = None
 
-    class Config:
-        from_attributes = True
+    # ИСПРАВЛЕНО: Замена устаревшего Config на model_config
+    model_config = ConfigDict(from_attributes=True)
 
 class ProxyTestResponse(BaseModel):
     is_working: bool
@@ -2586,18 +2621,18 @@ class ProxyTestResponse(BaseModel):
 
 # --- backend/app/api/schemas/scenarios.py ---
 import enum
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Dict, Any, Optional
 
 class ScenarioStepType(str, enum.Enum):
     action = "action"
     condition = "condition"
 
-# Схемы для шагов (теперь это "узлы" графа)
 class ScenarioStepNode(BaseModel):
-    id: str # Фронтенд-ID узла (например, 'node_1')
-    step_type: ScenarioStepType
-    details: Dict[str, Any]
+    id: str
+    # ИЗМЕНЕНИЕ: Добавляем 'start' в возможные типы
+    type: str # Должно быть Literal['start', 'action', 'condition'], но для простоты оставим str
+    data: Dict[str, Any]
     position: Dict[str, float]
 
 class ScenarioEdge(BaseModel):
@@ -2624,8 +2659,8 @@ class Scenario(ScenarioBase):
     nodes: List[ScenarioStepNode]
     edges: List[ScenarioEdge]
 
-    class Config:
-        from_attributes = True
+    # ИСПРАВЛЕНО: Замена устаревшего Config на model_config
+    model_config = ConfigDict(from_attributes=True)
 
 # Схема для нового эндпоинта
 class ConditionOption(BaseModel):
@@ -2705,8 +2740,8 @@ class PaginatedTasksResponse(BaseModel):
 
 # --- backend/app\api\schemas\teams.py ---
 
-# --- backend/app/api/schemas/teams.py --- (НОВЫЙ ФАЙЛ)
-from pydantic import BaseModel, Field
+# --- backend/app/api/schemas/teams.py ---
+from pydantic import BaseModel, Field, ConfigDict
 from typing import List
 
 class ProfileInfo(BaseModel):
@@ -2715,10 +2750,16 @@ class ProfileInfo(BaseModel):
     first_name: str
     last_name: str
     photo_50: str
+    
+    # ДОБАВЛЕНО: Для корректной работы с ORM-моделями
+    model_config = ConfigDict(from_attributes=True)
 
 class TeamMemberAccess(BaseModel):
     profile: ProfileInfo
     has_access: bool
+    
+    # ДОБАВЛЕНО: Для корректной работы с ORM-моделями
+    model_config = ConfigDict(from_attributes=True)
 
 class TeamMemberRead(BaseModel):
     id: int
@@ -2726,12 +2767,18 @@ class TeamMemberRead(BaseModel):
     user_info: ProfileInfo
     role: str
     accesses: List[TeamMemberAccess]
+    
+    # ДОБАВЛЕНО: Для корректной работы с ORM-моделями
+    model_config = ConfigDict(from_attributes=True)
 
 class TeamRead(BaseModel):
     id: int
     name: str
     owner_id: int
     members: List[TeamMemberRead]
+    
+    # ДОБАВЛЕНО: Для корректной работы с ORM-моделями
+    model_config = ConfigDict(from_attributes=True)
 
 class TeamCreate(BaseModel):
     name: str = Field(..., min_length=3, max_length=50)
@@ -2747,7 +2794,7 @@ class UpdateAccessRequest(BaseModel):
 
 # --- backend/app/api/schemas/users.py ---
 from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 
 class UserBase(BaseModel):
     id: int
@@ -2769,6 +2816,16 @@ class FilterPresetRead(FilterPresetBase):
     id: int
     model_config = ConfigDict(from_attributes=True)
 
+class ManagedProfileRead(BaseModel):
+    id: int
+    vk_id: int
+    first_name: str
+    last_name: str
+    photo_50: str
+    
+    # ИСПРАВЛЕНО: Замена устаревшего Config на model_config
+    model_config = ConfigDict(from_attributes=True)
+
 # --- backend/app\api\schemas\__init__.py ---
 
 
@@ -2780,9 +2837,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 from pathlib import Path
 
-# Определяем путь к .env файлу относительно этого файла.
-# Это делает путь независимым от того, откуда запускается приложение.
-# (VK_SITE/backend/app/core/ -> VK_SITE/.env)
+# ИЗМЕНЕНИЕ: Определяем абсолютный путь к .env файлу
 BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 ENV_FILE = BASE_DIR / ".env"
 
@@ -2795,6 +2850,11 @@ class Settings(BaseSettings):
     
     REDIS_HOST: str
     REDIS_PORT: int
+
+    # ИЗМЕНЕНИЕ: Добавляем тестовые переменные, чтобы pydantic их распознавал
+    VK_HEALTH_CHECK_TOKEN: Optional[str] = None
+    VK_TEST_USER_ID: Optional[str] = None
+    VK_TEST_FRIEND_ID: Optional[str] = None
 
     @property
     def database_url(self) -> str:
@@ -2818,6 +2878,7 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: str
 
     model_config = SettingsConfigDict(
+        # ИЗМЕНЕНИЕ: Указываем путь к файлу
         env_file=ENV_FILE,
         env_file_encoding='utf-8',
         extra='ignore'
@@ -3179,11 +3240,47 @@ class PlanConfig(BaseModel):
 # --- backend/app\db\base.py ---
 
 # backend/app/db/base.py
-
+from sqlalchemy import MetaData
 from sqlalchemy.orm import declarative_base
 
-# Базовый класс для всех моделей SQLAlchemy
-Base = declarative_base()
+# ДОБАВЛЕНО: Стандартное соглашение об именовании для Alembic и SQLAlchemy.
+# Это решает проблемы с безымянными и ненайденными ограничениями (constraints).
+convention = {
+    "ix": "ix_%(column_0_label)s",
+    "uq": "uq_%(table_name)s_%(column_0_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "pk": "pk_%(table_name)s"
+}
+
+# ИЗМЕНЕНИЕ: Передаем metadata с соглашением в declarative_base
+Base = declarative_base(metadata=MetaData(naming_convention=convention))
+
+# --- backend/app\db\enums.py ---
+
+import enum
+
+class DelayProfile(enum.Enum):
+    slow = "slow"
+    normal = "normal"
+    fast = "fast"
+
+class TeamMemberRole(enum.Enum):
+    admin = "admin"
+    member = "member"
+
+class ScenarioStepType(enum.Enum):
+    action = "action"
+    condition = "condition"
+
+class ScheduledPostStatus(enum.Enum):
+    scheduled = "scheduled"
+    published = "published"
+    failed = "failed"
+
+class FriendRequestStatus(enum.Enum):
+    pending = "pending"
+    accepted = "accepted"
 
 # --- backend/app\db\models.py ---
 
@@ -3618,6 +3715,398 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 # --- backend/app\db\__init__.py ---
 
 
+
+# --- backend/app\db\models\analytics.py ---
+
+import datetime
+from sqlalchemy import (
+    Column, Integer, String, DateTime, ForeignKey, BigInteger,
+    UniqueConstraint, JSON, Index, Date, Enum  # <-- УБЕДИТЕСЬ, ЧТО Enum ИМПОРТИРУЕТСЯ ЗДЕСЬ
+)
+from sqlalchemy.orm import relationship
+from app.db.base import Base
+from app.db.enums import FriendRequestStatus
+
+# Этот класс можно удалить, так как он импортируется из enums.py
+# class FriendRequestStatus(enum.Enum):
+#     pending = "pending"
+#     accepted = "accepted"
+
+class DailyStats(Base):
+    __tablename__ = "daily_stats"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    date = Column(Date, default=datetime.date.today, nullable=False)
+    likes_count = Column(Integer, default=0, nullable=False)
+    friends_added_count = Column(Integer, default=0, nullable=False)
+    friend_requests_accepted_count = Column(Integer, default=0, nullable=False)
+    stories_viewed_count = Column(Integer, default=0, nullable=False)
+    friends_removed_count = Column(Integer, default=0, nullable=False)
+    messages_sent_count = Column(Integer, default=0, nullable=False)
+    user = relationship("User", back_populates="daily_stats")
+    __table_args__ = (
+        UniqueConstraint('user_id', 'date', name='_user_date_uc'),
+        Index('ix_daily_stats_user_date', 'user_id', 'date'),
+    )
+
+class WeeklyStats(Base):
+    __tablename__ = "weekly_stats"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    week_identifier = Column(String, nullable=False)
+    likes_count = Column(Integer, default=0, nullable=False)
+    friends_added_count = Column(Integer, default=0, nullable=False)
+    friend_requests_accepted_count = Column(Integer, default=0, nullable=False)
+    user = relationship("User")
+    __table_args__ = (UniqueConstraint('user_id', 'week_identifier', name='_user_week_uc'),)
+
+class MonthlyStats(Base):
+    __tablename__ = "monthly_stats"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    month_identifier = Column(String, nullable=False)
+    likes_count = Column(Integer, default=0, nullable=False)
+    friends_added_count = Column(Integer, default=0, nullable=False)
+    friend_requests_accepted_count = Column(Integer, default=0, nullable=False)
+    user = relationship("User")
+    __table_args__ = (UniqueConstraint('user_id', 'month_identifier', name='_user_month_uc'),)
+
+class ProfileMetric(Base):
+    __tablename__ = "profile_metrics"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    date = Column(Date, default=datetime.date.today, nullable=False)
+    total_likes_on_content = Column(Integer, nullable=False)
+    friends_count = Column(Integer, nullable=False)
+    user = relationship("User", back_populates="profile_metrics")
+    __table_args__ = (
+        UniqueConstraint('user_id', 'date', name='_user_date_metric_uc'),
+        Index('ix_profile_metrics_user_date', 'user_id', 'date'),
+    )
+
+class FriendsHistory(Base):
+    __tablename__ = "friends_history"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    date = Column(Date, default=datetime.date.today, nullable=False)
+    friends_count = Column(Integer, nullable=False)
+    user = relationship("User")
+    __table_args__ = (
+        UniqueConstraint('user_id', 'date', name='_user_date_friends_uc'),
+        Index('ix_friends_history_user_date', 'user_id', 'date'),
+    )
+
+class PostActivityHeatmap(Base):
+    __tablename__ = "post_activity_heatmaps"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True, unique=True)
+    heatmap_data = Column(JSON, nullable=False)
+    last_updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    user = relationship("User", back_populates="heatmap")
+
+class FriendRequestLog(Base):
+    __tablename__ = "friend_request_logs"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    target_vk_id = Column(BigInteger, nullable=False, index=True)
+    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+    status = Column(Enum(FriendRequestStatus), nullable=False, default=FriendRequestStatus.pending, index=True)
+    # -------------------------
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, index=True)
+    resolved_at = Column(DateTime, nullable=True)
+    user = relationship("User", back_populates="friend_requests")
+    __table_args__ = (UniqueConstraint('user_id', 'target_vk_id', name='_user_target_uc'),)
+
+# --- backend/app\db\models\payment.py ---
+
+# РЕФАКТОРИНГ: Модель для платежей.
+
+import datetime
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Float
+from sqlalchemy.orm import relationship
+from app.db.base import Base
+
+class Payment(Base):
+    __tablename__ = "payments"
+    id = Column(Integer, primary_key=True)
+    payment_system_id = Column(String, unique=True, index=True, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    amount = Column(Float, nullable=False)
+    status = Column(String, default="pending", nullable=False)
+    plan_name = Column(String, nullable=False)
+    months = Column(Integer, nullable=False, default=1)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    user = relationship("User")
+
+# --- backend/app\db\models\shared.py ---
+
+# РЕФАКТОРИНГ: Общие модели, которые используются в разных частях системы.
+
+import datetime
+from sqlalchemy import (
+    Column, Integer, String, DateTime, ForeignKey,
+    UniqueConstraint, Boolean, JSON,
+)
+from sqlalchemy.orm import relationship
+from app.db.base import Base
+
+class Proxy(Base):
+    __tablename__ = "proxies"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    encrypted_proxy_url = Column(String, nullable=False)
+    is_working = Column(Boolean, default=True, nullable=False, index=True)
+    last_checked_at = Column(DateTime, default=datetime.datetime.utcnow)
+    check_status_message = Column(String, nullable=True)
+    user = relationship("User", back_populates="proxies")
+    __table_args__ = (UniqueConstraint('user_id', 'encrypted_proxy_url', name='_user_proxy_uc'),)
+
+class Notification(Base):
+    __tablename__ = "notifications"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    message = Column(String, nullable=False)
+    level = Column(String, default="info", nullable=False)
+    is_read = Column(Boolean, default=False, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, index=True)
+    user = relationship("User", back_populates="notifications")
+
+class FilterPreset(Base):
+    __tablename__ = "filter_presets"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    action_type = Column(String, nullable=False, index=True)
+    filters = Column(JSON, nullable=False)
+    user = relationship("User", back_populates="filter_presets")
+    __table_args__ = (UniqueConstraint('user_id', 'name', 'action_type', name='_user_name_action_uc'),)
+
+
+# --- backend/app\db\models\task.py ---
+
+import datetime
+import enum
+from sqlalchemy import (
+    Column, ForeignKeyConstraint, Integer, String, DateTime, ForeignKey, BigInteger,
+    UniqueConstraint, Boolean, JSON, Text, Enum, Index, Float
+)
+from sqlalchemy.orm import relationship
+from app.db.base import Base
+from app.db.enums import ScenarioStepType, ScheduledPostStatus
+
+class ScenarioStepType(enum.Enum):
+    action = "action"
+    condition = "condition"
+
+class ScheduledPostStatus(enum.Enum):
+    scheduled = "scheduled"
+    published = "published"
+    failed = "failed"
+
+class TaskHistory(Base):
+    __tablename__ = "task_history"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    celery_task_id = Column(String, unique=True, nullable=True, index=True)
+    task_name = Column(String, nullable=False, index=True)
+    status = Column(String, default="PENDING", nullable=False, index=True)
+    parameters = Column(JSON, nullable=True)
+    result = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    user = relationship("User", back_populates="task_history")
+    __table_args__ = (Index('ix_task_history_user_status', 'user_id', 'status'),)
+
+class Automation(Base):
+    __tablename__ = "automations"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    automation_type = Column(String, nullable=False, index=True)
+    is_active = Column(Boolean, default=False, nullable=False)
+    settings = Column(JSON, nullable=True)
+    last_run_at = Column(DateTime, nullable=True)
+    user = relationship("User", back_populates="automations")
+    __table_args__ = (UniqueConstraint('user_id', 'automation_type', name='_user_automation_uc'),)
+
+class Scenario(Base):
+    __tablename__ = "scenarios"
+    
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    schedule = Column(String, nullable=False)
+    is_active = Column(Boolean, default=False, nullable=False)
+    
+    # Столбец для хранения ID
+    first_step_id = Column(Integer, nullable=True)
+
+    # Отношения
+    user = relationship("User", back_populates="scenarios")
+    steps = relationship(
+        "ScenarioStep", 
+        back_populates="scenario", 
+        cascade="all, delete-orphan", 
+        foreign_keys="[ScenarioStep.scenario_id]"
+    )
+
+    # Явное объявление ограничения.
+    # Это самый чистый и надежный способ для работы с кольцевыми зависимостями.
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ['first_step_id'], 
+            ['scenario_steps.id'],
+            use_alter=True, 
+            name="fk_scenarios_first_step_id_scenario_steps"
+        ),
+    )
+
+class ScenarioStep(Base):
+    __tablename__ = "scenario_steps"
+    id = Column(Integer, primary_key=True)
+    scenario_id = Column(Integer, ForeignKey("scenarios.id"), nullable=False, index=True)
+    step_type = Column(Enum(ScenarioStepType), nullable=False)
+    details = Column(JSON, nullable=False)
+    next_step_id = Column(Integer, ForeignKey("scenario_steps.id"), nullable=True)
+    on_success_next_step_id = Column(Integer, ForeignKey("scenario_steps.id"), nullable=True)
+    on_failure_next_step_id = Column(Integer, ForeignKey("scenario_steps.id"), nullable=True)
+    position_x = Column(Float, default=0)
+    position_y = Column(Float, default=0)
+    scenario = relationship("Scenario", back_populates="steps", foreign_keys=[scenario_id])
+
+class ScheduledPost(Base):
+    __tablename__ = "scheduled_posts"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    vk_profile_id = Column(BigInteger, nullable=False, index=True)
+    post_text = Column(Text, nullable=True)
+    attachments = Column(JSON, nullable=True)
+    publish_at = Column(DateTime, nullable=False, index=True)
+    status = Column(Enum(ScheduledPostStatus), nullable=False, default=ScheduledPostStatus.scheduled, index=True)
+    celery_task_id = Column(String, nullable=True, unique=True)
+    vk_post_id = Column(String, nullable=True)
+    error_message = Column(Text, nullable=True)
+    user = relationship("User", back_populates="scheduled_posts")
+
+class SentCongratulation(Base):
+    __tablename__ = "sent_congratulations"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    friend_vk_id = Column(BigInteger, nullable=False, index=True)
+    year = Column(Integer, nullable=False)
+    user = relationship("User")
+    __table_args__ = (UniqueConstraint('user_id', 'friend_vk_id', 'year', name='_user_friend_year_uc'),)
+
+class ActionLog(Base):
+    __tablename__ = "action_logs"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    action_type = Column(String, nullable=False, index=True)
+    message = Column(Text, nullable=False)
+    status = Column(String, nullable=False)
+    timestamp = Column(DateTime, default=datetime.datetime.utcnow, index=True)
+    user = relationship("User")
+
+# --- backend/app\db\models\user.py ---
+
+# РЕФАКТОРИНГ: Модели, относящиеся к пользователям, командам и доступу.
+
+import datetime
+from sqlalchemy import (
+    Column, Integer, String, DateTime, ForeignKey, BigInteger,
+    UniqueConstraint, Boolean, text, Enum, Text
+)
+from sqlalchemy.orm import relationship
+from app.db.base import Base
+from app.db.enums import DelayProfile, TeamMemberRole # <-- ИЗМЕНЕНИЕ: импорт из enums.py
+
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True)
+    vk_id = Column(BigInteger, unique=True, index=True, nullable=False)
+    encrypted_vk_token = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    plan = Column(String, nullable=False, server_default='Базовый')
+    plan_expires_at = Column(DateTime, nullable=True)
+    is_admin = Column(Boolean, nullable=False, server_default='false')
+    daily_likes_limit = Column(Integer, nullable=False, server_default=text('0'))
+    daily_add_friends_limit = Column(Integer, nullable=False, server_default=text('0'))
+    daily_message_limit = Column(Integer, nullable=False, server_default=text('0'))
+    delay_profile = Column(Enum(DelayProfile), nullable=False, server_default=DelayProfile.normal.name)
+
+    # Связи остаются такими же
+    proxies = relationship("Proxy", back_populates="user", cascade="all, delete-orphan", lazy="selectin")
+    task_history = relationship("TaskHistory", back_populates="user", cascade="all, delete-orphan")
+    daily_stats = relationship("DailyStats", back_populates="user", cascade="all, delete-orphan")
+    automations = relationship("Automation", back_populates="user", cascade="all, delete-orphan")
+    notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
+    scenarios = relationship("Scenario", back_populates="user", cascade="all, delete-orphan")
+    profile_metrics = relationship("ProfileMetric", back_populates="user", cascade="all, delete-orphan")
+    filter_presets = relationship("FilterPreset", back_populates="user", cascade="all, delete-orphan")
+    friend_requests = relationship("FriendRequestLog", back_populates="user", cascade="all, delete-orphan")
+    heatmap = relationship("PostActivityHeatmap", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    managed_profiles = relationship("ManagedProfile", foreign_keys="[ManagedProfile.manager_user_id]", back_populates="manager", cascade="all, delete-orphan")
+    scheduled_posts = relationship("ScheduledPost", back_populates="user", cascade="all, delete-orphan", foreign_keys="[ScheduledPost.user_id]")
+    owned_team = relationship("Team", back_populates="owner", uselist=False, cascade="all, delete-orphan")
+    team_membership = relationship("TeamMember", back_populates="user", uselist=False, cascade="all, delete-orphan")
+
+class Team(Base):
+    __tablename__ = "teams"
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
+    owner = relationship("User", back_populates="owned_team")
+    members = relationship("TeamMember", back_populates="team", cascade="all, delete-orphan")
+
+class TeamMember(Base):
+    __tablename__ = "team_members"
+    id = Column(Integer, primary_key=True)
+    team_id = Column(Integer, ForeignKey("teams.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
+    role = Column(Enum(TeamMemberRole), nullable=False, default=TeamMemberRole.member)
+    team = relationship("Team", back_populates="members")
+    user = relationship("User", back_populates="team_membership")
+    profile_accesses = relationship("TeamProfileAccess", back_populates="team_member", cascade="all, delete-orphan")
+    __table_args__ = (UniqueConstraint('team_id', 'user_id', name='_team_user_uc'),)
+
+class TeamProfileAccess(Base):
+    __tablename__ = "team_profile_access"
+    id = Column(Integer, primary_key=True)
+    team_member_id = Column(Integer, ForeignKey("team_members.id", ondelete="CASCADE"), nullable=False)
+    profile_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    team_member = relationship("TeamMember", back_populates="profile_accesses")
+    profile = relationship("User", foreign_keys=[profile_user_id])
+
+class ManagedProfile(Base):
+    __tablename__ = "managed_profiles"
+    id = Column(Integer, primary_key=True)
+    manager_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    profile_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    manager = relationship("User", foreign_keys=[manager_user_id], back_populates="managed_profiles")
+    profile = relationship("User", foreign_keys=[profile_user_id])
+    __table_args__ = (UniqueConstraint('manager_user_id', 'profile_user_id', name='_manager_profile_uc'),)
+
+class LoginHistory(Base):
+    __tablename__ = "login_history"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    timestamp = Column(DateTime, default=datetime.datetime.utcnow, index=True)
+    ip_address = Column(String, nullable=True)
+    user_agent = Column(Text, nullable=True)
+    user = relationship("User")
+
+# --- backend/app\db\models\__init__.py ---
+
+# --- backend/app/db/models/__init__.py ---
+
+# Этот файл собирает все модели из подмодулей в один неймспейс app.db.models
+# Это позволяет использовать привычный импорт: from app.db.models import User
+
+from .analytics import *
+from .payment import *
+from .shared import *
+from .task import *
+from .user import *
 
 # --- backend/app\repositories\base.py ---
 
@@ -5500,7 +5989,7 @@ from redis.asyncio.lock import Lock
 from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 
-from app.db.models import Scenario, User, TaskHistory, ScheduledPost, ScheduledPostStatus, Automation
+from app.db.models import User, TaskHistory, ScheduledPost, ScheduledPostStatus, Automation
 from app.services.event_emitter import RedisEventEmitter
 from app.services.feed_service import FeedService
 from app.services.incoming_request_service import IncomingRequestService
@@ -5572,7 +6061,6 @@ class BaseTaskWithContext(Task):
             ServiceClass, method_name, ParamsModel = TASK_CONFIG_MAP[TaskKey(task_name_key)]
             
             try:
-                # Валидация параметров через Pydantic-модель
                 params = ParamsModel(**kwargs)
             except Exception as e:
                 raise UserActionException(f"Неверные параметры для задачи: {e}")
@@ -5583,28 +6071,36 @@ class BaseTaskWithContext(Task):
 
             service_instance = ServiceClass(db=self.session, user=self.user, emitter=self.emitter)
             
-            # В сервисы теперь передается строго типизированный Pydantic-объект
             await getattr(service_instance, method_name)(params)
             
             self.task_history.status = "SUCCESS"
             self.task_history.result = "Задача успешно выполнена."
 
         except VKAuthError as e:
-            redis_lock_client = AsyncRedis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/2")
-            auth_error_key = f"auth_error_count:{self.user.id}"
-            error_count = await redis_lock_client.incr(auth_error_key)
-            await redis_lock_client.expire(auth_error_key, 3600)
+            # УЛУЧШЕНИЕ: Критическая обработка ошибки авторизации.
+            # Ошибка токена не является временной, поэтому нет смысла в повторных попытках.
+            # Мы немедленно останавливаем все автоматизации пользователя и отправляем
+            # критическое уведомление, чтобы он мог сразу принять меры.
+            log.error("task_runner.auth_error_critical", user_id=self.user.id, error=str(e))
             
-            if error_count >= 3:
-                log.error("task_runner.auth_error_persistent", user_id=self.user.id, error=str(e))
-                await self.emitter.send_system_notification(self.session, "Критическая ошибка авторизации VK. Ваш токен недействителен. Все автоматизации остановлены. Пожалуйста, войдите в систему заново.", "error")
-                await self.session.execute(update(Automation).where(Automation.user_id == self.user.id).values(is_active=False))
-            else:
-                 log.warn("task_runner.auth_error_transient", user_id=self.user.id, error=str(e), attempt=error_count)
-                 await self.emitter.send_system_notification(self.session, "Произошла ошибка авторизации VK. Если ошибка повторится, автоматизации будут остановлены.", "warning")
-
-            await redis_lock_client.close()
-            raise e 
+            # Отправляем системное уведомление через WebSocket, которое будет видно в UI
+            await self.emitter.send_system_notification(
+                self.session, 
+                "Критическая ошибка: ваш токен VK недействителен. Все автоматизации остановлены. Пожалуйста, выйдите и войдите в систему заново, чтобы обновить токен.",
+                "error"
+            )
+            
+            # Деактивируем все автоматизации пользователя в базе данных
+            deactivate_stmt = update(Automation).where(Automation.user_id == self.user.id).values(is_active=False)
+            await self.session.execute(deactivate_stmt)
+            
+            # "Проваливаем" текущую задачу с информативным сообщением
+            self.task_history.status = "FAILURE"
+            self.task_history.result = f"Ошибка авторизации VK. Токен невалиден. Автоматизации остановлены."
+            await self.session.commit() # Сохраняем изменения до того, как выбросить исключение
+            
+            # Перевыбрасываем исключение, чтобы Celery корректно обработал его как on_failure
+            raise e
 
         except (VKRateLimitError, VKAPIError) as e:
             retry_delay = 60 * (self.request.retries + 1)
@@ -5631,9 +6127,12 @@ class BaseTaskWithContext(Task):
             task_history_id = kwargs.get('task_history_id')
             if not await self._setup_context(task_history_id): return
             
-            self.task_history.status = "FAILURE"
-            self.task_history.result = f"Задача провалена: {exc!r}"
-            await self.session.commit()
+            # Если статус уже FAILURE (как в случае с VKAuthError), не перезаписываем его
+            if self.task_history.status != "FAILURE":
+                self.task_history.status = "FAILURE"
+                self.task_history.result = f"Задача провалена: {exc!r}"
+                await self.session.commit()
+
             await self.emitter.send_task_status_update(status="FAILURE", result=self.task_history.result, task_name=self.task_history.task_name, created_at=self.task_history.created_at)
             await self._teardown_context()
         
@@ -5728,9 +6227,12 @@ def publish_scheduled_post(self: Task, post_id: int):
             vk_api = VKAPI(access_token=vk_token)
 
             try:
+                # УЛУЧШЕНИЕ: Убедимся, что owner_id передается как integer
+                owner_id = int(post.vk_profile_id)
+                
                 result = await vk_api.wall_post(
-                    owner_id=post.vk_profile_id,
-                    message=post.post_text,
+                    owner_id=owner_id,
+                    message=post.post_text or "", # Передаем пустую строку, если текста нет
                     attachments=",".join(post.attachments or [])
                 )
                 post.status = ScheduledPostStatus.published

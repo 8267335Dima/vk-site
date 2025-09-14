@@ -3,10 +3,15 @@ services:
     image: postgres:16-alpine
     container_name: social_pilot_postgres_prod
     env_file: ./.env
+    # ДОБАВЛЕНО: Переменная для имени тестовой БД
+    environment:
+      - POSTGRES_DB_TEST=test_db
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data_prod:/var/lib/postgresql/data
+      # ДОБАВЛЕНО: Монтируем скрипт для создания тестовой БД
+      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
     restart: always
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
@@ -35,20 +40,20 @@ services:
       dockerfile: Dockerfile
     container_name: social_pilot_backend_prod
     env_file: ./.env
-    ports: 
+    ports:
       - "8000:8000"
-    # --- ИСПРАВЛЕНИЕ: Используем два тома ---
     volumes:
-      # 1. Монтируем код для live-reload разработки
-      - ./backend:/app
-      # 2. Используем именованный том, чтобы сохранить .venv из образа
-      #    и не дать ему перезаписаться локальной папкой
-      - venv_data:/app/.venv
+      - ./backend/app:/app/app
+      - ./backend/alembic.ini:/app/alembic.ini
+      - ./backend/migrations:/app/migrations
+      - ./backend/pyproject.toml:/app/pyproject.toml
+      - ./backend/poetry.lock:/app/poetry.lock
+      - ./backend/tests:/app/tests
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
     command: >
-      sh -c "/app/.venv/bin/alembic upgrade head && /app/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000"
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     restart: always
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
@@ -66,9 +71,10 @@ services:
     depends_on:
       - redis
       - backend
-    # --- ИСПРАВЛЕНИЕ: Вызываем celery напрямую из venv ---
+    volumes:
+      - ./backend/app:/app/app
     command: >
-      /app/.venv/bin/celery -A app.celery_worker.celery_app worker 
+      celery -A app.celery_worker.celery_app worker 
       --loglevel=info -c 10 -Q high_priority,default,low_priority
     restart: always
 
@@ -81,8 +87,10 @@ services:
     depends_on:
       - redis
       - backend
+    volumes:
+      - ./backend/app:/app/app
     command: >
-      /app/.venv/bin/celery -A app.celery_worker.celery_app beat 
+      celery -A app.celery_worker.celery_app beat 
       --loglevel=info 
       --scheduler=sqlalchemy_celery_beat.schedulers:DatabaseScheduler
     restart: always
@@ -100,7 +108,7 @@ services:
     depends_on:
       - backend
     restart: always
-  
+
   loki:
     image: grafana/loki:latest
     container_name: social_pilot_loki_prod
@@ -143,8 +151,10 @@ services:
     env_file: ./.env
     depends_on:
       - redis
+    volumes:
+      - ./backend/app:/app/app
     command: >
-      /app/.venv/bin/celery -A app.celery_worker.celery_app flower 
+      celery -A app.celery_worker.celery_app flower 
       --broker=redis://${REDIS_HOST}:${REDIS_PORT}/0
       --persistent=True --db=/home/appuser/flower.db
     restart: always
@@ -153,4 +163,3 @@ volumes:
   postgres_data_prod: {}
   redis_data_prod: {}
   grafana_data_prod: {}
-  venv_data: {}

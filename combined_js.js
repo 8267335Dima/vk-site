@@ -184,7 +184,7 @@ root.render(
 // --- frontend/src\app\store\auth.store.js ---
 
 import { toast } from 'react-hot-toast';
-import { switchProfile } from '@/shared/api/api';
+import { switchProfile } from '@/shared/api';
 import { queryClient } from '@/shared/api/queryClient';
 
 export const createAuthSlice = (set, get) => ({
@@ -311,12 +311,13 @@ import { motion } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
 
+// УЛУЧШЕНИЕ: Заменяем отсутствующую иконку SiMir на надежную RiBankCardFill
+import { FaCcVisa, FaCcMastercard } from 'react-icons/fa';
+import { RiBankCardFill } from 'react-icons/ri'; // <-- ИЗМЕНЕНИЕ ЗДЕСЬ
+
 import { useCurrentUser } from '@/shared/lib/hooks/useCurrentUser';
-import { createPayment, fetchAvailablePlans } from '@/shared/api/api';
+import { createPayment, fetchAvailablePlans } from '@/shared/api';
 import PlanCard from './components/PlanCard';
-import { ReactComponent as VisaLogo } from '@/shared/assets/icons/visa.svg';
-import { ReactComponent as MastercardLogo } from '@/shared/assets/icons/mastercard.svg';
-import { ReactComponent as MirLogo } from '@/shared/assets/icons/mir.svg';
 
 const periodOptions = [
   { months: 1, label: '1 месяц' },
@@ -442,12 +443,11 @@ export default function BillingPage() {
           {isLoading
             ? Array.from(new Array(3)).map((_, index) => (
                 <Grid item xs={12} md={4} key={index}>
-                  {' '}
                   <Skeleton
                     variant="rounded"
                     height={600}
                     sx={{ borderRadius: 4 }}
-                  />{' '}
+                  />
                 </Grid>
               ))
             : plansData?.plans.map((plan) => (
@@ -500,10 +500,16 @@ export default function BillingPage() {
               <Typography variant="body2" color="text.secondary">
                 Безопасная оплата:
               </Typography>
-              <Stack direction="row" spacing={2} alignItems="center">
-                <VisaLogo height={24} />
-                <MastercardLogo height={24} />
-                <MirLogo height={24} />
+              <Stack
+                direction="row"
+                spacing={2}
+                alignItems="center"
+                sx={{ color: 'text.secondary', fontSize: '28px' }}
+              >
+                <FaCcVisa />
+                <FaCcMastercard />
+                {/* ИСПРАВЛЕНИЕ: Используем новую иконку */}
+                <RiBankCardFill title="МИР" />
               </Stack>
             </Stack>
           </Paper>
@@ -998,7 +1004,7 @@ import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { motion } from 'framer-motion';
 
-import { fetchActivityStats } from '@/shared/api/api';
+import { fetchActivityStats } from '@/shared/api';
 
 const CustomTooltip = ({ active, payload, label }) => {
   if (active && payload && payload.length) {
@@ -1228,7 +1234,7 @@ import { useQuery } from '@tanstack/react-query';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { motion } from 'framer-motion';
 
-import { fetchAudienceAnalytics } from '@/shared/api/api';
+import { fetchAudienceAnalytics } from '@/shared/api';
 
 const CustomTooltip = ({ active, payload, label }) => {
   if (active && payload && payload.length) {
@@ -1489,7 +1495,7 @@ import {
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
 
-import { updateAutomation } from '@/shared/api/api';
+import { updateAutomation } from '@/shared/api';
 import {
   CommonFiltersSettings,
   RemoveFriendsFilters,
@@ -1772,7 +1778,7 @@ import { useTheme } from '@mui/material/styles';
 import { motion } from 'framer-motion';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 
-import { fetchFriendRequestConversion } from '@/shared/api/api';
+import { fetchFriendRequestConversion } from '@/shared/api';
 
 const FriendRequestConversionWidget = () => {
   const theme = useTheme();
@@ -1932,7 +1938,7 @@ import {
 import { useQuery } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 
-import { fetchPostActivityHeatmap } from '@/shared/api/api';
+import { fetchPostActivityHeatmap } from '@/shared/api';
 
 const daysOfWeek = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 const hoursOfDay = Array.from({ length: 24 }, (_, i) =>
@@ -2108,7 +2114,7 @@ import {
   fetchFilterPresets,
   createFilterPreset,
   deleteFilterPreset,
-} from '@/shared/api/api';
+} from '@/shared/api';
 
 const PresetManager = ({ actionKey, currentFilters, onApply }) => {
   const queryClient = useQueryClient();
@@ -2288,7 +2294,7 @@ import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import { motion } from 'framer-motion';
 
-import { fetchProfileGrowth } from '@/shared/api/api';
+import { fetchProfileGrowth } from '@/shared/api';
 
 const CustomTooltip = ({ active, payload, label }) => {
   if (active && payload && payload.length) {
@@ -2446,7 +2452,7 @@ import RssFeedIcon from '@mui/icons-material/RssFeed';
 import PhotoLibraryIcon from '@mui/icons-material/PhotoLibrary';
 import ArticleIcon from '@mui/icons-material/Article';
 
-import { fetchProfileSummary } from '@/shared/api/api';
+import { fetchProfileSummary } from '@/shared/api';
 import StatCard from '@/shared/ui/StatCard/StatCard';
 
 const ProfileSummaryWidget = () => {
@@ -2537,7 +2543,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 
-import { fetchProxies, addProxy, deleteProxy } from '@/shared/api/api';
+import { fetchProxies, addProxy, deleteProxy } from '@/shared/api';
 
 const ProxyManagerModal = ({ open, onClose }) => {
   const queryClient = useQueryClient();
@@ -2703,7 +2709,7 @@ import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import SendIcon from '@mui/icons-material/Send';
 import GroupRemoveIcon from '@mui/icons-material/GroupRemove';
 
-import { fetchTaskHistory, cancelTask, retryTask } from '@/shared/api/api';
+import { fetchTaskHistory, cancelTask, retryTask } from '@/shared/api';
 import TaskParametersViewer from './TaskParametersViewer';
 
 const statusMap = {
@@ -3202,7 +3208,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
 import { motion } from 'framer-motion';
 
-import { fetchAutomations, updateAutomation } from '@/shared/api/api';
+import { fetchAutomations, updateAutomation } from '@/shared/api';
 import { content } from '@/shared/config/content';
 import { useFeatureFlag } from '@/shared/lib/hooks/useFeatureFlag';
 
@@ -3442,7 +3448,7 @@ import ShutterSpeedIcon from '@mui/icons-material/ShutterSpeed';
 import SlowMotionVideoIcon from '@mui/icons-material/SlowMotionVideo';
 
 import { useFeatureFlag } from '@/shared/lib/hooks/useFeatureFlag';
-import { updateUserDelayProfile } from '@/shared/api/api';
+import { updateUserDelayProfile } from '@/shared/api'; // Используем новый центральный экспорт
 
 const pulseAnimation = keyframes`
   0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(50, 215, 75, 0.7); }
@@ -3450,7 +3456,7 @@ const pulseAnimation = keyframes`
   100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(50, 215, 75, 0); }
 `;
 
-const ConnectionStatusIndicator = ({ status }) => {
+const ConnectionStatusIndicator = React.memo(({ status }) => {
   const statusConfig = {
     'На связи': {
       label: 'Онлайн',
@@ -3487,8 +3493,11 @@ const ConnectionStatusIndicator = ({ status }) => {
       icon={<span />}
     />
   );
-};
+});
+ConnectionStatusIndicator.displayName = 'ConnectionStatusIndicator';
 
+// УЛУЧШЕНИЕ: Оборачиваем всю карточку в React.memo, так как она получает много данных,
+// но меняется нечасто. Это предотвратит ее ререндер при обновлении других виджетов.
 export const UserProfileCard = React.memo(
   ({ userInfo, connectionStatus, onProxyManagerOpen }) => {
     const queryClient = useQueryClient();
@@ -3808,7 +3817,8 @@ import React from 'react';
 import { Stack, Divider } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
 
-import { fetchTaskInfo } from '@/shared/api/api';
+// ИСПРАВЛЕНИЕ: Путь изменен
+import { fetchTaskInfo } from '@/shared/api';
 import { content } from '@/shared/config/content';
 import { useCurrentUser } from '@/shared/lib/hooks/useCurrentUser';
 
@@ -5244,6 +5254,111 @@ const FeaturesSection = () => {
 export default FeaturesSection;
 
 
+// --- frontend/src\pages\home\components\HeroSection.js ---
+
+import React from 'react';
+import { Container, Typography, Button, Stack } from '@mui/material';
+import { Link as RouterLink } from 'react-router-dom';
+import { motion } from 'framer-motion';
+
+const HeroSection = () => {
+  return (
+    <Container maxWidth="lg" sx={{ textAlign: 'center' }}>
+      <motion.div
+        initial="hidden"
+        animate="visible"
+        variants={{
+          hidden: { opacity: 0 },
+          visible: { opacity: 1, transition: { staggerChildren: 0.2 } },
+        }}
+      >
+        <motion.div
+          variants={{
+            hidden: { opacity: 0, y: -20 },
+            visible: { opacity: 1, y: 0, transition: { duration: 0.7 } },
+          }}
+        >
+          <Typography
+            variant="h2"
+            component="h1"
+            sx={{
+              fontWeight: 800,
+              maxWidth: '950px',
+              mx: 'auto',
+              background: (theme) =>
+                `linear-gradient(45deg, ${theme.palette.text.primary} 60%, ${theme.palette.secondary.main} 100%)`,
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+            }}
+          >
+            Платформа для органического роста и автоматизации SMM-задач
+            ВКонтакте
+          </Typography>
+        </motion.div>
+        <motion.div
+          variants={{
+            hidden: { opacity: 0, y: 20 },
+            visible: {
+              opacity: 1,
+              y: 0,
+              transition: { duration: 0.7, delay: 0.2 },
+            },
+          }}
+        >
+          <Typography
+            variant="h6"
+            color="text.secondary"
+            paragraph
+            sx={{ mt: 3, mb: 4, maxWidth: '750px', mx: 'auto' }}
+          >
+            Zenith эмулирует поведенческие факторы для естественного увеличения
+            охватов и автоматизирует рутинные процессы. Сосредоточьтесь на
+            контенте, а мы позаботимся о его эффективном продвижении.
+          </Typography>
+        </motion.div>
+        <motion.div
+          variants={{
+            hidden: { scale: 0.8, opacity: 0 },
+            visible: {
+              scale: 1,
+              opacity: 1,
+              transition: { duration: 0.5, delay: 0.4 },
+            },
+          }}
+        >
+          <Stack
+            direction={{ xs: 'column', sm: 'row' }}
+            spacing={2}
+            justifyContent="center"
+          >
+            <Button
+              variant="contained"
+              size="large"
+              component={RouterLink}
+              to="/login"
+              sx={{ py: 1.5, px: 5, fontSize: '1.1rem' }}
+            >
+              Начать бесплатно (14 дней)
+            </Button>
+            <Button
+              variant="outlined"
+              size="large"
+              component={RouterLink}
+              to="/billing"
+              sx={{ py: 1.5, px: 5, fontSize: '1.1rem' }}
+            >
+              Смотреть тарифы
+            </Button>
+          </Stack>
+        </motion.div>
+      </motion.div>
+    </Container>
+  );
+};
+
+export default HeroSection;
+
+
 // --- frontend/src\pages\home\components\PrinciplesSection.js ---
 
 import React from 'react';
@@ -5616,7 +5731,7 @@ import {
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import { motion } from 'framer-motion';
 
-import { loginWithVkToken } from '@/shared/api/api';
+import { loginWithVkToken } from '@/shared/api';
 import { useStoreActions } from '@/app/store';
 import { content } from '@/shared/config/content';
 
@@ -5793,7 +5908,7 @@ import {
   createPost,
   updatePost,
   deletePost,
-} from '@/shared/api/api';
+} from '@/shared/api';
 
 const PostEditorModal = ({ open, onClose, post, selectedDate }) => {
   const queryClient = useQueryClient();
@@ -5996,7 +6111,7 @@ import { styled, alpha } from '@mui/material/styles';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
 
-import { fetchPosts, updatePost } from '@/shared/api/api';
+import { fetchPosts, updatePost } from '@/shared/api';
 import PostEditorModal from './PostEditorModal';
 
 const StyledCalendarWrapper = styled(Box)(({ theme }) => ({
@@ -6183,7 +6298,8 @@ import { toast } from 'react-hot-toast';
 import cronstrue from 'cronstrue/i18n';
 import { useNavigate } from 'react-router-dom';
 
-import { fetchScenarios, deleteScenario } from '@/shared/api/api';
+// ИСПРАВЛЕНИЕ: Путь к API изменен на правильный
+import { fetchScenarios, deleteScenario } from '@/shared/api';
 
 const ScenarioCard = ({ scenario, onEdit, onDelete }) => {
   return (
@@ -6435,7 +6551,7 @@ import {
   fetchScenarioById,
   createScenario,
   updateScenario,
-} from '@/shared/api/api';
+} from '@/shared/api';
 import { CronBuilder } from '../components/CronBuilder';
 import Sidebar from './Sidebar';
 import ActionNode from './nodes/ActionNode';
@@ -6976,7 +7092,7 @@ import {
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
 
-import { updateMemberAccess } from '@/shared/api/api';
+import { updateMemberAccess } from '@/shared/api';
 
 const AccessControlModal = ({ open, onClose, member }) => {
   const queryClient = useQueryClient();
@@ -7085,7 +7201,7 @@ import {
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
 
-import { inviteTeamMember } from '@/shared/api/api';
+import { inviteTeamMember } from '@/shared/api';
 
 const InviteMemberModal = ({ open, onClose }) => {
   const queryClient = useQueryClient();
@@ -7168,7 +7284,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
 import { toast } from 'react-hot-toast';
 
-import { fetchMyTeam, removeTeamMember } from '@/shared/api/api';
+import { fetchMyTeam, removeTeamMember } from '@/shared/api';
 import AccessControlModal from './AccessControlModal';
 import InviteMemberModal from './InviteMemberModal';
 
@@ -7315,11 +7431,82 @@ const TeamPage = () => {
 export default TeamPage;
 
 
-// --- frontend/src\shared\api\api.js ---
+// --- frontend/src\shared\api\analytics.js ---
 
+import { apiClient } from './index';
+
+export const fetchAudienceAnalytics = () =>
+  apiClient.get('/api/v1/analytics/audience').then((res) => res.data);
+
+export const fetchProfileGrowth = (days = 30) =>
+  apiClient
+    .get(`/api/v1/analytics/profile-growth?days=${days}`)
+    .then((res) => res.data);
+
+export const fetchProfileSummary = () =>
+  apiClient.get('/api/v1/analytics/profile-summary').then((res) => res.data);
+
+export const fetchFriendRequestConversion = () =>
+  apiClient
+    .get('/api/v1/analytics/friend-request-conversion')
+    .then((res) => res.data);
+
+export const fetchPostActivityHeatmap = () =>
+  apiClient
+    .get('/api/v1/analytics/post-activity-heatmap')
+    .then((res) => res.data);
+
+
+// --- frontend/src\shared\api\auth.js ---
+
+import { apiClient } from './index';
+
+export const loginWithVkToken = (vkToken) =>
+  apiClient.post('/api/v1/auth/vk', { vk_token: vkToken });
+
+export const switchProfile = (profileId) =>
+  apiClient
+    .post('/api/v1/auth/switch-profile', { profile_id: profileId })
+    .then((res) => res.data);
+
+
+// --- frontend/src\shared\api\automations.js ---
+
+import { apiClient } from './index';
+
+export const fetchAutomations = () =>
+  apiClient.get('/api/v1/automations').then((res) => res.data);
+
+export const updateAutomation = ({ automationType, isActive, settings }) =>
+  apiClient
+    .post(`/api/v1/automations/${automationType}`, {
+      is_active: isActive,
+      settings: settings || {},
+    })
+    .then((res) => res.data);
+
+
+// --- frontend/src\shared\api\billing.js ---
+
+import { apiClient } from './index';
+
+export const fetchAvailablePlans = () =>
+  apiClient.get('/api/v1/billing/plans').then((res) => res.data);
+
+export const createPayment = (planId, months) =>
+  apiClient
+    .post('/api/v1/billing/create-payment', { plan_id: planId, months })
+    .then((res) => res.data);
+
+
+// --- frontend/src\shared\api\index.js ---
+
+// РЕФАКТОРИНГ: Этот файл теперь является точкой входа,
+// которая собирает и экспортирует все API-методы и клиент.
 import axios from 'axios';
 import { useStore } from '@/app/store';
 
+// Базовый клиент остается здесь, он общий для всех.
 export const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '',
 });
@@ -7332,150 +7519,47 @@ apiClient.interceptors.request.use((config) => {
   return config;
 });
 
-// Auth
-export const loginWithVkToken = (vkToken) =>
-  apiClient.post('/api/v1/auth/vk', { vk_token: vkToken });
-export const switchProfile = (profileId) =>
-  apiClient
-    .post('/api/v1/auth/switch-profile', { profile_id: profileId })
-    .then((res) => res.data);
+// Экспортируем все функции из разделенных модулей
+export * from './auth';
+export * from './users';
+export * from './tasks';
+export * from './analytics';
+export * from './stats';
+export * from './automations';
+export * from './billing';
+export * from './scenarios';
+export * from './notifications';
+export * from './proxies';
+export * from './teams';
+export * from './posts';
 
-// Users
-export const fetchUserInfo = () => apiClient.get('/api/v1/users/me'); // Возвращаем весь response для useQuery
-export const fetchUserLimits = () =>
-  apiClient.get('/api/v1/users/me/limits').then((res) => res.data);
-export const updateUserDelayProfile = (profile) =>
-  apiClient
-    .put('/api/v1/users/me/delay-profile', profile)
-    .then((res) => res.data);
-export const fetchTaskInfo = (taskKey) =>
-  apiClient
-    .get(`/api/v1/users/task-info?task_key=${taskKey}`)
-    .then((res) => res.data);
-export const getManagedProfiles = () =>
-  apiClient.get('/api/v1/users/me/managed-profiles').then((res) => res.data);
-export const fetchFilterPresets = (actionType) =>
-  apiClient
-    .get(`/api/v1/users/me/filter-presets?action_type=${actionType}`)
-    .then((res) => res.data);
-export const createFilterPreset = (data) =>
-  apiClient
-    .post('/api/v1/users/me/filter-presets', data)
-    .then((res) => res.data);
-export const deleteFilterPreset = (id) =>
-  apiClient.delete(`/api/v1/users/me/filter-presets/${id}`);
 
-// Tasks
-export const runTask = (taskKey, params) =>
-  apiClient
-    .post(`/api/v1/tasks/run/${taskKey}`, params)
-    .then((res) => res.data);
-export const fetchTaskHistory = ({ pageParam = 1 }, filters) => {
-  const params = new URLSearchParams({ page: pageParam, size: 25 });
-  if (filters.status) params.append('status', filters.status);
-  return apiClient
-    .get(`/api/v1/tasks/history?${params.toString()}`)
-    .then((res) => res.data);
-};
-export const cancelTask = (taskHistoryId) =>
-  apiClient
-    .post(`/api/v1/tasks/${taskHistoryId}/cancel`)
-    .then((res) => res.data);
-export const retryTask = (taskHistoryId) =>
-  apiClient
-    .post(`/api/v1/tasks/${taskHistoryId}/retry`)
-    .then((res) => res.data);
+// --- frontend/src\shared\api\notifications.js ---
 
-// Stats
-export const fetchActivityStats = (days = 7) =>
-  apiClient.get(`/api/v1/stats/activity?days=${days}`).then((res) => res.data);
+import { apiClient } from './index';
 
-// Analytics
-export const fetchAudienceAnalytics = () =>
-  apiClient.get('/api/v1/analytics/audience').then((res) => res.data);
-export const fetchProfileGrowth = (days = 30) =>
-  apiClient
-    .get(`/api/v1/analytics/profile-growth?days=${days}`)
-    .then((res) => res.data);
-export const fetchProfileSummary = () =>
-  apiClient.get('/api/v1/analytics/profile-summary').then((res) => res.data);
-export const fetchFriendRequestConversion = () =>
-  apiClient
-    .get('/api/v1/analytics/friend-request-conversion')
-    .then((res) => res.data);
-export const fetchPostActivityHeatmap = () =>
-  apiClient
-    .get('/api/v1/analytics/post-activity-heatmap')
-    .then((res) => res.data);
-
-// Automations
-export const fetchAutomations = () =>
-  apiClient.get('/api/v1/automations').then((res) => res.data);
-export const updateAutomation = ({ automationType, isActive, settings }) =>
-  apiClient
-    .post(`/api/v1/automations/${automationType}`, {
-      is_active: isActive,
-      settings: settings || {},
-    })
-    .then((res) => res.data);
-
-// Billing
-export const fetchAvailablePlans = () =>
-  apiClient.get('/api/v1/billing/plans').then((res) => res.data);
-export const createPayment = (planId, months) =>
-  apiClient
-    .post('/api/v1/billing/create-payment', { plan_id: planId, months })
-    .then((res) => res.data);
-
-// Scenarios
-export const fetchScenarios = () =>
-  apiClient.get('/api/v1/scenarios').then((res) => res.data);
-export const fetchScenarioById = (id) =>
-  apiClient.get(`/api/v1/scenarios/${id}`).then((res) => res.data);
-export const createScenario = (data) =>
-  apiClient.post('/api/v1/scenarios', data).then((res) => res.data);
-export const updateScenario = (id, data) =>
-  apiClient.put(`/api/v1/scenarios/${id}`, data).then((res) => res.data);
-export const deleteScenario = (id) =>
-  apiClient.delete(`/api/v1/scenarios/${id}`);
-export const fetchAvailableConditions = () =>
-  apiClient
-    .get('/api/v1/scenarios/available-conditions')
-    .then((res) => res.data);
-
-// Notifications
 export const fetchNotifications = () =>
   apiClient.get('/api/v1/notifications').then((res) => res.data);
+
 export const markNotificationsAsRead = () =>
   apiClient.post('/api/v1/notifications/read');
 
-// Proxies
-export const fetchProxies = () =>
-  apiClient.get('/api/v1/proxies').then((res) => res.data);
-export const addProxy = (proxyUrl) =>
-  apiClient
-    .post('/api/v1/proxies', { proxy_url: proxyUrl })
-    .then((res) => res.data);
-export const deleteProxy = (id) => apiClient.delete(`/api/v1/proxies/${id}`);
 
-// Teams
-export const fetchMyTeam = () =>
-  apiClient.get('/api/v1/teams/my-team').then((res) => res.data);
-export const inviteTeamMember = (vkId) =>
-  apiClient.post('/api/v1/teams/my-team/members', { user_vk_id: vkId });
-export const removeTeamMember = (memberId) =>
-  apiClient.delete(`/api/v1/teams/my-team/members/${memberId}`);
-export const updateMemberAccess = (memberId, accesses) =>
-  apiClient.put(`/api/v1/teams/my-team/members/${memberId}/access`, accesses);
+// --- frontend/src\shared\api\posts.js ---
 
-// Posts
+import { apiClient } from './index';
+
 export const fetchPosts = () =>
   apiClient.get('/api/v1/posts').then((res) => res.data);
+
 export const createPost = (data) =>
   apiClient.post('/api/v1/posts', data).then((res) => res.data);
+
 export const updatePost = (id, data) =>
   apiClient.put(`/api/v1/posts/${id}`, data).then((res) => res.data);
+
 export const deletePost = (id) => apiClient.delete(`/api/v1/posts/${id}`);
+
 export const uploadImageForPost = (formData) =>
   apiClient
     .post('/api/v1/posts/upload-image', formData, {
@@ -7484,6 +7568,21 @@ export const uploadImageForPost = (formData) =>
       },
     })
     .then((res) => res.data);
+
+
+// --- frontend/src\shared\api\proxies.js ---
+
+import { apiClient } from './index';
+
+export const fetchProxies = () =>
+  apiClient.get('/api/v1/proxies').then((res) => res.data);
+
+export const addProxy = (proxyUrl) =>
+  apiClient
+    .post('/api/v1/proxies', { proxy_url: proxyUrl })
+    .then((res) => res.data);
+
+export const deleteProxy = (id) => apiClient.delete(`/api/v1/proxies/${id}`);
 
 
 // --- frontend/src\shared\api\queryClient.js ---
@@ -7500,15 +7599,127 @@ export const queryClient = new QueryClient({
 });
 
 
+// --- frontend/src\shared\api\scenarios.js ---
+
+import { apiClient } from './index';
+
+export const fetchScenarios = () =>
+  apiClient.get('/api/v1/scenarios').then((res) => res.data);
+
+export const fetchScenarioById = (id) =>
+  apiClient.get(`/api/v1/scenarios/${id}`).then((res) => res.data);
+
+export const createScenario = (data) =>
+  apiClient.post('/api/v1/scenarios', data).then((res) => res.data);
+
+export const updateScenario = (id, data) =>
+  apiClient.put(`/api/v1/scenarios/${id}`, data).then((res) => res.data);
+
+export const deleteScenario = (id) =>
+  apiClient.delete(`/api/v1/scenarios/${id}`);
+
+export const fetchAvailableConditions = () =>
+  apiClient
+    .get('/api/v1/scenarios/available-conditions')
+    .then((res) => res.data);
+
+
+// --- frontend/src\shared\api\stats.js ---
+
+import { apiClient } from './index';
+
+export const fetchActivityStats = (days = 7) =>
+  apiClient.get(`/api/v1/stats/activity?days=${days}`).then((res) => res.data);
+
+
+// --- frontend/src\shared\api\tasks.js ---
+
+import { apiClient } from './index';
+
+export const runTask = (taskKey, params) =>
+  apiClient
+    .post(`/api/v1/tasks/run/${taskKey}`, params)
+    .then((res) => res.data);
+
+export const fetchTaskHistory = ({ pageParam = 1 }, filters) => {
+  const params = new URLSearchParams({ page: pageParam, size: 25 });
+  if (filters.status) params.append('status', filters.status);
+  return apiClient
+    .get(`/api/v1/tasks/history?${params.toString()}`)
+    .then((res) => res.data);
+};
+
+export const cancelTask = (taskHistoryId) =>
+  apiClient
+    .post(`/api/v1/tasks/${taskHistoryId}/cancel`)
+    .then((res) => res.data);
+
+export const retryTask = (taskHistoryId) =>
+  apiClient
+    .post(`/api/v1/tasks/${taskHistoryId}/retry`)
+    .then((res) => res.data);
+
+export const fetchTaskInfo = (taskKey) =>
+  apiClient
+    .get(`/api/v1/users/task-info?task_key=${taskKey}`)
+    .then((res) => res.data);
+
+
+// --- frontend/src\shared\api\teams.js ---
+
+import { apiClient } from './index';
+
+export const fetchMyTeam = () =>
+  apiClient.get('/api/v1/teams/my-team').then((res) => res.data);
+
+export const inviteTeamMember = (vkId) =>
+  apiClient.post('/api/v1/teams/my-team/members', { user_vk_id: vkId });
+
+export const removeTeamMember = (memberId) =>
+  apiClient.delete(`/api/v1/teams/my-team/members/${memberId}`);
+
+export const updateMemberAccess = (memberId, accesses) =>
+  apiClient.put(`/api/v1/teams/my-team/members/${memberId}/access`, accesses);
+
+
+// --- frontend/src\shared\api\users.js ---
+
+import { apiClient } from './index';
+
+export const fetchUserInfo = () => apiClient.get('/api/v1/users/me');
+export const fetchUserLimits = () =>
+  apiClient.get('/api/v1/users/me/limits').then((res) => res.data);
+export const updateUserDelayProfile = (profile) =>
+  apiClient
+    .put('/api/v1/users/me/delay-profile', profile)
+    .then((res) => res.data);
+export const getManagedProfiles = () =>
+  apiClient.get('/api/v1/users/me/managed-profiles').then((res) => res.data);
+export const fetchFilterPresets = (actionType) =>
+  apiClient
+    .get(`/api/v1/users/me/filter-presets?action_type=${actionType}`)
+    .then((res) => res.data);
+export const createFilterPreset = (data) =>
+  apiClient
+    .post('/api/v1/users/me/filter-presets', data)
+    .then((res) => res.data);
+export const deleteFilterPreset = (id) =>
+  apiClient.delete(`/api/v1/users/me/filter-presets/${id}`);
+
+
 // --- frontend/src\shared\api\websocket.js ---
 
 import { toast } from 'react-hot-toast';
 import { useStore } from '@/app/store';
-import { queryClient } from './queryClient'; // Исправленный путь
+import { queryClient } from './queryClient';
 
 let socket = null;
-let reconnectInterval = 5000;
 let reconnectTimeout = null;
+
+// УЛУЧШЕНИЕ: Внедряем стратегию Exponential Backoff для переподключения
+let reconnectAttempts = 0;
+const BASE_RECONNECT_INTERVAL = 3000; // Начинаем с 3 секунд
+const MAX_RECONNECT_INTERVAL = 30000; // Максимальная задержка - 30 секунд
 
 const getSocketUrl = () => {
   const apiUrl = import.meta.env.VITE_API_BASE_URL || window.location.origin;
@@ -7517,57 +7728,65 @@ const getSocketUrl = () => {
   wsUrl.pathname = '/api/v1/ws';
   return wsUrl.toString();
 };
-// ... (весь остальной код из вашего `websocket.js` без изменений) ...
+
+const scheduleReconnect = (token) => {
+  if (reconnectTimeout) clearTimeout(reconnectTimeout);
+
+  const delay = Math.min(
+    MAX_RECONNECT_INTERVAL,
+    BASE_RECONNECT_INTERVAL * Math.pow(2, reconnectAttempts)
+  );
+
+  console.log(
+    `WebSocket: scheduling reconnect in ${delay / 1000}s (attempt ${reconnectAttempts + 1})`
+  );
+
+  reconnectTimeout = setTimeout(() => {
+    reconnectAttempts++;
+    connectWebSocket(token);
+  }, delay);
+};
 
 const handleMessage = (event) => {
   try {
     const { type, payload } = JSON.parse(event.data);
-    const { setDailyLimits } = useStore.getState().actions;
 
     switch (type) {
       case 'log':
+        // Можно добавить логику для отображения логов в UI, если потребуется
         console.log('WS Log:', payload);
         break;
       case 'stats_update':
-        setDailyLimits({
-          likes_today: payload.likes_count,
-          friends_add_today: payload.friends_added_count,
-        });
+        queryClient.invalidateQueries({ queryKey: ['userLimits'] });
         break;
       case 'task_history_update':
-        queryClient.setQueryData(['task_history'], (oldData) => {
-          if (!oldData) return oldData;
+        // Этот метод более надежен, чем setQueryData, так как он просто помечает данные как "устаревшие",
+        // а React Query сам решит, когда и как их обновить.
+        queryClient.invalidateQueries({ queryKey: ['task_history'] });
 
-          const newPages = oldData.pages.map((page) => ({
-            ...page,
-            items: page.items.map((task) =>
-              task.id === payload.task_history_id
-                ? { ...task, status: payload.status, result: payload.result }
-                : task
-            ),
-          }));
-
-          return { ...oldData, pages: newPages };
-        });
-
-        if (payload.status === 'SUCCESS') {
+        if (payload.status === 'SUCCESS' && payload.task_name) {
           toast.success(`Задача "${payload.task_name}" успешно завершена!`);
         }
-        if (payload.status === 'FAILURE') {
+        if (payload.status === 'FAILURE' && payload.task_name) {
           toast.error(
             `Задача "${payload.task_name}" провалена: ${payload.result}`,
             { duration: 8000 }
           );
         }
         break;
-      case 'new_notification':
+
+      case 'new_notification': {
+        // ИСПРАВЛЕНИЕ: Добавлены фигурные скобки для создания блока
         queryClient.invalidateQueries({ queryKey: ['notifications'] });
         const message = payload.message;
         const options = { duration: 8000 };
         if (payload.level === 'error') toast.error(message, options);
-        else if (payload.level === 'warning') toast.error(message, options);
+        else if (payload.level === 'warning')
+          toast.error(message, options); // toast.error для warning тоже хорошо, т.к. привлекает внимание
         else toast.success(message, { duration: 5000 });
         break;
+      } // ИСПРАВЛЕНИЕ: Закрывающая скобка
+
       default:
         break;
     }
@@ -7585,6 +7804,7 @@ export const connectWebSocket = (token) => {
   socket.onopen = () => {
     console.log('WebSocket connected');
     useStore.getState().actions.setConnectionStatus('На связи');
+    reconnectAttempts = 0; // Сбрасываем счетчик при успешном подключении
     if (reconnectTimeout) clearTimeout(reconnectTimeout);
   };
 
@@ -7593,12 +7813,9 @@ export const connectWebSocket = (token) => {
     socket = null;
     useStore.getState().actions.setConnectionStatus('Переподключение...');
 
-    const currentToken = useStore.getState().jwtToken;
+    const currentToken = useStore.getState().token;
     if (currentToken) {
-      reconnectTimeout = setTimeout(
-        () => connectWebSocket(currentToken),
-        reconnectInterval
-      );
+      scheduleReconnect(currentToken);
     }
   };
 
@@ -7614,7 +7831,9 @@ export const connectWebSocket = (token) => {
 
 export const disconnectWebSocket = () => {
   if (reconnectTimeout) clearTimeout(reconnectTimeout);
+  reconnectAttempts = 0;
   if (socket) {
+    socket.onclose = null;
     socket.close();
     socket = null;
     useStore.getState().actions.setConnectionStatus('Отключено');
@@ -7923,7 +8142,7 @@ export { theme };
 
 import { useState, useEffect, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { fetchTaskInfo } from '@/shared/api/api';
+import { fetchTaskInfo } from '@/shared/api';
 import { useStore } from '@/app/store';
 
 export const useActionModalState = (open, actionKey, title) => {
@@ -8015,7 +8234,7 @@ export const useActionModalState = (open, actionKey, title) => {
 // --- frontend/src\shared\lib\hooks\useActionTask.js ---
 
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { runTask } from '@/shared/api/api';
+import { runTask } from '@/shared/api';
 import { toast } from 'react-hot-toast';
 
 const getErrorMessage = (error) => {
@@ -8049,7 +8268,7 @@ export const useActionTask = (actionKey, title, onSuccessCallback) => {
 // --- frontend/src\shared\lib\hooks\useCurrentUser.js ---
 
 import { useQuery } from '@tanstack/react-query';
-import { fetchUserInfo } from '@/shared/api/api';
+import { fetchUserInfo } from '@/shared/api';
 import { useStore } from '@/app/store';
 
 export const useCurrentUser = () => {
@@ -8083,7 +8302,7 @@ export const useCurrentUser = () => {
 
 import { useState, useCallback } from 'react';
 import { toast } from 'react-hot-toast';
-import { runTask } from '@/shared/api/api';
+import { runTask } from '@/shared/api';
 
 const getErrorMessage = (error) => {
   if (typeof error?.response?.data?.detail === 'string') {
@@ -8821,7 +9040,7 @@ import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchNotifications, markNotificationsAsRead } from '@/shared/api/api';
+import { fetchNotifications, markNotificationsAsRead } from '@/shared/api';
 import { formatDistanceToNow } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -9022,7 +9241,7 @@ import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import AddIcon from '@mui/icons-material/Add';
 import { useStore, useStoreActions } from '@/app/store';
 import { useQuery } from '@tanstack/react-query';
-import { getManagedProfiles } from '@/shared/api/api';
+import { getManagedProfiles } from '@/shared/api';
 
 const ProfileSwitcher = ({ isMobile }) => {
   const { setActiveProfile } = useStoreActions();
@@ -9139,69 +9358,75 @@ import React from 'react';
 import { Paper, Typography, Box, Skeleton, alpha } from '@mui/material';
 import { motion } from 'framer-motion';
 
-const StatCard = ({ title, value, icon, isLoading, color = 'primary' }) => {
-  return (
-    <motion.div
-      whileHover={{ y: -5 }}
-      transition={{ type: 'spring', stiffness: 300 }}
-    >
-      <Paper
-        sx={{
-          p: 2.5,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 3,
-          height: '100%',
-          position: 'relative',
-          overflow: 'hidden',
-          background: (theme) =>
-            `linear-gradient(135deg, ${alpha(
-              theme.palette[color].dark,
-              0.15
-            )} 0%, ${alpha(theme.palette.background.paper, 0.15)} 100%)`,
-          borderColor: (theme) => alpha(theme.palette[color].main, 0.3),
-        }}
+// УЛУЧШЕНИЕ: Оборачиваем в React.memo, так как это чисто презентационный
+// компонент, который зависит только от своих пропсов.
+const StatCard = React.memo(
+  ({ title, value, icon, isLoading, color = 'primary' }) => {
+    return (
+      <motion.div
+        whileHover={{ y: -5 }}
+        transition={{ type: 'spring', stiffness: 300 }}
       >
-        <Box
+        <Paper
           sx={{
-            position: 'absolute',
-            right: -20,
-            bottom: -20,
-            color: `${color}.main`,
-            fontSize: '120px',
-            opacity: 0.05,
-            transform: 'rotate(-20deg)',
-            pointerEvents: 'none',
+            p: 2.5,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 3,
+            height: '100%',
+            position: 'relative',
+            overflow: 'hidden',
+            background: (theme) =>
+              `linear-gradient(135deg, ${alpha(
+                theme.palette[color].dark,
+                0.15
+              )} 0%, ${alpha(theme.palette.background.paper, 0.15)} 100%)`,
+            borderColor: (theme) => alpha(theme.palette[color].main, 0.3),
           }}
         >
-          {icon}
-        </Box>
-
-        <Box>
-          <Typography
-            variant="body1"
-            color="text.secondary"
-            sx={{ fontWeight: 500 }}
+          <Box
+            sx={{
+              position: 'absolute',
+              right: -20,
+              bottom: -20,
+              color: `${color}.main`,
+              fontSize: '120px',
+              opacity: 0.05,
+              transform: 'rotate(-20deg)',
+              pointerEvents: 'none',
+            }}
           >
-            {title}
-          </Typography>
-          {isLoading ? (
-            <Skeleton variant="text" width={80} height={40} />
-          ) : (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              key={value}
+            {icon}
+          </Box>
+
+          <Box>
+            <Typography
+              variant="body1"
+              color="text.secondary"
+              sx={{ fontWeight: 500 }}
             >
-              <Typography variant="h4" sx={{ fontWeight: 700, mt: 0.5 }}>
-                {value?.toLocaleString('ru-RU') || 0}
-              </Typography>
-            </motion.div>
-          )}
-        </Box>
-      </Paper>
-    </motion.div>
-  );
-};
+              {title}
+            </Typography>
+            {isLoading ? (
+              <Skeleton variant="text" width={80} height={40} />
+            ) : (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                key={value}
+              >
+                <Typography variant="h4" sx={{ fontWeight: 700, mt: 0.5 }}>
+                  {value?.toLocaleString('ru-RU') || 0}
+                </Typography>
+              </motion.div>
+            )}
+          </Box>
+        </Paper>
+      </motion.div>
+    );
+  }
+);
+
+StatCard.displayName = 'StatCard';
 
 export default StatCard;

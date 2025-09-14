@@ -1,11 +1,12 @@
 import datetime
 import enum
 from sqlalchemy import (
-    Column, Integer, String, DateTime, ForeignKey, BigInteger,
+    Column, ForeignKeyConstraint, Integer, String, DateTime, ForeignKey, BigInteger,
     UniqueConstraint, Boolean, JSON, Text, Enum, Index, Float
 )
 from sqlalchemy.orm import relationship
 from app.db.base import Base
+from app.db.enums import ScenarioStepType, ScheduledPostStatus
 
 class ScenarioStepType(enum.Enum):
     action = "action"
@@ -43,14 +44,35 @@ class Automation(Base):
 
 class Scenario(Base):
     __tablename__ = "scenarios"
+    
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     name = Column(String, nullable=False)
     schedule = Column(String, nullable=False)
     is_active = Column(Boolean, default=False, nullable=False)
-    first_step_id = Column(Integer, ForeignKey("scenario_steps.id", use_alter=True, name="fk_scenario_first_step"), nullable=True)
+    
+    # Столбец для хранения ID
+    first_step_id = Column(Integer, nullable=True)
+
+    # Отношения
     user = relationship("User", back_populates="scenarios")
-    steps = relationship("ScenarioStep", back_populates="scenario", cascade="all, delete-orphan", foreign_keys="[ScenarioStep.scenario_id]")
+    steps = relationship(
+        "ScenarioStep", 
+        back_populates="scenario", 
+        cascade="all, delete-orphan", 
+        foreign_keys="[ScenarioStep.scenario_id]"
+    )
+
+    # Явное объявление ограничения.
+    # Это самый чистый и надежный способ для работы с кольцевыми зависимостями.
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ['first_step_id'], 
+            ['scenario_steps.id'],
+            use_alter=True, 
+            name="fk_scenarios_first_step_id_scenario_steps"
+        ),
+    )
 
 class ScenarioStep(Base):
     __tablename__ = "scenario_steps"

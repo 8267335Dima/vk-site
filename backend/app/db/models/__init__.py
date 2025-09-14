@@ -1,24 +1,10 @@
-# РЕФАКТОРИНГ: Импортируем все модели в одном месте для удобства
-# использования SQLAlchemy и Alembic.
+# --- backend/app/db/models/__init__.py ---
 
-from .user import User, Team, TeamMember, TeamProfileAccess, ManagedProfile, LoginHistory
-from .task import (
-    TaskHistory, Automation, Scenario, ScenarioStep, ScheduledPost,
-    SentCongratulation, ActionLog
-)
-from .payment import Payment
-from .analytics import (
-    DailyStats, WeeklyStats, MonthlyStats, ProfileMetric, FriendsHistory,
-    PostActivityHeatmap
-)
-from .shared import Proxy, Notification, FilterPreset
+# Этот файл собирает все модели из подмодулей в один неймспейс app.db.models
+# Это позволяет использовать привычный импорт: from app.db.models import User
 
-__all__ = [
-    "User", "Team", "TeamMember", "TeamProfileAccess", "ManagedProfile", "LoginHistory",
-    "TaskHistory", "Automation", "Scenario", "ScenarioStep", "ScheduledPost",
-    "SentCongratulation", "ActionLog",
-    "Payment",
-    "DailyStats", "WeeklyStats", "MonthlyStats", "ProfileMetric", "FriendsHistory",
-    "PostActivityHeatmap",
-    "Proxy", "Notification", "FilterPreset",
-]
+from .analytics import *
+from .payment import *
+from .shared import *
+from .task import *
+from .user import *

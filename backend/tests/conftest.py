@@ -1,48 +1,58 @@
+# backend/tests/conftest.py
 import asyncio
 from typing import AsyncGenerator
 
 import pytest
-from fastapi.testclient import TestClient
-from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
+import pytest_asyncio
+from httpx import AsyncClient, ASGITransport
+from sqlalchemy.ext.asyncio import AsyncSession
+from asgi_lifespan import LifespanManager
+from fastapi import FastAPI
 
-from app.db.base import Base
-from app.db.session import get_db
+# --- ИСПОЛЬЗУЕМ ЗАВИСИМОСТИ ИЗ ОСНОВНОГО ПРИЛОЖЕНИЯ ---
+from app.db.session import get_db, AsyncSessionFactory
 from app.main import app
-from app.core.config import settings
+from app.api.dependencies import limiter # Импортируем лимитер для отключения
 
-# УЛУЧШЕНИЕ: Создаем отдельный движок для тестовой базы данных
-# Используем данные из pytest.ini
-test_db_url = f"postgresql+asyncpg://{settings.POSTGRES_USER}:{settings.POSTGRES_PASSWORD}@{settings.POSTGRES_SERVER}:{settings.POSTGRES_PORT}/{settings.POSTGRES_DB}"
-engine_test = create_async_engine(test_db_url, pool_pre_ping=True)
-async_session_maker = sessionmaker(engine_test, class_=AsyncSession, expire_on_commit=False)
-
-# Переопределяем зависимость get_db, чтобы тесты использовали тестовую БД
-async def override_get_async_session() -> AsyncGenerator[AsyncSession, None]:
-    async with async_session_maker() as session:
-        yield session
-
-app.dependency_overrides[get_db] = override_get_async_session
-
-@pytest.fixture(scope='session', autouse=True)
-async def setup_database():
-    """Фикстура для создания и удаления таблиц в тестовой БД один раз за сессию."""
-    async with engine_test.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    yield
-    async with engine_test.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
+# --- ФИНАЛЬНАЯ КОНФИГУРАЦИЯ ТЕСТОВ ---
 
 @pytest.fixture(scope="session")
 def event_loop():
-    """Создает экземпляр event loop для всей тестовой сессии."""
+    """Создает единый цикл событий для всей тестовой сессии."""
     loop = asyncio.get_event_loop_policy().new_event_loop()
     yield loop
     loop.close()
 
-@pytest.fixture(scope="session")
-async def async_client() -> AsyncGenerator[AsyncClient, None]:
-    """Фикстура для создания асинхронного HTTP-клиента для тестов API."""
-    async with AsyncClient(app=app, base_url="http://test") as client:
-        yield client
+@pytest_asyncio.fixture(scope="function")
+async def db_session() -> AsyncGenerator[AsyncSession, None]:
+    """
+    Предоставляет сессию к ВАШЕЙ РЕАЛЬНОЙ БАЗЕ ДАННЫХ.
+    Все изменения, которые будут закоммичены в тестах, ОСТАНУТСЯ в базе.
+    """
+    async with AsyncSessionFactory() as session:
+        yield session
+
+@pytest_asyncio.fixture(scope="function")
+async def async_client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
+    """
+    Главный клиент для API-запросов.
+    Запускает приложение, подменяет сессию БД и отключает rate-limiter.
+    """
+    # Подменяем зависимость get_db на нашу сессию
+    async def _override_get_db():
+        yield db_session
+
+    # Отключаем rate-limiter, чтобы тесты не падали с ошибкой 429
+    async def _override_limiter():
+        pass
+    
+    app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[limiter] = _override_limiter
+    
+    # Запускаем приложение с его жизненным циклом (инициализация Redis и т.д.)
+    async with LifespanManager(app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            yield client
+    
+    # Очищаем подмену после теста
+    app.dependency_overrides.clear()

@@ -43,6 +43,11 @@ ADMIN_IP_WHITELIST=127.0.0.1
 # --- CORS Origins ---
 ALLOWED_ORIGINS=http://localhost,http://localhost:3000,http://127.0.0.1:3000
 
+#ДЛЯ ТЕСТОВ
+VK_HEALTH_CHECK_TOKEN=vk1.a.ytVv2_t2N_eD6fGQDx85pFQy4zs2KogKky1M4LUjgLRdT9_akz_bZZRoJ-uQIyvy2gCPpSG8fsrXQL-fB1CaD0EVRDNvAv3mB1gFh6DPF5uS87pxmZ3a6lWC1OBMcxrIAZuuymMjJknYmiKHBP1PZu8nnSZ7VR863HufxvIvxeM2gzi50RbzPYQ7FaKkujzp_g-zVVstHvkUy1kQXDeckw
+VK_TEST_USER_ID=893512087
+VK_TEST_FRIEND_ID=614083345
+
 # --- backend/app\core\configs\automations.yml ---
 
 # --- backend/app\core\configs\automations.yml ---

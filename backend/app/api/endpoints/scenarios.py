@@ -16,6 +16,7 @@ from app.api.schemas.scenarios import (
 )
 from sqlalchemy_celery_beat.models import PeriodicTask, CrontabSchedule
 from app.tasks.runner import run_scenario_from_scheduler
+from app.api.dependencies import get_current_active_profile
 
 router = APIRouter()
 
@@ -195,7 +196,12 @@ async def get_scenario(scenario_id: int, current_user: User = Depends(get_curren
     return ScenarioSchema(id=scenario.id, name=scenario.name, schedule=scenario.schedule, is_active=scenario.is_active, nodes=nodes, edges=edges)
 
 @router.post("", response_model=ScenarioSchema, status_code=status.HTTP_201_CREATED)
-async def create_scenario(scenario_data: ScenarioCreate, current_user: User = Depends(get_current_active_profile), db: AsyncSession = Depends(get_db)):
+async def create_scenario(
+    scenario_data: ScenarioCreate, 
+    # ВОТ ИСПРАВЛЕНИЕ: Используем зависимость для API, которая ищет токен в заголовке
+    current_user: User = Depends(get_current_active_profile), 
+    db: AsyncSession = Depends(get_db)
+):
     if not croniter.is_valid(scenario_data.schedule):
         raise HTTPException(status_code=400, detail="Неверный формат CRON-строки.")
     

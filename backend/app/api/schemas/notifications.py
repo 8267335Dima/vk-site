@@ -1,5 +1,5 @@
-# backend/app/api/schemas/notifications.py
-from pydantic import BaseModel
+# --- backend/app/api/schemas/notifications.py ---
+from pydantic import BaseModel, ConfigDict
 from datetime import datetime
 from typing import List
 
@@ -10,8 +10,8 @@ class Notification(BaseModel):
     is_read: bool
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    # ИСПРАВЛЕНО: Замена устаревшего Config на model_config
+    model_config = ConfigDict(from_attributes=True)
 
 class NotificationsResponse(BaseModel):
     items: List[Notification]

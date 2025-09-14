@@ -9,7 +9,7 @@ class ActionFilters(BaseModel):
     allow_closed_profiles: bool = False
     status_keyword: Optional[str] = Field(None, max_length=100)
     only_with_photo: Optional[bool] = Field(False, description="Применять только к постам с фото (для like_feed)")
-    
+
     # Для remove_friends
     remove_banned: Optional[bool] = True
     last_seen_days: Optional[int] = Field(None, ge=1, description="Фильтр по последнему визиту в днях")
@@ -65,7 +65,7 @@ class BirthdayCongratulationRequest(BaseModel):
     message_template_default: str = "С Днем Рождения, {name}!"
     message_template_male: Optional[str] = None
     message_template_female: Optional[str] = None
-    
+
 # --- Для динамической конфигурации UI ---
 class TaskField(BaseModel):
     name: str

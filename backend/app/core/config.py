@@ -3,9 +3,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 from pathlib import Path
 
-# Определяем путь к .env файлу относительно этого файла.
-# Это делает путь независимым от того, откуда запускается приложение.
-# (VK_SITE/backend/app/core/ -> VK_SITE/.env)
+# ИЗМЕНЕНИЕ: Определяем абсолютный путь к .env файлу
 BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 ENV_FILE = BASE_DIR / ".env"
 
@@ -18,6 +16,11 @@ class Settings(BaseSettings):
     
     REDIS_HOST: str
     REDIS_PORT: int
+
+    # ИЗМЕНЕНИЕ: Добавляем тестовые переменные, чтобы pydantic их распознавал
+    VK_HEALTH_CHECK_TOKEN: Optional[str] = None
+    VK_TEST_USER_ID: Optional[str] = None
+    VK_TEST_FRIEND_ID: Optional[str] = None
 
     @property
     def database_url(self) -> str:
@@ -41,6 +44,7 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: str
 
     model_config = SettingsConfigDict(
+        # ИЗМЕНЕНИЕ: Указываем путь к файлу
         env_file=ENV_FILE,
         env_file_encoding='utf-8',
         extra='ignore'

@@ -1,34 +1,32 @@
 # backend/app/api/endpoints/auth.py
+
 from datetime import timedelta, datetime
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from fastapi_limiter.depends import RateLimiter
 
 from app.db.session import get_db
 from app.db.models import User, LoginHistory
-from app.api.schemas.auth import TokenResponse, EnrichedTokenResponse
+from app.api.schemas.auth import EnrichedTokenResponse
 from app.services.vk_api import is_token_valid
 from app.core.security import create_access_token, encrypt_data
 from app.core.config import settings
 from app.core.plans import get_limits_for_plan
 from app.core.constants import PlanName
-from app.api.dependencies import get_current_manager_user
+from app.api.dependencies import get_current_manager_user, limiter # Импортируем limiter
 
 router = APIRouter()
 
 class TokenRequest(BaseModel):
     vk_token: str
 
-async def get_request_identifier(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
 
 @router.post(
-    "/vk", 
-    response_model=EnrichedTokenResponse, 
+    "/vk",
+    response_model=EnrichedTokenResponse,
     summary="Аутентификация или регистрация по токену VK",
-    dependencies=[Depends(RateLimiter(times=5, minutes=1, identifier=get_request_identifier))]
+    dependencies=[Depends(limiter)] # Оставляем защиту для production
 )
 async def login_via_vk(
     *,
@@ -37,7 +35,7 @@ async def login_via_vk(
     token_request: TokenRequest
 ) -> EnrichedTokenResponse:
     vk_token = token_request.vk_token
-    
+
     vk_id = await is_token_valid(vk_token)
     if not vk_id:
         raise HTTPException(
@@ -57,7 +55,7 @@ async def login_via_vk(
         user.encrypted_vk_token = encrypted_token
     else:
         user = User(
-            vk_id=vk_id, 
+            vk_id=vk_id,
             encrypted_vk_token=encrypted_token,
             plan=PlanName.BASE,
             plan_expires_at=datetime.utcnow() + timedelta(days=14),
@@ -77,8 +75,13 @@ async def login_via_vk(
     await db.flush()
     await db.refresh(user)
 
+    # >>>>>>>>>> КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ <<<<<<<<<<
+    # Получаем ID пользователя ДО того, как db.commit() сделает объект 'user' просроченным
+    user_id = user.id
+    # >>>>>>>>>> КОНЕЦ ИСПРАВЛЕНИЯ <<<<<<<<<<
+
     login_entry = LoginHistory(
-        user_id=user.id,
+        user_id=user_id,
         ip_address=request.client.host if request.client else "unknown",
         user_agent=request.headers.get("user-agent", "unknown")
     )
@@ -88,18 +91,21 @@ async def login_via_vk(
 
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     
-    token_data = {"sub": str(user.id), "profile_id": str(user.id)}
+    # Используем сохраненный ID
+    token_data = {"sub": str(user_id), "profile_id": str(user_id)}
     
     access_token = create_access_token(
         data=token_data, expires_delta=access_token_expires
     )
 
     return EnrichedTokenResponse(
-        access_token=access_token, 
+        access_token=access_token,
         token_type="bearer",
-        manager_id=user.id,
-        active_profile_id=user.id
+        manager_id=user_id,
+        active_profile_id=user_id
     )
+
+
 
 class SwitchProfileRequest(BaseModel):
     profile_id: int
