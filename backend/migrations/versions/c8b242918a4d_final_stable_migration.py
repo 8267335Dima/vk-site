@@ -1,8 +1,8 @@
-"""Initial migration
+"""Final stable migration
 
-Revision ID: 88d06acbeafb
+Revision ID: c8b242918a4d
 Revises: 
-Create Date: 2025-09-13 07:51:26.482487
+Create Date: 2025-09-14 07:35:07.598733
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '88d06acbeafb'
+revision: str = 'c8b242918a4d'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -33,7 +33,7 @@ def upgrade() -> None:
     sa.Column('daily_add_friends_limit', sa.Integer(), server_default=sa.text('0'), nullable=False),
     sa.Column('daily_message_limit', sa.Integer(), server_default=sa.text('0'), nullable=False),
     sa.Column('delay_profile', sa.Enum('slow', 'normal', 'fast', name='delayprofile'), server_default='normal', nullable=False),
-    sa.PrimaryKeyConstraint('id')
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_users'))
     )
     op.create_index(op.f('ix_users_id'), 'users', ['id'], unique=False)
     op.create_index(op.f('ix_users_vk_id'), 'users', ['vk_id'], unique=True)
@@ -44,8 +44,8 @@ def upgrade() -> None:
     sa.Column('message', sa.Text(), nullable=False),
     sa.Column('status', sa.String(), nullable=False),
     sa.Column('timestamp', sa.DateTime(), nullable=True),
-    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id')
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_action_logs_user_id_users'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_action_logs'))
     )
     op.create_index(op.f('ix_action_logs_action_type'), 'action_logs', ['action_type'], unique=False)
     op.create_index(op.f('ix_action_logs_timestamp'), 'action_logs', ['timestamp'], unique=False)
@@ -57,8 +57,8 @@ def upgrade() -> None:
     sa.Column('is_active', sa.Boolean(), nullable=False),
     sa.Column('settings', sa.JSON(), nullable=True),
     sa.Column('last_run_at', sa.DateTime(), nullable=True),
-    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id'),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_automations_user_id_users'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_automations')),
     sa.UniqueConstraint('user_id', 'automation_type', name='_user_automation_uc')
     )
     op.create_index(op.f('ix_automations_automation_type'), 'automations', ['automation_type'], unique=False)
@@ -68,14 +68,13 @@ def upgrade() -> None:
     sa.Column('user_id', sa.Integer(), nullable=False),
     sa.Column('date', sa.Date(), nullable=False),
     sa.Column('likes_count', sa.Integer(), nullable=False),
-    sa.Column('like_friends_feed_count', sa.Integer(), nullable=False),
     sa.Column('friends_added_count', sa.Integer(), nullable=False),
     sa.Column('friend_requests_accepted_count', sa.Integer(), nullable=False),
     sa.Column('stories_viewed_count', sa.Integer(), nullable=False),
     sa.Column('friends_removed_count', sa.Integer(), nullable=False),
     sa.Column('messages_sent_count', sa.Integer(), nullable=False),
-    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
-    sa.PrimaryKeyConstraint('id'),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_daily_stats_user_id_users')),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_daily_stats')),
     sa.UniqueConstraint('user_id', 'date', name='_user_date_uc')
     )
     op.create_index('ix_daily_stats_user_date', 'daily_stats', ['user_id', 'date'], unique=False)
@@ -85,8 +84,8 @@ def upgrade() -> None:
     sa.Column('name', sa.String(), nullable=False),
     sa.Column('action_type', sa.String(), nullable=False),
     sa.Column('filters', sa.JSON(), nullable=False),
-    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id'),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_filter_presets_user_id_users'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_filter_presets')),
     sa.UniqueConstraint('user_id', 'name', 'action_type', name='_user_name_action_uc')
     )
     op.create_index(op.f('ix_filter_presets_action_type'), 'filter_presets', ['action_type'], unique=False)
@@ -98,8 +97,8 @@ def upgrade() -> None:
     sa.Column('status', sa.Enum('pending', 'accepted', name='friendrequeststatus'), nullable=False),
     sa.Column('created_at', sa.DateTime(), nullable=True),
     sa.Column('resolved_at', sa.DateTime(), nullable=True),
-    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id'),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_friend_request_logs_user_id_users'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_friend_request_logs')),
     sa.UniqueConstraint('user_id', 'target_vk_id', name='_user_target_uc')
     )
     op.create_index(op.f('ix_friend_request_logs_created_at'), 'friend_request_logs', ['created_at'], unique=False)
@@ -111,8 +110,8 @@ def upgrade() -> None:
     sa.Column('user_id', sa.Integer(), nullable=False),
     sa.Column('date', sa.Date(), nullable=False),
     sa.Column('friends_count', sa.Integer(), nullable=False),
-    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id'),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_friends_history_user_id_users'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_friends_history')),
     sa.UniqueConstraint('user_id', 'date', name='_user_date_friends_uc')
     )
     op.create_index('ix_friends_history_user_date', 'friends_history', ['user_id', 'date'], unique=False)
@@ -122,8 +121,8 @@ def upgrade() -> None:
     sa.Column('timestamp', sa.DateTime(), nullable=True),
     sa.Column('ip_address', sa.String(), nullable=True),
     sa.Column('user_agent', sa.Text(), nullable=True),
-    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id')
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_login_history_user_id_users'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_login_history'))
     )
     op.create_index(op.f('ix_login_history_timestamp'), 'login_history', ['timestamp'], unique=False)
     op.create_index(op.f('ix_login_history_user_id'), 'login_history', ['user_id'], unique=False)
@@ -131,9 +130,9 @@ def upgrade() -> None:
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('manager_user_id', sa.Integer(), nullable=False),
     sa.Column('profile_user_id', sa.Integer(), nullable=False),
-    sa.ForeignKeyConstraint(['manager_user_id'], ['users.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['profile_user_id'], ['users.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id'),
+    sa.ForeignKeyConstraint(['manager_user_id'], ['users.id'], name=op.f('fk_managed_profiles_manager_user_id_users'), ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['profile_user_id'], ['users.id'], name=op.f('fk_managed_profiles_profile_user_id_users'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_managed_profiles')),
     sa.UniqueConstraint('manager_user_id', 'profile_user_id', name='_manager_profile_uc')
     )
     op.create_index(op.f('ix_managed_profiles_manager_user_id'), 'managed_profiles', ['manager_user_id'], unique=False)
@@ -145,8 +144,8 @@ def upgrade() -> None:
     sa.Column('likes_count', sa.Integer(), nullable=False),
     sa.Column('friends_added_count', sa.Integer(), nullable=False),
     sa.Column('friend_requests_accepted_count', sa.Integer(), nullable=False),
-    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
-    sa.PrimaryKeyConstraint('id'),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_monthly_stats_user_id_users')),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_monthly_stats')),
     sa.UniqueConstraint('user_id', 'month_identifier', name='_user_month_uc')
     )
     op.create_table('notifications',
@@ -156,8 +155,8 @@ def upgrade() -> None:
     sa.Column('level', sa.String(), nullable=False),
     sa.Column('is_read', sa.Boolean(), nullable=False),
     sa.Column('created_at', sa.DateTime(), nullable=True),
-    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
-    sa.PrimaryKeyConstraint('id')
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_notifications_user_id_users')),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_notifications'))
     )
     op.create_index(op.f('ix_notifications_created_at'), 'notifications', ['created_at'], unique=False)
     op.create_index(op.f('ix_notifications_is_read'), 'notifications', ['is_read'], unique=False)
@@ -172,8 +171,8 @@ def upgrade() -> None:
     sa.Column('months', sa.Integer(), nullable=False),
     sa.Column('created_at', sa.DateTime(), nullable=True),
     sa.Column('updated_at', sa.DateTime(), nullable=True),
-    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
-    sa.PrimaryKeyConstraint('id')
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_payments_user_id_users')),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_payments'))
     )
     op.create_index(op.f('ix_payments_payment_system_id'), 'payments', ['payment_system_id'], unique=True)
     op.create_index(op.f('ix_payments_user_id'), 'payments', ['user_id'], unique=False)
@@ -182,8 +181,8 @@ def upgrade() -> None:
     sa.Column('user_id', sa.Integer(), nullable=False),
     sa.Column('heatmap_data', sa.JSON(), nullable=False),
     sa.Column('last_updated_at', sa.DateTime(), nullable=True),
-    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id')
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_post_activity_heatmaps_user_id_users'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_post_activity_heatmaps'))
     )
     op.create_index(op.f('ix_post_activity_heatmaps_user_id'), 'post_activity_heatmaps', ['user_id'], unique=True)
     op.create_table('profile_metrics',
@@ -192,8 +191,8 @@ def upgrade() -> None:
     sa.Column('date', sa.Date(), nullable=False),
     sa.Column('total_likes_on_content', sa.Integer(), nullable=False),
     sa.Column('friends_count', sa.Integer(), nullable=False),
-    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id'),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_profile_metrics_user_id_users'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_profile_metrics')),
     sa.UniqueConstraint('user_id', 'date', name='_user_date_metric_uc')
     )
     op.create_index('ix_profile_metrics_user_date', 'profile_metrics', ['user_id', 'date'], unique=False)
@@ -204,8 +203,8 @@ def upgrade() -> None:
     sa.Column('is_working', sa.Boolean(), nullable=False),
     sa.Column('last_checked_at', sa.DateTime(), nullable=True),
     sa.Column('check_status_message', sa.String(), nullable=True),
-    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id'),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_proxies_user_id_users'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_proxies')),
     sa.UniqueConstraint('user_id', 'encrypted_proxy_url', name='_user_proxy_uc')
     )
     op.create_index(op.f('ix_proxies_is_working'), 'proxies', ['is_working'], unique=False)
@@ -217,9 +216,9 @@ def upgrade() -> None:
     sa.Column('schedule', sa.String(), nullable=False),
     sa.Column('is_active', sa.Boolean(), nullable=False),
     sa.Column('first_step_id', sa.Integer(), nullable=True),
-    sa.ForeignKeyConstraint(['first_step_id'], ['scenario_steps.id'], name='fk_scenario_first_step', use_alter=True),
-    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
-    sa.PrimaryKeyConstraint('id')
+    sa.ForeignKeyConstraint(['first_step_id'], ['scenario_steps.id'], name='fk_scenarios_first_step_id_scenario_steps', use_alter=True),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_scenarios_user_id_users')),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_scenarios'))
     )
     op.create_index(op.f('ix_scenarios_user_id'), 'scenarios', ['user_id'], unique=False)
     op.create_table('scheduled_posts',
@@ -233,9 +232,9 @@ def upgrade() -> None:
     sa.Column('celery_task_id', sa.String(), nullable=True),
     sa.Column('vk_post_id', sa.String(), nullable=True),
     sa.Column('error_message', sa.Text(), nullable=True),
-    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('celery_task_id')
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_scheduled_posts_user_id_users'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_scheduled_posts')),
+    sa.UniqueConstraint('celery_task_id', name=op.f('uq_scheduled_posts_celery_task_id'))
     )
     op.create_index(op.f('ix_scheduled_posts_publish_at'), 'scheduled_posts', ['publish_at'], unique=False)
     op.create_index(op.f('ix_scheduled_posts_status'), 'scheduled_posts', ['status'], unique=False)
@@ -246,8 +245,8 @@ def upgrade() -> None:
     sa.Column('user_id', sa.Integer(), nullable=False),
     sa.Column('friend_vk_id', sa.BigInteger(), nullable=False),
     sa.Column('year', sa.Integer(), nullable=False),
-    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id'),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_sent_congratulations_user_id_users'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_sent_congratulations')),
     sa.UniqueConstraint('user_id', 'friend_vk_id', 'year', name='_user_friend_year_uc')
     )
     op.create_index(op.f('ix_sent_congratulations_friend_vk_id'), 'sent_congratulations', ['friend_vk_id'], unique=False)
@@ -262,8 +261,8 @@ def upgrade() -> None:
     sa.Column('result', sa.Text(), nullable=True),
     sa.Column('created_at', sa.DateTime(), nullable=True),
     sa.Column('updated_at', sa.DateTime(), nullable=True),
-    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id')
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_task_history_user_id_users'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_task_history'))
     )
     op.create_index(op.f('ix_task_history_celery_task_id'), 'task_history', ['celery_task_id'], unique=True)
     op.create_index(op.f('ix_task_history_status'), 'task_history', ['status'], unique=False)
@@ -274,9 +273,9 @@ def upgrade() -> None:
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('name', sa.String(), nullable=False),
     sa.Column('owner_id', sa.Integer(), nullable=False),
-    sa.ForeignKeyConstraint(['owner_id'], ['users.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('owner_id')
+    sa.ForeignKeyConstraint(['owner_id'], ['users.id'], name=op.f('fk_teams_owner_id_users'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_teams')),
+    sa.UniqueConstraint('owner_id', name=op.f('uq_teams_owner_id'))
     )
     op.create_table('weekly_stats',
     sa.Column('id', sa.Integer(), nullable=False),
@@ -285,8 +284,8 @@ def upgrade() -> None:
     sa.Column('likes_count', sa.Integer(), nullable=False),
     sa.Column('friends_added_count', sa.Integer(), nullable=False),
     sa.Column('friend_requests_accepted_count', sa.Integer(), nullable=False),
-    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
-    sa.PrimaryKeyConstraint('id'),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_weekly_stats_user_id_users')),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_weekly_stats')),
     sa.UniqueConstraint('user_id', 'week_identifier', name='_user_week_uc')
     )
     op.create_table('scenario_steps',
@@ -299,11 +298,11 @@ def upgrade() -> None:
     sa.Column('on_failure_next_step_id', sa.Integer(), nullable=True),
     sa.Column('position_x', sa.Float(), nullable=True),
     sa.Column('position_y', sa.Float(), nullable=True),
-    sa.ForeignKeyConstraint(['next_step_id'], ['scenario_steps.id'], ),
-    sa.ForeignKeyConstraint(['on_failure_next_step_id'], ['scenario_steps.id'], ),
-    sa.ForeignKeyConstraint(['on_success_next_step_id'], ['scenario_steps.id'], ),
-    sa.ForeignKeyConstraint(['scenario_id'], ['scenarios.id'], ),
-    sa.PrimaryKeyConstraint('id')
+    sa.ForeignKeyConstraint(['next_step_id'], ['scenario_steps.id'], name=op.f('fk_scenario_steps_next_step_id_scenario_steps')),
+    sa.ForeignKeyConstraint(['on_failure_next_step_id'], ['scenario_steps.id'], name=op.f('fk_scenario_steps_on_failure_next_step_id_scenario_steps')),
+    sa.ForeignKeyConstraint(['on_success_next_step_id'], ['scenario_steps.id'], name=op.f('fk_scenario_steps_on_success_next_step_id_scenario_steps')),
+    sa.ForeignKeyConstraint(['scenario_id'], ['scenarios.id'], name=op.f('fk_scenario_steps_scenario_id_scenarios')),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_scenario_steps'))
     )
     op.create_index(op.f('ix_scenario_steps_scenario_id'), 'scenario_steps', ['scenario_id'], unique=False)
     op.create_table('team_members',
@@ -311,19 +310,19 @@ def upgrade() -> None:
     sa.Column('team_id', sa.Integer(), nullable=False),
     sa.Column('user_id', sa.Integer(), nullable=False),
     sa.Column('role', sa.Enum('admin', 'member', name='teammemberrole'), nullable=False),
-    sa.ForeignKeyConstraint(['team_id'], ['teams.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id'),
+    sa.ForeignKeyConstraint(['team_id'], ['teams.id'], name=op.f('fk_team_members_team_id_teams'), ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_team_members_user_id_users'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_team_members')),
     sa.UniqueConstraint('team_id', 'user_id', name='_team_user_uc'),
-    sa.UniqueConstraint('user_id')
+    sa.UniqueConstraint('user_id', name=op.f('uq_team_members_user_id'))
     )
     op.create_table('team_profile_access',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('team_member_id', sa.Integer(), nullable=False),
     sa.Column('profile_user_id', sa.Integer(), nullable=False),
-    sa.ForeignKeyConstraint(['profile_user_id'], ['users.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['team_member_id'], ['team_members.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id')
+    sa.ForeignKeyConstraint(['profile_user_id'], ['users.id'], name=op.f('fk_team_profile_access_profile_user_id_users'), ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['team_member_id'], ['team_members.id'], name=op.f('fk_team_profile_access_team_member_id_team_members'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_team_profile_access'))
     )
     # ### end Alembic commands ###
 

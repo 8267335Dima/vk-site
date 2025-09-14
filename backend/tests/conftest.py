@@ -2,12 +2,10 @@
 import asyncio
 from typing import AsyncGenerator
 
-import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import AsyncSession
 from asgi_lifespan import LifespanManager
-from fastapi import FastAPI
 
 # --- ИСПОЛЬЗУЕМ ЗАВИСИМОСТИ ИЗ ОСНОВНОГО ПРИЛОЖЕНИЯ ---
 from app.db.session import get_db, AsyncSessionFactory
@@ -16,12 +14,10 @@ from app.api.dependencies import limiter # Импортируем лимитер
 
 # --- ФИНАЛЬНАЯ КОНФИГУРАЦИЯ ТЕСТОВ ---
 
-@pytest.fixture(scope="session")
-def event_loop():
-    """Создает единый цикл событий для всей тестовой сессии."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
+# ИСПРАВЛЕНИЕ: Фикстура event_loop полностью удалена.
+# pytest-asyncio теперь сам управляет циклом событий, что решает
+# ошибки 'RuntimeError: Event loop is closed' и 'attached to a different loop'.
+# Это современный и единственно верный подход.
 
 @pytest_asyncio.fixture(scope="function")
 async def db_session() -> AsyncGenerator[AsyncSession, None]:

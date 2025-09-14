@@ -64,7 +64,9 @@ class VKAPI:
         if user_ids:
             params['user_ids'] = user_ids
         response = await self._make_request("users.get", params=params)
-        return response
+        if response and isinstance(response, list):
+             return response[0] if user_ids is None and len(response) == 1 else response
+        return None # Возвращаем None, если ответ пустой или не является списком
 
     async def get_user_friends(self, user_id: int, fields: str = "sex,bdate,city,online,last_seen,is_closed,deactivated") -> Optional[List[Dict[str, Any]]]:
         params = {"user_id": user_id, "fields": fields, "order": "random"}

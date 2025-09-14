@@ -131,16 +131,12 @@ celery_app.conf.task_routes = {
 celery_app.conf.update(
     task_track_started=True,
     task_default_queue='default',
-    beat_dburi=settings.database_url.replace("+asyncpg", ""),
     
-    # УЛУЧШЕНИЕ: Продакшн-настройки для повышения надежности и производительности
-    # Гарантирует, что задача будет подтверждена только после ее успешного выполнения (или провала),
-    # а не в момент получения воркером. Защищает от потери задач при сбое воркера.
-    task_acks_late = True,
+    # --- КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Указываем использовать наш кастомный планировщик ---
+    beat_scheduler='app.tasks.scheduler.DatabaseScheduler',
+    # -------------------------------------------------------------------------
 
-    # Оптимизация для I/O-bound задач (наши запросы к VK API).
-    # Воркер будет брать только одну задачу за раз, что предотвращает "зависание"
-    # других задач в его очереди, если текущая выполняется долго.
+    task_acks_late = True,
     worker_prefetch_multiplier = 1,
 )
 
@@ -245,46 +241,70 @@ from app.api.endpoints import (
     tasks_router, posts_router, teams_router
 )
 from app.services.websocket_manager import redis_listener
+from fastapi.routing import APIRoute
 
 configure_logging()
 log = structlog.get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # --- ИЗМЕНЕНИЕ: Логика инструментария Prometheus убрана отсюда ---
+    """
+    Управляет жизненным циклом приложения, включая запуск и остановку ресурсов,
+    а также выполняет диагностику при старте.
+    """
+    # --- СТАРТ ПРИЛОЖЕНИЯ ---
+    limiter_redis = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/0", encoding="utf-8", decode_responses=True)
+    cache_redis = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/3", encoding="utf-8")
+    pubsub_redis = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/1", decode_responses=True)
     redis_task = None
+
     try:
-        redis_connection = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/0", encoding="utf-8", decode_responses=True)
-        await FastAPILimiter.init(redis_connection)
-
-        redis_cache_connection = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/3", encoding="utf-8")
-        FastAPICache.init(RedisBackend(redis_cache_connection), prefix="fastapi-cache")
-
-        redis_pubsub_connection = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/1", decode_responses=True)
-        redis_task = asyncio.create_task(redis_listener(redis_pubsub_connection))
-
+        await FastAPILimiter.init(limiter_redis)
+        FastAPICache.init(RedisBackend(cache_redis), prefix="fastapi-cache")
+        redis_task = asyncio.create_task(redis_listener(pubsub_redis))
         log.info("lifespan.startup", message="Dependencies initialized.")
     except RedisError as e:
         log.error("lifespan.startup.error", error=str(e), message="Could not connect to Redis.")
+    
+    # --- ДИАГНОСТИКА (выполняется после инициализации) ---
+    print("\n--- FastAPI ROUTE DEPENDENCY DIAGNOSTICS ---")
+    for route in app.routes:
+        if isinstance(route, APIRoute):
+            # Пример диагностики для проблемного эндпоинта
+            if route.path == "/api/v1/scenarios" and "POST" in route.methods:
+                print(f"Found route: {route.methods} {route.path}")
+                print(f"Endpoint function: {route.endpoint.__name__}")
+                for dep in route.dependant.dependencies:
+                    if hasattr(dep.call, "__name__"):
+                         print(f"--> Depends on function: '{dep.call.__name__}'")
+                    else:
+                         print(f"--> Depends on object: {dep.call}")
+    print("--- END DIAGNOSTICS ---\n")
 
     yield
 
-    # Логика остановки
+    # --- ОСТАНОВКА ПРИЛОЖЕНИЯ ---
     if redis_task:
         redis_task.cancel()
-        try: await redis_task
-        except asyncio.CancelledError: log.info("lifespan.shutdown", message="Redis listener task cancelled.")
+        try:
+            await redis_task
+        except asyncio.CancelledError:
+            log.info("lifespan.shutdown", message="Redis listener task cancelled.")
 
-    if FastAPICache.get_backend():
-        await FastAPICache.clear()
-    log.info("lifespan.shutdown", message="Resources cleaned up.")
+    await limiter_redis.close()
+    await cache_redis.close()
+    await pubsub_redis.close()
+    
+    await FastAPILimiter.close()
+    FastAPICache.reset()
 
-# --- ОСНОВНОЕ ИСПРАВЛЕНИЕ ЗДЕСЬ ---
-# 1. Сначала создаем приложение
+    await engine.dispose()
+    
+    log.info("lifespan.shutdown", message="All resources cleaned up completely.")
+
+
 app = FastAPI(title="Zenith API", version="4.0.0", docs_url="/api/docs", redoc_url="/api/redoc", lifespan=lifespan)
 
-# 2. Затем конфигурируем middleware и инструментарий
-# Инициализация инструментария должна происходить ДО добавления других middleware и роутеров
 instrumentator = Instrumentator().instrument(app)
 instrumentator.expose(app, endpoint="/api/metrics")
 
@@ -304,8 +324,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-# --- КОНЕЦ ИСПРАВЛЕНИЯ ---
-
 
 class Tags:
     AUTH = "Аутентификация"
@@ -322,7 +340,6 @@ class Tags:
     TEAMS = "Командный функционал"
     WEBSOCKETS = "WebSockets"
     SYSTEM = "Система"
-
 
 api_router_v1 = APIRouter()
 api_router_v1.include_router(auth_router, prefix="/auth", tags=[Tags.AUTH])
@@ -359,7 +376,7 @@ from jose import JWTError, jwt
 from pydantic import ValidationError
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload, joinedload, aliased
+from sqlalchemy.orm import selectinload, aliased
 
 from app.core.config import settings
 from app.db.models import User, ManagedProfile, TeamMember, TeamProfileAccess
@@ -367,7 +384,7 @@ from app.db.session import get_db, AsyncSessionFactory
 from app.repositories.user import UserRepository
 from fastapi_limiter.depends import RateLimiter
 
-
+# Эта зависимость знает, как извлечь токен из заголовка "Authorization: Bearer ..."
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/vk")
 
 credentials_exception = HTTPException(
@@ -382,10 +399,24 @@ async def get_request_identifier(request: Request) -> str:
         return forwarded_for.split(',')[0].strip()
     return request.client.host if request.client else "unknown"
 
-# Создаем экземпляр нашего лимитера. Это и есть наша зависимость.
 limiter = RateLimiter(times=5, minutes=1, identifier=get_request_identifier)
 
-async def get_payload_from_token(token: str) -> Dict[str, Any]:
+# --- ИСПРАВЛЕНИЕ НАЧИНАЕТСЯ ЗДЕСЬ ---
+
+# 1. Создаем новую, правильную зависимость для получения payload из токена в HTTP-заголовке
+async def get_token_payload(token: str = Depends(oauth2_scheme)) -> Dict[str, Any]:
+    """
+    Извлекает токен из заголовка Authorization, декодирует его и возвращает payload.
+    """
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        return payload
+    except (JWTError, ValidationError):
+        raise credentials_exception
+
+# 2. Старая функция, которая принимает строку, остается для WebSocket
+async def _get_payload_from_string(token: str) -> Dict[str, Any]:
+    """Вспомогательная функция для декодирования токена из строки (для WS)."""
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         return payload
@@ -393,7 +424,8 @@ async def get_payload_from_token(token: str) -> Dict[str, Any]:
         raise credentials_exception
 
 async def get_current_manager_user(
-    payload: Dict[str, Any] = Depends(get_payload_from_token),
+    # 3. Указываем зависимость от новой, правильной функции
+    payload: Dict[str, Any] = Depends(get_token_payload),
     db: AsyncSession = Depends(get_db)
 ) -> User:
     """Возвращает управляющего пользователя (менеджера) из токена."""
@@ -407,25 +439,18 @@ async def get_current_manager_user(
         raise credentials_exception
     return manager
 
-# ИЗМЕНЕНИЕ: Полностью переписанная "умная" зависимость для максимальной производительности
 async def get_current_active_profile(
-    payload: Dict[str, Any] = Depends(get_payload_from_token),
+    # 4. Указываем зависимость от новой, правильной функции
+    payload: Dict[str, Any] = Depends(get_token_payload),
     db: AsyncSession = Depends(get_db)
 ) -> User:
     """
-    Новая, "умная" зависимость, оптимизированная для выполнения одного запроса к БД.
-    Проверяет все возможные сценарии доступа:
-    1. Пользователь работает со своим профилем.
-    2. Менеджер работает с управляемым профилем.
-    3. Участник команды работает с профилем, к которому ему дали доступ.
+    "Умная" зависимость, которая использует payload, полученный из токена в заголовке.
     """
     logged_in_user_id = int(payload.get("sub"))
     active_profile_id = int(payload.get("profile_id") or logged_in_user_id)
-
-    # Создаем алиас для TeamMember, чтобы избежать конфликтов в JOIN
+    
     tm_alias = aliased(TeamMember)
-
-    # Единый запрос, который проверяет все условия доступа
     stmt = (
         select(User)
         .outerjoin(ManagedProfile, and_(
@@ -439,9 +464,9 @@ async def get_current_active_profile(
         ))
         .where(
             User.id == active_profile_id,
-            (User.id == logged_in_user_id) | # Сценарий 1
-            (ManagedProfile.id != None) |     # Сценарий 2
-            (TeamProfileAccess.id != None)    # Сценарий 3
+            (User.id == logged_in_user_id) |
+            (ManagedProfile.id != None) |
+            (TeamProfileAccess.id != None)
         )
     )
     
@@ -451,14 +476,17 @@ async def get_current_active_profile(
     if profile:
         return profile
     
-    # Если ни одно из условий не выполнено - доступ запрещен
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступ к этому профилю запрещен.")
 
 
 async def get_current_user_from_ws(token: str = Query(...)) -> User:
+    """
+    Эта зависимость для WebSocket остается без изменений, но теперь использует
+    внутреннюю функцию для ясности.
+    """
     async with AsyncSessionFactory() as session:
-        payload = await get_payload_from_token(token)
-        # На WS нам нужен только активный профиль, полная проверка прав излишня
+        # Используем вспомогательную функцию, которая принимает строку
+        payload = await _get_payload_from_string(token)
         profile_id = int(payload.get("profile_id") or payload.get("sub"))
         user = await session.get(User, profile_id)
         if not user:
@@ -1274,266 +1302,365 @@ async def delete_proxy(
 
 # --- backend/app\api\endpoints\scenarios.py ---
 
-# --- backend/app/api/endpoints/scenarios.py ---
 import json
+from typing import List, Dict
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
+from sqlalchemy import select
 from sqlalchemy.orm import selectinload
-from typing import List
 from croniter import croniter
 
 from app.db.session import get_db
-from app.db.models import User, Scenario, ScenarioStep
+from app.db.models import User, Scenario, ScenarioStep, ScenarioStepType
 from app.api.dependencies import get_current_active_profile
 from app.api.schemas.scenarios import (
-    Scenario as ScenarioSchema, ScenarioCreate, ScenarioUpdate, AvailableCondition,
-    ConditionOption, ScenarioStepNode, ScenarioEdge
+    Scenario as ScenarioSchema,
+    ScenarioCreate,
+    ScenarioUpdate,
+    AvailableCondition,
+    ScenarioStepNode,
+    ScenarioEdge,
 )
-from sqlalchemy_celery_beat.models import PeriodicTask, CrontabSchedule
-from app.tasks.runner import run_scenario_from_scheduler
-from app.api.dependencies import get_current_active_profile
 
 router = APIRouter()
 
-async def _create_or_update_periodic_task(db: AsyncSession, scenario: Scenario):
-    task_name = f"scenario-{scenario.id}"
 
-    stmt = select(PeriodicTask).where(PeriodicTask.name == task_name)
-    result = await db.execute(stmt)
-    periodic_task = result.scalar_one_or_none()
-
-    if not scenario.is_active:
-        if periodic_task:
-            periodic_task.enabled = False
-        return
-
-    minute, hour, day_of_month, month_of_year, day_of_week = scenario.schedule.split(' ')
-
-    crontab_stmt = select(CrontabSchedule).where(
-        CrontabSchedule.minute == minute, CrontabSchedule.hour == hour,
-        CrontabSchedule.day_of_month == day_of_month, CrontabSchedule.day_of_week == day_of_week,
-        CrontabSchedule.month_of_year == month_of_year
-    )
-    res = await db.execute(crontab_stmt)
-    crontab = res.scalar_one_or_none()
-    if not crontab:
-        crontab = CrontabSchedule(
-            minute=minute, hour=hour, day_of_month=day_of_month,
-            day_of_week=day_of_week, month_of_year=month_of_year
-        )
-        db.add(crontab)
-        await db.flush()
-
-    task_args = json.dumps([scenario.id, scenario.user_id])
-
-    if periodic_task:
-        periodic_task.crontab = crontab
-        periodic_task.args = task_args
-        periodic_task.enabled = True
-    else:
-        new_task = PeriodicTask(
-            name=task_name,
-            task=run_scenario_from_scheduler.name,
-            crontab=crontab,
-            args=task_args,
-            enabled=True
-        )
-        db.add(new_task)
-
-@router.get("/available-conditions", response_model=List[AvailableCondition])
-async def get_available_conditions():
-    return [
-        {
-            "key": "friends_count", "label": "Количество друзей", "type": "number",
-            "operators": ["==", "!=", ">", "<", ">=", "<="]
-        },
-        {
-            "key": "conversion_rate", "label": "Конверсия заявок (%)", "type": "number",
-            "operators": [">", "<", ">=", "<="]
-        },
-        {
-            "key": "day_of_week", "label": "День недели", "type": "select", "operators": ["==", "!="],
-            "options": [
-                {"value": "1", "label": "Понедельник"}, {"value": "2", "label": "Вторник"},
-                {"value": "3", "label": "Среда"}, {"value": "4", "label": "Четверг"},
-                {"value": "5", "label": "Пятница"}, {"value": "6", "label": "Суббота"},
-                {"value": "7", "label": "Воскресенье"},
-            ]
-        }
-    ]
+# =====================================================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# =====================================================
 
 def _db_to_graph(scenario: Scenario) -> tuple[List[ScenarioStepNode], List[ScenarioEdge]]:
-    nodes = []
-    edges = []
+    """Конвертирует ORM-модели шагов и связей в формат для React Flow."""
+    nodes: List[ScenarioStepNode] = []
+    edges: List[ScenarioEdge] = []
+
     if not scenario.steps:
         return nodes, edges
-    
-    # Создаем временное отображение ID из БД на frontend ID (который хранится в details)
-    db_id_to_frontend_id = {step.id: str(step.details.get('id', step.id)) for step in scenario.steps}
+
+    db_id_to_frontend_id = {
+        step.id: str(step.details.get("id", step.id)) for step in scenario.steps
+    }
 
     for step in scenario.steps:
         node_id_str = db_id_to_frontend_id[step.id]
-        node_type = step.step_type.value
-        
-        # Особый случай для узла "Старт"
-        if node_type == 'action' and step.details.get('action_type') == 'start':
-            node_type = 'start'
 
-        nodes.append(ScenarioStepNode(
-            id=node_id_str,
-            type=node_type,
-            data=step.details.get('data', {}),
-            position={"x": step.position_x, "y": step.position_y}
-        ))
-        
+        # Тип узла для фронта
+        if step.step_type == ScenarioStepType.action and step.details.get("action_type") == "start":
+            node_type = "start"
+        else:
+            node_type = step.step_type.value
+
+        nodes.append(
+            ScenarioStepNode(
+                id=node_id_str,
+                type=node_type,
+                data=step.details.get("data", {}),
+                position={"x": step.position_x, "y": step.position_y},
+            )
+        )
+
         source_id_str = db_id_to_frontend_id[step.id]
+
         if step.next_step_id and step.next_step_id in db_id_to_frontend_id:
             target_id_str = db_id_to_frontend_id[step.next_step_id]
-            edges.append(ScenarioEdge(id=f"e{source_id_str}-{target_id_str}", source=source_id_str, target=target_id_str))
+            edges.append(
+                ScenarioEdge(
+                    id=f"e{source_id_str}-{target_id_str}",
+                    source=source_id_str,
+                    target=target_id_str,
+                )
+            )
+
         if step.on_success_next_step_id and step.on_success_next_step_id in db_id_to_frontend_id:
             target_id_str = db_id_to_frontend_id[step.on_success_next_step_id]
-            edges.append(ScenarioEdge(id=f"e{source_id_str}-{target_id_str}-success", source=source_id_str, target=target_id_str, sourceHandle='on_success'))
+            edges.append(
+                ScenarioEdge(
+                    id=f"e{source_id_str}-{target_id_str}-success",
+                    source=source_id_str,
+                    target=target_id_str,
+                    sourceHandle="on_success",
+                )
+            )
+
         if step.on_failure_next_step_id and step.on_failure_next_step_id in db_id_to_frontend_id:
             target_id_str = db_id_to_frontend_id[step.on_failure_next_step_id]
-            edges.append(ScenarioEdge(id=f"e{source_id_str}-{target_id_str}-failure", source=source_id_str, target=str(target_id_str), sourceHandle='on_failure'))
+            edges.append(
+                ScenarioEdge(
+                    id=f"e{source_id_str}-{target_id_str}-failure",
+                    source=source_id_str,
+                    target=target_id_str,
+                    sourceHandle="on_failure",
+                )
+            )
 
     return nodes, edges
 
-async def _graph_to_db(db: AsyncSession, scenario: Scenario, data: ScenarioCreate):
-    # Удаляем старые шаги, если они есть
-    if scenario.steps:
-        for step in scenario.steps:
-            await db.delete(step)
-        await db.flush()
 
-    node_map = {}  # {frontend_id: db_step_object}
-    start_node_frontend_id = None
+def _build_steps_from_nodes(nodes: List[ScenarioStepNode]) -> Dict[str, ScenarioStep]:
+    """Создаёт объекты шагов из узлов фронта (без связей)."""
+    node_map: Dict[str, ScenarioStep] = {}
+    for node in nodes:
+        if node.type == "start":
+            step_type = ScenarioStepType.action
+            details = {"id": node.id, "data": node.data, "action_type": "start"}
+        elif node.type == "action":
+            step_type = ScenarioStepType.action
+            details = {"id": node.id, "data": node.data}
+        elif node.type == "condition":
+            step_type = ScenarioStepType.condition
+            details = {"id": node.id, "data": node.data}
+        else:
+            raise HTTPException(
+                status_code=400, detail=f"Неизвестный тип узла: {node.type}"
+            )
 
-    for node_data in data.nodes:
-        step_type = node_data.type
-        details_data = {'id': node_data.id, 'data': node_data.data}
-        
-        if node_data.type == 'start':
-            step_type = 'action'
-            details_data['action_type'] = 'start'
-            start_node_frontend_id = node_data.id
-
-        new_step = ScenarioStep(
-            scenario_id=scenario.id,
+        step = ScenarioStep(
             step_type=step_type,
-            details=details_data,
-            position_x=node_data.position.get('x', 0),
-            position_y=node_data.position.get('y', 0)
+            details=details,
+            position_x=node.position.get("x", 0),
+            position_y=node.position.get("y", 0),
         )
-        db.add(new_step)
-        await db.flush()
-        node_map[node_data.id] = new_step
-    
-    for edge_data in data.edges:
-        source_node = node_map.get(edge_data.source)
-        target_node = node_map.get(edge_data.target)
-        if not source_node or not target_node: continue
+        node_map[node.id] = step
 
-        if source_node.step_type.value == 'action':
-            source_node.next_step_id = target_node.id
-        elif source_node.step_type.value == 'condition':
-            if edge_data.sourceHandle == 'on_success':
-                source_node.on_success_next_step_id = target_node.id
-            elif edge_data.sourceHandle == 'on_failure':
-                source_node.on_failure_next_step_id = target_node.id
+    return node_map
 
-    if start_node_frontend_id:
-        start_step_db = node_map.get(start_node_frontend_id)
-        if start_step_db:
-            scenario.first_step_id = start_step_db.id
+
+def _apply_edges(node_map: Dict[str, ScenarioStep], edges: List[ScenarioEdge]) -> None:
+    """Проставляет связи между шагами по рёбрам."""
+    for edge in edges:
+        source_step = node_map.get(edge.source)
+        target_step = node_map.get(edge.target)
+        if not source_step or not target_step:
+            continue
+
+        if source_step.step_type == ScenarioStepType.action:
+            source_step.next_step_id = target_step.id
+        elif source_step.step_type == ScenarioStepType.condition:
+            if edge.sourceHandle == "on_success":
+                source_step.on_success_next_step_id = target_step.id
+            elif edge.sourceHandle == "on_failure":
+                source_step.on_failure_next_step_id = target_step.id
+
+
+def _find_start_step(node_map: Dict[str, ScenarioStep], nodes: List[ScenarioStepNode]) -> int | None:
+    """Находит стартовый шаг (если есть)."""
+    start_node = next((node for node in nodes if node.type == "start"), None)
+    if start_node:
+        return node_map[start_node.id].id
+    return None
+
+
+# =====================================================
+# ЭНДПОИНТЫ
+# =====================================================
+
+@router.get("/available-conditions", response_model=List[AvailableCondition])
+async def get_available_conditions():
+    """Условные поля для сценариев (UI-справочник)."""
+    return [
+        {
+            "key": "friends_count",
+            "label": "Количество друзей",
+            "type": "number",
+            "operators": ["==", "!=", ">", "<", ">=", "<="],
+        },
+        {
+            "key": "conversion_rate",
+            "label": "Конверсия заявок (%)",
+            "type": "number",
+            "operators": [">", "<", ">=", "<="],
+        },
+        {
+            "key": "day_of_week",
+            "label": "День недели",
+            "type": "select",
+            "operators": ["==", "!="],
+            "options": [
+                {"value": "1", "label": "Понедельник"},
+                {"value": "2", "label": "Вторник"},
+                {"value": "3", "label": "Среда"},
+                {"value": "4", "label": "Четверг"},
+                {"value": "5", "label": "Пятница"},
+                {"value": "6", "label": "Суббота"},
+                {"value": "7", "label": "Воскресенье"},
+            ],
+        },
+    ]
+
 
 @router.get("", response_model=List[ScenarioSchema])
-async def get_user_scenarios(current_user: User = Depends(get_current_active_profile), db: AsyncSession = Depends(get_db)):
-    stmt = select(Scenario).where(Scenario.user_id == current_user.id).options(selectinload(Scenario.steps))
+async def get_user_scenarios(
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = (
+        select(Scenario)
+        .where(Scenario.user_id == current_user.id)
+        .options(selectinload(Scenario.steps))
+    )
     result = await db.execute(stmt)
     scenarios_db = result.scalars().unique().all()
-    
-    response_list = []
-    for s in scenarios_db:
-        nodes, edges = _db_to_graph(s)
-        response_list.append(ScenarioSchema(id=s.id, name=s.name, schedule=s.schedule, is_active=s.is_active, nodes=nodes, edges=edges))
-    return response_list
+
+    return [
+        ScenarioSchema(
+            id=s.id,
+            name=s.name,
+            schedule=s.schedule,
+            is_active=s.is_active,
+            nodes=_db_to_graph(s)[0],
+            edges=_db_to_graph(s)[1],
+        )
+        for s in scenarios_db
+    ]
+
 
 @router.get("/{scenario_id}", response_model=ScenarioSchema)
-async def get_scenario(scenario_id: int, current_user: User = Depends(get_current_active_profile), db: AsyncSession = Depends(get_db)):
-    stmt = select(Scenario).where(Scenario.id == scenario_id, Scenario.user_id == current_user.id).options(selectinload(Scenario.steps))
+async def get_scenario(
+    scenario_id: int,
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = (
+        select(Scenario)
+        .where(Scenario.id == scenario_id, Scenario.user_id == current_user.id)
+        .options(selectinload(Scenario.steps))
+    )
     result = await db.execute(stmt)
     scenario = result.scalar_one_or_none()
     if not scenario:
         raise HTTPException(status_code=404, detail="Сценарий не найден.")
-    
+
     nodes, edges = _db_to_graph(scenario)
-    return ScenarioSchema(id=scenario.id, name=scenario.name, schedule=scenario.schedule, is_active=scenario.is_active, nodes=nodes, edges=edges)
+    return ScenarioSchema(
+        id=scenario.id,
+        name=scenario.name,
+        schedule=scenario.schedule,
+        is_active=scenario.is_active,
+        nodes=nodes,
+        edges=edges,
+    )
+
 
 @router.post("", response_model=ScenarioSchema, status_code=status.HTTP_201_CREATED)
 async def create_scenario(
-    scenario_data: ScenarioCreate, 
-    # ВОТ ИСПРАВЛЕНИЕ: Используем зависимость для API, которая ищет токен в заголовке
-    current_user: User = Depends(get_current_active_profile), 
-    db: AsyncSession = Depends(get_db)
+    scenario_data: ScenarioCreate,
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db),
 ):
     if not croniter.is_valid(scenario_data.schedule):
         raise HTTPException(status_code=400, detail="Неверный формат CRON-строки.")
-    
-    new_scenario = Scenario(user_id=current_user.id, name=scenario_data.name, schedule=scenario_data.schedule, is_active=scenario_data.is_active)
+
+    new_scenario = Scenario(
+        user_id=current_user.id,
+        name=scenario_data.name,
+        schedule=scenario_data.schedule,
+        is_active=scenario_data.is_active,
+    )
+
+    # шаги без связей
+    node_map = _build_steps_from_nodes(scenario_data.nodes)
+    new_scenario.steps = list(node_map.values())
     db.add(new_scenario)
     await db.flush()
 
-    await _graph_to_db(db, new_scenario, scenario_data)
-    await _create_or_update_periodic_task(db, new_scenario)
-    
+    # связи
+    _apply_edges(node_map, scenario_data.edges)
+
+    # стартовый шаг
+    new_scenario.first_step_id = _find_start_step(node_map, scenario_data.nodes)
+
     await db.commit()
-    await db.refresh(new_scenario)
-    
+    await db.refresh(new_scenario, attribute_names=["steps"])
+
     nodes, edges = _db_to_graph(new_scenario)
-    return ScenarioSchema(id=new_scenario.id, name=new_scenario.name, schedule=new_scenario.schedule, is_active=new_scenario.is_active, nodes=nodes, edges=edges)
+    return ScenarioSchema(
+        id=new_scenario.id,
+        name=new_scenario.name,
+        schedule=new_scenario.schedule,
+        is_active=new_scenario.is_active,
+        nodes=nodes,
+        edges=edges,
+    )
+
 
 @router.put("/{scenario_id}", response_model=ScenarioSchema)
-async def update_scenario(scenario_id: int, scenario_data: ScenarioUpdate, current_user: User = Depends(get_current_active_profile), db: AsyncSession = Depends(get_db)):
-    stmt = select(Scenario).where(Scenario.id == scenario_id, Scenario.user_id == current_user.id).options(selectinload(Scenario.steps))
+async def update_scenario(
+    scenario_id: int,
+    scenario_data: ScenarioUpdate,
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = (
+        select(Scenario)
+        .where(Scenario.id == scenario_id, Scenario.user_id == current_user.id)
+        .options(selectinload(Scenario.steps))
+    )
     result = await db.execute(stmt)
     db_scenario = result.scalar_one_or_none()
     if not db_scenario:
         raise HTTPException(status_code=404, detail="Сценарий не найден.")
-    if not croniter.is_valid(scenario_data.schedule):
-        raise HTTPException(status_code=400, detail="Неверный формат CRON-строки.")
-    
-    db_scenario.name = scenario_data.name
-    db_scenario.schedule = scenario_data.schedule
-    db_scenario.is_active = scenario_data.is_active
 
-    await _graph_to_db(db, db_scenario, scenario_data)
-    await _create_or_update_periodic_task(db, db_scenario)
+    if scenario_data.schedule and not croniter.is_valid(scenario_data.schedule):
+        raise HTTPException(status_code=400, detail="Неверный формат CRON-строки.")
+
+    # обновляем базовые поля
+    db_scenario.name = scenario_data.name or db_scenario.name
+    db_scenario.schedule = scenario_data.schedule or db_scenario.schedule
+    db_scenario.is_active = (
+        scenario_data.is_active
+        if scenario_data.is_active is not None
+        else db_scenario.is_active
+    )
+
+    # удаляем старые шаги, если новые переданы
+    if scenario_data.nodes is not None:
+        for old_step in db_scenario.steps:
+            await db.delete(old_step)
+        await db.flush()
+
+        # строим новые шаги
+        node_map = _build_steps_from_nodes(scenario_data.nodes)
+        db_scenario.steps = list(node_map.values())
+        await db.flush()
+
+        # проставляем связи
+        _apply_edges(node_map, scenario_data.edges or [])
+
+        # стартовый шаг
+        db_scenario.first_step_id = _find_start_step(node_map, scenario_data.nodes)
 
     await db.commit()
-    await db.refresh(db_scenario)
+    await db.refresh(db_scenario, attribute_names=["steps"])
+
     nodes, edges = _db_to_graph(db_scenario)
-    return ScenarioSchema(id=db_scenario.id, name=db_scenario.name, schedule=db_scenario.schedule, is_active=db_scenario.is_active, nodes=nodes, edges=edges)
+    return ScenarioSchema(
+        id=db_scenario.id,
+        name=db_scenario.name,
+        schedule=db_scenario.schedule,
+        is_active=db_scenario.is_active,
+        nodes=nodes,
+        edges=edges,
+    )
 
 
 @router.delete("/{scenario_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_scenario(scenario_id: int, current_user: User = Depends(get_current_active_profile), db: AsyncSession = Depends(get_db)):
-    stmt = select(Scenario).where(Scenario.id == scenario_id, Scenario.user_id == current_user.id)
+async def delete_scenario(
+    scenario_id: int,
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = select(Scenario).where(
+        Scenario.id == scenario_id, Scenario.user_id == current_user.id
+    )
     result = await db.execute(stmt)
     db_scenario = result.scalar_one_or_none()
     if not db_scenario:
         raise HTTPException(status_code=404, detail="Сценарий не найден.")
-    
-    task_name = f"scenario-{db_scenario.id}"
-    stmt_task = select(PeriodicTask).where(PeriodicTask.name == task_name)
-    res_task = await db.execute(stmt_task)
-    periodic_task = res_task.scalar_one_or_none()
-    if periodic_task:
-        await db.delete(periodic_task)
-    
+
     await db.delete(db_scenario)
     await db.commit()
+
 
 # --- backend/app\api\endpoints\stats.py ---
 
@@ -3656,30 +3783,6 @@ class FriendsHistory(Base):
 
 
 
-
-# --- backend/app\db\scheduler_models.py ---
-
-# backend/app/db/scheduler_models.py
-"""
-Этот файл содержит модели, необходимые для работы
-библиотеки sqlalchemy-celery-beat.
-Их нужно импортировать, чтобы Alembic мог их "увидеть"
-и создать для них таблицы.
-"""
-# --- ИСПРАВЛЕНИЕ: Импорт из правильного, установленного пакета ---
-from sqlalchemy_celery_beat.models import (
-    PeriodicTask,
-    IntervalSchedule,
-    CrontabSchedule,
-    SolarSchedule
-)
-
-__all__ = [
-    'PeriodicTask',
-    'IntervalSchedule',
-    'CrontabSchedule',
-    'SolarSchedule'
-]
 
 # --- backend/app\db\session.py ---
 
@@ -6247,6 +6350,72 @@ def publish_scheduled_post(self: Task, post_id: int):
             await session.commit()
     
     return run_async_from_sync(_publish_logic())
+
+# --- backend/app\tasks\scheduler.py ---
+
+import sqlalchemy
+from celery.beat import Scheduler
+from celery.schedules import crontab
+from sqlalchemy.orm import sessionmaker
+
+from app.core.config import settings
+from app.db.models import Scenario
+
+# ВАЖНО: Celery Beat - это синхронный процесс.
+# Для доступа к БД из него нам нужен СИНХРОННЫЙ драйвер SQLAlchemy.
+# Мы создаем его здесь локально, он не будет мешать основному асинхронному приложению.
+SYNC_DB_URL = settings.database_url.replace("+asyncpg", "")
+engine = sqlalchemy.create_engine(SYNC_DB_URL)
+Session = sessionmaker(bind=engine)
+
+class DatabaseScheduler(Scheduler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.schedule_changed = True
+
+    @property
+    def schedule(self):
+        """
+        Это главный метод. Celery Beat вызывает его при каждом "тике".
+        Он напрямую читает из БД и формирует актуальное расписание.
+        """
+        if not self.schedule_changed:
+            return self._schedule
+
+        self.app.log.info('Reading active scenarios from database...')
+        
+        # Загружаем все активные сценарии из БД
+        session = Session()
+        try:
+            active_scenarios = session.query(Scenario).filter_by(is_active=True).all()
+        finally:
+            session.close()
+
+        # Формируем расписание в формате, который понимает Celery
+        new_schedule = {}
+        for scenario in active_scenarios:
+            try:
+                minute, hour, day_of_week, day_of_month, month_of_year = scenario.schedule.split(' ')
+                task_name = f"scenario-{scenario.id}"
+                new_schedule[task_name] = {
+                    'task': 'app.tasks.runner.run_scenario_from_scheduler',
+                    'schedule': crontab(
+                        minute=minute, hour=hour, day_of_week=day_of_week,
+                        day_of_month=day_of_month, month_of_year=month_of_year
+                    ),
+                    'args': (scenario.id, scenario.user_id),
+                }
+            except Exception as e:
+                self.app.log.error(f'Failed to parse schedule for scenario {scenario.id}: {e}')
+        
+        self._schedule = new_schedule
+        self.schedule_changed = False # Сбрасываем флаг до следующего тика
+        return self._schedule
+
+    def sync(self):
+        """Этот метод вызывается для сохранения состояния, мы просто сбрасываем кэш."""
+        self._schedule = None
+        self.schedule_changed = True
 
 # --- backend/app\tasks\service_maps.py ---
 

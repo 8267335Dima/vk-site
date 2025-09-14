@@ -25,46 +25,70 @@ from app.api.endpoints import (
     tasks_router, posts_router, teams_router
 )
 from app.services.websocket_manager import redis_listener
+from fastapi.routing import APIRoute
 
 configure_logging()
 log = structlog.get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # --- ИЗМЕНЕНИЕ: Логика инструментария Prometheus убрана отсюда ---
+    """
+    Управляет жизненным циклом приложения, включая запуск и остановку ресурсов,
+    а также выполняет диагностику при старте.
+    """
+    # --- СТАРТ ПРИЛОЖЕНИЯ ---
+    limiter_redis = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/0", encoding="utf-8", decode_responses=True)
+    cache_redis = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/3", encoding="utf-8")
+    pubsub_redis = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/1", decode_responses=True)
     redis_task = None
+
     try:
-        redis_connection = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/0", encoding="utf-8", decode_responses=True)
-        await FastAPILimiter.init(redis_connection)
-
-        redis_cache_connection = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/3", encoding="utf-8")
-        FastAPICache.init(RedisBackend(redis_cache_connection), prefix="fastapi-cache")
-
-        redis_pubsub_connection = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/1", decode_responses=True)
-        redis_task = asyncio.create_task(redis_listener(redis_pubsub_connection))
-
+        await FastAPILimiter.init(limiter_redis)
+        FastAPICache.init(RedisBackend(cache_redis), prefix="fastapi-cache")
+        redis_task = asyncio.create_task(redis_listener(pubsub_redis))
         log.info("lifespan.startup", message="Dependencies initialized.")
     except RedisError as e:
         log.error("lifespan.startup.error", error=str(e), message="Could not connect to Redis.")
+    
+    # --- ДИАГНОСТИКА (выполняется после инициализации) ---
+    print("\n--- FastAPI ROUTE DEPENDENCY DIAGNOSTICS ---")
+    for route in app.routes:
+        if isinstance(route, APIRoute):
+            # Пример диагностики для проблемного эндпоинта
+            if route.path == "/api/v1/scenarios" and "POST" in route.methods:
+                print(f"Found route: {route.methods} {route.path}")
+                print(f"Endpoint function: {route.endpoint.__name__}")
+                for dep in route.dependant.dependencies:
+                    if hasattr(dep.call, "__name__"):
+                         print(f"--> Depends on function: '{dep.call.__name__}'")
+                    else:
+                         print(f"--> Depends on object: {dep.call}")
+    print("--- END DIAGNOSTICS ---\n")
 
     yield
 
-    # Логика остановки
+    # --- ОСТАНОВКА ПРИЛОЖЕНИЯ ---
     if redis_task:
         redis_task.cancel()
-        try: await redis_task
-        except asyncio.CancelledError: log.info("lifespan.shutdown", message="Redis listener task cancelled.")
+        try:
+            await redis_task
+        except asyncio.CancelledError:
+            log.info("lifespan.shutdown", message="Redis listener task cancelled.")
 
-    if FastAPICache.get_backend():
-        await FastAPICache.clear()
-    log.info("lifespan.shutdown", message="Resources cleaned up.")
+    await limiter_redis.close()
+    await cache_redis.close()
+    await pubsub_redis.close()
+    
+    await FastAPILimiter.close()
+    FastAPICache.reset()
 
-# --- ОСНОВНОЕ ИСПРАВЛЕНИЕ ЗДЕСЬ ---
-# 1. Сначала создаем приложение
+    await engine.dispose()
+    
+    log.info("lifespan.shutdown", message="All resources cleaned up completely.")
+
+
 app = FastAPI(title="Zenith API", version="4.0.0", docs_url="/api/docs", redoc_url="/api/redoc", lifespan=lifespan)
 
-# 2. Затем конфигурируем middleware и инструментарий
-# Инициализация инструментария должна происходить ДО добавления других middleware и роутеров
 instrumentator = Instrumentator().instrument(app)
 instrumentator.expose(app, endpoint="/api/metrics")
 
@@ -84,8 +108,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-# --- КОНЕЦ ИСПРАВЛЕНИЯ ---
-
 
 class Tags:
     AUTH = "Аутентификация"
@@ -102,7 +124,6 @@ class Tags:
     TEAMS = "Командный функционал"
     WEBSOCKETS = "WebSockets"
     SYSTEM = "Система"
-
 
 api_router_v1 = APIRouter()
 api_router_v1.include_router(auth_router, prefix="/auth", tags=[Tags.AUTH])

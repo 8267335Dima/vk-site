@@ -6,7 +6,7 @@ from jose import JWTError, jwt
 from pydantic import ValidationError
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload, joinedload, aliased
+from sqlalchemy.orm import selectinload, aliased
 
 from app.core.config import settings
 from app.db.models import User, ManagedProfile, TeamMember, TeamProfileAccess
@@ -14,7 +14,7 @@ from app.db.session import get_db, AsyncSessionFactory
 from app.repositories.user import UserRepository
 from fastapi_limiter.depends import RateLimiter
 
-
+# Эта зависимость знает, как извлечь токен из заголовка "Authorization: Bearer ..."
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/vk")
 
 credentials_exception = HTTPException(
@@ -29,10 +29,24 @@ async def get_request_identifier(request: Request) -> str:
         return forwarded_for.split(',')[0].strip()
     return request.client.host if request.client else "unknown"
 
-# Создаем экземпляр нашего лимитера. Это и есть наша зависимость.
 limiter = RateLimiter(times=5, minutes=1, identifier=get_request_identifier)
 
-async def get_payload_from_token(token: str) -> Dict[str, Any]:
+# --- ИСПРАВЛЕНИЕ НАЧИНАЕТСЯ ЗДЕСЬ ---
+
+# 1. Создаем новую, правильную зависимость для получения payload из токена в HTTP-заголовке
+async def get_token_payload(token: str = Depends(oauth2_scheme)) -> Dict[str, Any]:
+    """
+    Извлекает токен из заголовка Authorization, декодирует его и возвращает payload.
+    """
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        return payload
+    except (JWTError, ValidationError):
+        raise credentials_exception
+
+# 2. Старая функция, которая принимает строку, остается для WebSocket
+async def _get_payload_from_string(token: str) -> Dict[str, Any]:
+    """Вспомогательная функция для декодирования токена из строки (для WS)."""
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         return payload
@@ -40,7 +54,8 @@ async def get_payload_from_token(token: str) -> Dict[str, Any]:
         raise credentials_exception
 
 async def get_current_manager_user(
-    payload: Dict[str, Any] = Depends(get_payload_from_token),
+    # 3. Указываем зависимость от новой, правильной функции
+    payload: Dict[str, Any] = Depends(get_token_payload),
     db: AsyncSession = Depends(get_db)
 ) -> User:
     """Возвращает управляющего пользователя (менеджера) из токена."""
@@ -54,25 +69,18 @@ async def get_current_manager_user(
         raise credentials_exception
     return manager
 
-# ИЗМЕНЕНИЕ: Полностью переписанная "умная" зависимость для максимальной производительности
 async def get_current_active_profile(
-    payload: Dict[str, Any] = Depends(get_payload_from_token),
+    # 4. Указываем зависимость от новой, правильной функции
+    payload: Dict[str, Any] = Depends(get_token_payload),
     db: AsyncSession = Depends(get_db)
 ) -> User:
     """
-    Новая, "умная" зависимость, оптимизированная для выполнения одного запроса к БД.
-    Проверяет все возможные сценарии доступа:
-    1. Пользователь работает со своим профилем.
-    2. Менеджер работает с управляемым профилем.
-    3. Участник команды работает с профилем, к которому ему дали доступ.
+    "Умная" зависимость, которая использует payload, полученный из токена в заголовке.
     """
     logged_in_user_id = int(payload.get("sub"))
     active_profile_id = int(payload.get("profile_id") or logged_in_user_id)
-
-    # Создаем алиас для TeamMember, чтобы избежать конфликтов в JOIN
+    
     tm_alias = aliased(TeamMember)
-
-    # Единый запрос, который проверяет все условия доступа
     stmt = (
         select(User)
         .outerjoin(ManagedProfile, and_(
@@ -86,9 +94,9 @@ async def get_current_active_profile(
         ))
         .where(
             User.id == active_profile_id,
-            (User.id == logged_in_user_id) | # Сценарий 1
-            (ManagedProfile.id != None) |     # Сценарий 2
-            (TeamProfileAccess.id != None)    # Сценарий 3
+            (User.id == logged_in_user_id) |
+            (ManagedProfile.id != None) |
+            (TeamProfileAccess.id != None)
         )
     )
     
@@ -98,14 +106,17 @@ async def get_current_active_profile(
     if profile:
         return profile
     
-    # Если ни одно из условий не выполнено - доступ запрещен
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступ к этому профилю запрещен.")
 
 
 async def get_current_user_from_ws(token: str = Query(...)) -> User:
+    """
+    Эта зависимость для WebSocket остается без изменений, но теперь использует
+    внутреннюю функцию для ясности.
+    """
     async with AsyncSessionFactory() as session:
-        payload = await get_payload_from_token(token)
-        # На WS нам нужен только активный профиль, полная проверка прав излишня
+        # Используем вспомогательную функцию, которая принимает строку
+        payload = await _get_payload_from_string(token)
         profile_id = int(payload.get("profile_id") or payload.get("sub"))
         user = await session.get(User, profile_id)
         if not user:
