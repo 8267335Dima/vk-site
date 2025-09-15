@@ -23,7 +23,7 @@ passlib = "1.7.4"
 pydantic = "2.11.7"
 email-validator = "2.3.0"
 alembic = "1.16.5"
-gevent = "^24.2.1"
+arq = "^0.25.0"
 fastapi = "0.116.1"
 asyncpg = "0.30.0"
 orjson = "3.11.3"
@@ -44,7 +44,7 @@ fastapi-cache2 = "^0.2.2"
 uvicorn = "0.35.0"
 gunicorn = "^22.0.0"
 redis = "^4.6.0"
-celery = "5.5.3"
+
 prometheus-fastapi-instrumentator = "^7.1.0" 
 itsdangerous = "^2.2.0"
 opentelemetry-api = "^1.25.0"
@@ -65,16 +65,12 @@ requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
 
+# backend/pyproject.toml
+
 [tool.pytest.ini_options]
-pythonpath = "."
+# pythonpath все еще нужен, чтобы тесты находили код приложения
+pythonpath = [".", "backend"] 
 testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = ["asyncio"]
 
-# Переменные окружения для тестов
-env = [
-    "SECRET_KEY=test_secret_key",
-    "ENCRYPTION_KEY=LLn9-hFySo5xa8Xm9-W0-9Cod_uG0g1adBk3ZRmZo44=",
-    "ALGORITHM=HS256",
-    "ACCESS_TOKEN_EXPIRE_MINUTES=30"
-]

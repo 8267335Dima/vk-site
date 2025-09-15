@@ -11,11 +11,31 @@ docker-compose up -d
 npm run dev
 npm start
 npm run dev
-миграция докер: docker-compose run --rm backend /app/.venv/bin/alembic revision --autogenerate -m "my_new_migration"
-применить: docker-compose run --rm backend /app/.venv/bin/alembic upgrade head
-зайти и проверить таблицы:
 docker exec -it social_pilot_postgres_prod psql -U smm_user -d smm_combine
 \dt
 
 тесты: docker-compose exec backend pytest
 После внесения изменений выполните docker-compose up -d --force-recreate, чтобы пересоздать контейнеры с новыми сетевыми настройками
+
+
+Ваш новый рабочий процесс
+Теперь все управление проектом происходит из папки frontend.
+Первый раз / Применение миграций:
+Откройте терминал в frontend/.
+npm run services:up (запустит Postgres и Redis)
+npm run db:upgrade (создаст таблицы в базе)
+Ежедневная разработка:
+Откройте терминал в frontend/.
+npm run services:up (если сервисы еще не запущены)
+npm run dev (запустит весь ваш код)
+Тестирование:
+Убедитесь, что сервисы запущены (npm run services:up).
+Из VS Code: Просто нажимайте "Play" на панели "Testing".
+Из терминала (в frontend/): npm test
+Остановка:
+Нажмите Ctrl+C в терминале, где запущен dev.
+Выполните npm run services:down, чтобы остановить Postgres и Redis.
+
+cd frontend && yarn dev
+arq --watch . app.worker.WorkerSettings
+cd backend && alembic revision --autogenerate -m "add timezone" && alembic upgrade head

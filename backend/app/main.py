@@ -13,7 +13,13 @@ from contextlib import asynccontextmanager
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
 from prometheus_fastapi_instrumentator import Instrumentator
-from app.celery_app import celery_app
+
+# --- ИЗМЕНЕНИЯ ЗДЕСЬ ---
+# from app.celery_app import celery_app # <-- УДАЛЕНО: Celery больше не используется
+from app.arq_config import redis_settings # <-- ИЗМЕНЕНО: Импорт из нового центрального конфига
+from arq.connections import create_pool
+# -------------------------
+
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.db.session import engine
@@ -46,15 +52,18 @@ async def lifespan(app: FastAPI):
         await FastAPILimiter.init(limiter_redis)
         FastAPICache.init(RedisBackend(cache_redis), prefix="fastapi-cache")
         redis_task = asyncio.create_task(redis_listener(pubsub_redis))
+        # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
+        # Создаем пул соединений ARQ и сохраняем его в состоянии приложения
+        app.state.arq_pool = await create_pool(redis_settings)
+        # -------------------------
         log.info("lifespan.startup", message="Dependencies initialized.")
     except RedisError as e:
         log.error("lifespan.startup.error", error=str(e), message="Could not connect to Redis.")
-    
-    # --- ДИАГНОСТИКА (выполняется после инициализации) ---
+
+    # --- ДИАГНОСТИКА (без изменений) ---
     print("\n--- FastAPI ROUTE DEPENDENCY DIAGNOSTICS ---")
     for route in app.routes:
         if isinstance(route, APIRoute):
-            # Пример диагностики для проблемного эндпоинта
             if route.path == "/api/v1/scenarios" and "POST" in route.methods:
                 print(f"Found route: {route.methods} {route.path}")
                 print(f"Endpoint function: {route.endpoint.__name__}")
@@ -75,15 +84,20 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             log.info("lifespan.shutdown", message="Redis listener task cancelled.")
 
-    await limiter_redis.close()
-    await cache_redis.close()
-    await pubsub_redis.close()
-    
+    # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
+    # Корректно закрываем пул соединений ARQ при остановке
+    await app.state.arq_pool.close()
+    # -------------------------
+
+    await limiter_redis.aclose()
+    await cache_redis.aclose()
+    await pubsub_redis.aclose()
+
     await FastAPILimiter.close()
     FastAPICache.reset()
 
     await engine.dispose()
-    
+
     log.info("lifespan.shutdown", message="All resources cleaned up completely.")
 
 

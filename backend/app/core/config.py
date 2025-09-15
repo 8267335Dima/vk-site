@@ -44,7 +44,6 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: str
 
     model_config = SettingsConfigDict(
-        # --- ИЗМЕНЕНИЕ: Указываем вычисленный путь к файлу ---
         env_file=ENV_FILE,
         env_file_encoding='utf-8',
         extra='ignore'

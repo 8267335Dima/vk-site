@@ -40,7 +40,7 @@
     "start:worker": "cd ../backend && poetry run celery -A app.celery_worker.celery_app worker --loglevel=info -P gevent",
     "start:beat": "cd ../backend && poetry run celery -A app.celery_worker.celery_app beat --loglevel=info --scheduler=sqlalchemy_celery_beat.schedulers:DatabaseScheduler",
     "//--- КОМПЛЕКСНЫЕ КОМАНДЫ ---": "",
-    "dev": "concurrently --kill-others --names \"BACKEND,WORKER,BEAT,FRONTEND\" -c \"auto\" \"npm:start:backend\" \"npm:start:worker\" \"npm:start:beat\" \"npm:start:frontend\"",
+    "dev": "concurrently --kill-others --names \"BACKEND,WORKER,BEAT,FRONTEND\" -c \"auto\" \"yarn:start:backend\" \"yarn:start:worker\" \"yarn:start:beat\" \"yarn:start:frontend\"",
     "//--- УТИЛИТЫ И ТЕСТЫ ---": "",
     "db:upgrade": "cd ../backend && poetry run alembic upgrade head",
     "test": "cd ../backend && poetry run pytest",

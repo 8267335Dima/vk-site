@@ -1,16 +1,11 @@
 import datetime
 from sqlalchemy import (
     Column, Integer, String, DateTime, ForeignKey, BigInteger,
-    UniqueConstraint, JSON, Index, Date, Enum  # <-- УБЕДИТЕСЬ, ЧТО Enum ИМПОРТИРУЕТСЯ ЗДЕСЬ
+    UniqueConstraint, JSON, Index, Date, Enum
 )
 from sqlalchemy.orm import relationship
 from app.db.base import Base
 from app.db.enums import FriendRequestStatus
-
-# Этот класс можно удалить, так как он импортируется из enums.py
-# class FriendRequestStatus(enum.Enum):
-#     pending = "pending"
-#     accepted = "accepted"
 
 class DailyStats(Base):
     __tablename__ = "daily_stats"
@@ -81,7 +76,7 @@ class PostActivityHeatmap(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True, unique=True)
     heatmap_data = Column(JSON, nullable=False)
-    last_updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    last_updated_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
     user = relationship("User", back_populates="heatmap")
 
 class FriendRequestLog(Base):
@@ -89,10 +84,8 @@ class FriendRequestLog(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     target_vk_id = Column(BigInteger, nullable=False, index=True)
-    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
     status = Column(Enum(FriendRequestStatus), nullable=False, default=FriendRequestStatus.pending, index=True)
-    # -------------------------
-    created_at = Column(DateTime, default=datetime.datetime.utcnow, index=True)
-    resolved_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow, index=True)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
     user = relationship("User", back_populates="friend_requests")
     __table_args__ = (UniqueConstraint('user_id', 'target_vk_id', name='_user_target_uc'),)

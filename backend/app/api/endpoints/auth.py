@@ -1,6 +1,6 @@
 # backend/app/api/endpoints/auth.py
 
-from datetime import timedelta, datetime
+from datetime import timedelta, datetime, UTC
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -58,7 +58,7 @@ async def login_via_vk(
             vk_id=vk_id,
             encrypted_vk_token=encrypted_token,
             plan=PlanName.BASE,
-            plan_expires_at=datetime.utcnow() + timedelta(days=14),
+            plan_expires_at=datetime.now(UTC) + timedelta(days=14),
             daily_likes_limit=base_plan_limits["daily_likes_limit"],
             daily_add_friends_limit=base_plan_limits["daily_add_friends_limit"]
         )

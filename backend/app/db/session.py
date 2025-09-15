@@ -3,15 +3,16 @@
 from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
+# 1. ДОБАВЬТЕ ЭТОТ ИМПОРТ
+from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
 
-# ИЗМЕНЕНИЕ: Убран NullPool для использования стандартного асинхронного пула соединений,
-# который более эффективен для приложений с постоянной нагрузкой.
-# NullPool оправдан только для serverless-окружений или при работе с PgBouncer.
+# 2. ИЗМЕНИТЕ СОЗДАНИЕ ENGINE, ДОБАВИВ poolclass=NullPool
 engine = create_async_engine(
     settings.database_url, 
-    pool_pre_ping=True
+    pool_pre_ping=True,
+    poolclass=NullPool  
 )
 
 # Создаем фабрику асинхронных сессий

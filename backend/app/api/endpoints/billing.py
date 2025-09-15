@@ -103,12 +103,6 @@ async def payment_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         log.warn("webhook.invalid_json")
         raise HTTPException(status_code=400, detail="Invalid JSON body.")
 
-    # ВАЖНО: Проверка подписи от YooKassa должна быть здесь
-    # signature = request.headers.get('Yoo-Kassa-Signature')
-    # if not is_valid_signature(event, signature):
-    #     log.error("webhook.invalid_signature")
-    #     raise HTTPException(status_code=403, detail="Invalid signature")
-
     event_type = event.get("event")
     payment_data = event.get("object", {})
     payment_system_id = payment_data.get("id")
@@ -119,40 +113,51 @@ async def payment_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         if not payment_system_id:
             return {"status": "error", "message": "Payment ID missing."}
 
-        async with db.begin():
-            query = select(Payment).where(Payment.payment_system_id == payment_system_id)
-            payment = (await db.execute(query)).scalar_one_or_none()
+        # --- ИСПРАВЛЕНИЕ ЗДЕСЬ: УБИРАЕМ `async with db.begin():` ---
+        # Сессия `db` уже находится в транзакции благодаря `Depends(get_db)`.
+        # Все изменения будут автоматически закоммичены после успешного
+        # завершения эндпоинта.
 
-            if not payment:
-                log.warn("webhook.payment_not_found", payment_id=payment_system_id)
-                return {"status": "ok"} # Возвращаем 200, чтобы система не повторяла запрос
+        query = select(Payment).where(Payment.payment_system_id == payment_system_id)
+        payment = (await db.execute(query)).scalar_one_or_none()
 
-            if payment.status == "succeeded":
-                log.info("webhook.already_processed", payment_id=payment.id)
-                return {"status": "ok"}
-            
-            user = await db.get(User, payment.user_id, with_for_update=True)
-            if not user:
-                log.error("webhook.user_not_found", user_id=payment.user_id)
-                return {"status": "ok"} 
+        if not payment:
+            log.warn("webhook.payment_not_found", payment_id=payment_system_id)
+            return {"status": "ok"} # Возвращаем 200, чтобы система не повторяла запрос
 
-            received_amount = float(payment_data.get("amount", {}).get("value", 0))
-            if abs(received_amount - payment.amount) > 0.01:
-                payment.status = "failed"
-                log.error("webhook.amount_mismatch", payment_id=payment.id, expected=payment.amount, got=received_amount)
-                return {"status": "ok"}
+        if payment.status == "succeeded":
+            log.info("webhook.already_processed", payment_id=payment.id)
+            return {"status": "ok"}
+        
+        user = await db.get(User, payment.user_id, with_for_update=True)
+        if not user:
+            log.error("webhook.user_not_found", user_id=payment.user_id)
+            # Мы не можем ничего сделать, но должны вернуть 200, чтобы не было повторов
+            payment.status = "failed"
+            payment.error_message = "User not found"
+            await db.commit()
+            return {"status": "ok"}
 
-            start_date = user.plan_expires_at if user.plan_expires_at and user.plan_expires_at > datetime.datetime.utcnow() else datetime.datetime.utcnow()
-            
-            user.plan = payment.plan_name
-            user.plan_expires_at = start_date + datetime.timedelta(days=30 * payment.months)
-            
-            new_limits = get_limits_for_plan(user.plan)
-            user.daily_likes_limit = new_limits.get("daily_likes_limit", 0)
-            user.daily_add_friends_limit = new_limits.get("daily_add_friends_limit", 0)
+        received_amount = float(payment_data.get("amount", {}).get("value", 0))
+        if abs(received_amount - payment.amount) > 0.01:
+            payment.status = "failed"
+            payment.error_message = f"Amount mismatch: expected {payment.amount}, got {received_amount}"
+            log.error("webhook.amount_mismatch", payment_id=payment.id, expected=payment.amount, got=received_amount)
+            await db.commit()
+            return {"status": "ok"}
 
-            payment.status = "succeeded"
-            
-            log.info("webhook.success", user_id=user.id, plan=user.plan, expires_at=user.plan_expires_at)
-            
+        start_date = user.plan_expires_at if user.plan_expires_at and user.plan_expires_at > datetime.datetime.now(datetime.UTC) else datetime.datetime.now(datetime.UTC)
+        
+        user.plan = payment.plan_name
+        user.plan_expires_at = start_date + datetime.timedelta(days=30 * payment.months)
+        
+        new_limits = get_limits_for_plan(user.plan)
+        user.daily_likes_limit = new_limits.get("daily_likes_limit", 0)
+        user.daily_add_friends_limit = new_limits.get("daily_add_friends_limit", 0)
+
+        payment.status = "succeeded"
+        
+        # FastAPI автоматически вызовет db.commit() после успешного выхода из этой функции
+        log.info("webhook.success", user_id=user.id, plan=user.plan, expires_at=user.plan_expires_at)
+        
     return {"status": "ok"}

@@ -1,5 +1,3 @@
-# РЕФАКТОРИНГ: Модель для платежей.
-
 import datetime
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Float
 from sqlalchemy.orm import relationship
@@ -14,6 +12,6 @@ class Payment(Base):
     status = Column(String, default="pending", nullable=False)
     plan_name = Column(String, nullable=False)
     months = Column(Integer, nullable=False, default=1)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
     user = relationship("User")

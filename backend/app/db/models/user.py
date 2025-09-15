@@ -1,22 +1,20 @@
-# РЕФАКТОРИНГ: Модели, относящиеся к пользователям, командам и доступу.
-
-import datetime
+from datetime import datetime, UTC
 from sqlalchemy import (
     Column, Integer, String, DateTime, ForeignKey, BigInteger,
     UniqueConstraint, Boolean, text, Enum, Text
 )
 from sqlalchemy.orm import relationship
 from app.db.base import Base
-from app.db.enums import DelayProfile, TeamMemberRole # <-- ИЗМЕНЕНИЕ: импорт из enums.py
+from app.db.enums import DelayProfile, TeamMemberRole
 
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
     vk_id = Column(BigInteger, unique=True, index=True, nullable=False)
     encrypted_vk_token = Column(String, nullable=False)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     plan = Column(String, nullable=False, server_default='Базовый')
-    plan_expires_at = Column(DateTime, nullable=True)
+    plan_expires_at = Column(DateTime(timezone=True), nullable=True)
     is_admin = Column(Boolean, nullable=False, server_default='false')
     daily_likes_limit = Column(Integer, nullable=False, server_default=text('0'))
     daily_add_friends_limit = Column(Integer, nullable=False, server_default=text('0'))
@@ -79,7 +77,7 @@ class LoginHistory(Base):
     __tablename__ = "login_history"
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    timestamp = Column(DateTime, default=datetime.datetime.utcnow, index=True)
+    timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
     ip_address = Column(String, nullable=True)
     user_agent = Column(Text, nullable=True)
     user = relationship("User")

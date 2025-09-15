@@ -1,3 +1,5 @@
+// frontend/src/shared/api/index.jsx
+
 // РЕФАКТОРИНГ: Этот файл теперь является точкой входа,
 // которая собирает и экспортирует все API-методы и клиент.
 import axios from 'axios';
@@ -16,7 +18,7 @@ apiClient.interceptors.request.use((config) => {
   return config;
 });
 
-// Экспортируем все функции из разделенных модулей
+// --- ИСПРАВЛЕНИЕ ЗДЕСЬ: Убираем расширения файлов ---
 export * from './auth';
 export * from './users';
 export * from './tasks';

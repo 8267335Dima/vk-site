@@ -1,4 +1,4 @@
-# --- backend/app/api/dependencies.py ---
+# backend/app/api/dependencies.py
 from typing import Annotated, Dict, Any
 from fastapi import Depends, HTTPException, Request, status, Query
 from fastapi.security import OAuth2PasswordBearer
@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, aliased
+from arq.connections import ArqRedis
 
 from app.core.config import settings
 from app.db.models import User, ManagedProfile, TeamMember, TeamProfileAccess
@@ -14,7 +15,6 @@ from app.db.session import get_db, AsyncSessionFactory
 from app.repositories.user import UserRepository
 from fastapi_limiter.depends import RateLimiter
 
-# Эта зависимость знает, как извлечь токен из заголовка "Authorization: Bearer ..."
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/vk")
 
 credentials_exception = HTTPException(
@@ -31,22 +31,17 @@ async def get_request_identifier(request: Request) -> str:
 
 limiter = RateLimiter(times=5, minutes=1, identifier=get_request_identifier)
 
-# --- ИСПРАВЛЕНИЕ НАЧИНАЕТСЯ ЗДЕСЬ ---
+async def get_arq_pool(request: Request) -> ArqRedis:
+    return request.app.state.arq_pool
 
-# 1. Создаем новую, правильную зависимость для получения payload из токена в HTTP-заголовке
 async def get_token_payload(token: str = Depends(oauth2_scheme)) -> Dict[str, Any]:
-    """
-    Извлекает токен из заголовка Authorization, декодирует его и возвращает payload.
-    """
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         return payload
     except (JWTError, ValidationError):
         raise credentials_exception
 
-# 2. Старая функция, которая принимает строку, остается для WebSocket
 async def _get_payload_from_string(token: str) -> Dict[str, Any]:
-    """Вспомогательная функция для декодирования токена из строки (для WS)."""
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         return payload
@@ -54,11 +49,9 @@ async def _get_payload_from_string(token: str) -> Dict[str, Any]:
         raise credentials_exception
 
 async def get_current_manager_user(
-    # 3. Указываем зависимость от новой, правильной функции
     payload: Dict[str, Any] = Depends(get_token_payload),
     db: AsyncSession = Depends(get_db)
 ) -> User:
-    """Возвращает управляющего пользователя (менеджера) из токена."""
     user_repo = UserRepository(db)
     manager_id_str: str | None = payload.get("sub")
     if manager_id_str is None:
@@ -70,13 +63,9 @@ async def get_current_manager_user(
     return manager
 
 async def get_current_active_profile(
-    # 4. Указываем зависимость от новой, правильной функции
     payload: Dict[str, Any] = Depends(get_token_payload),
     db: AsyncSession = Depends(get_db)
 ) -> User:
-    """
-    "Умная" зависимость, которая использует payload, полученный из токена в заголовке.
-    """
     logged_in_user_id = int(payload.get("sub"))
     active_profile_id = int(payload.get("profile_id") or logged_in_user_id)
     
@@ -110,12 +99,7 @@ async def get_current_active_profile(
 
 
 async def get_current_user_from_ws(token: str = Query(...)) -> User:
-    """
-    Эта зависимость для WebSocket остается без изменений, но теперь использует
-    внутреннюю функцию для ясности.
-    """
     async with AsyncSessionFactory() as session:
-        # Используем вспомогательную функцию, которая принимает строку
         payload = await _get_payload_from_string(token)
         profile_id = int(payload.get("profile_id") or payload.get("sub"))
         user = await session.get(User, profile_id)

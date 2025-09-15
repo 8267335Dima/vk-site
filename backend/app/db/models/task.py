@@ -1,4 +1,4 @@
-import datetime
+from datetime import datetime, UTC
 import enum
 from sqlalchemy import (
     Column, ForeignKeyConstraint, Integer, String, DateTime, ForeignKey, BigInteger,
@@ -26,8 +26,8 @@ class TaskHistory(Base):
     status = Column(String, default="PENDING", nullable=False, index=True)
     parameters = Column(JSON, nullable=True)
     result = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
     user = relationship("User", back_populates="task_history")
     __table_args__ = (Index('ix_task_history_user_status', 'user_id', 'status'),)
 
@@ -38,7 +38,7 @@ class Automation(Base):
     automation_type = Column(String, nullable=False, index=True)
     is_active = Column(Boolean, default=False, nullable=False)
     settings = Column(JSON, nullable=True)
-    last_run_at = Column(DateTime, nullable=True)
+    last_run_at = Column(DateTime(timezone=True), nullable=True)
     user = relationship("User", back_populates="automations")
     __table_args__ = (UniqueConstraint('user_id', 'automation_type', name='_user_automation_uc'),)
 
@@ -92,7 +92,7 @@ class ScheduledPost(Base):
     vk_profile_id = Column(BigInteger, nullable=False, index=True)
     post_text = Column(Text, nullable=True)
     attachments = Column(JSON, nullable=True)
-    publish_at = Column(DateTime, nullable=False, index=True)
+    publish_at = Column(DateTime(timezone=True), nullable=False, index=True)
     status = Column(Enum(ScheduledPostStatus), nullable=False, default=ScheduledPostStatus.scheduled, index=True)
     celery_task_id = Column(String, nullable=True, unique=True)
     vk_post_id = Column(String, nullable=True)
@@ -115,5 +115,5 @@ class ActionLog(Base):
     action_type = Column(String, nullable=False, index=True)
     message = Column(Text, nullable=False)
     status = Column(String, nullable=False)
-    timestamp = Column(DateTime, default=datetime.datetime.utcnow, index=True)
+    timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
     user = relationship("User")

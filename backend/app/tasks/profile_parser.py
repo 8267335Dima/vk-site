@@ -4,14 +4,11 @@ import datetime
 import structlog
 from sqlalchemy import select, or_
 
-from app.celery_app import celery_app
-from celery import Task
-
+# Импорты Celery удалены
 from app.db.session import AsyncSessionFactory
-from app.db.models import User 
+from app.db.models import User
 from app.services.profile_analytics_service import ProfileAnalyticsService
 from app.services.vk_api import VKAuthError
-from app.tasks.utils import run_async_from_sync
 
 log = structlog.get_logger(__name__)
 
@@ -27,10 +24,10 @@ async def _snapshot_all_users_metrics_async():
             return
 
         log.info("snapshot_metrics_task.start", count=len(active_users))
-        
+
         tasks = [_process_user(user) for user in active_users]
         await asyncio.gather(*tasks)
-        
+
         log.info("snapshot_metrics_task.finished")
 
 async def _process_user(user: User):
@@ -43,6 +40,3 @@ async def _process_user(user: User):
         except Exception as e:
             log.error("snapshot_metrics_task.user_error", user_id=user.id, error=str(e))
 
-@celery_app.task(name="app.tasks.profile_parser.snapshot_all_users_metrics")
-def snapshot_all_users_metrics():
-    run_async_from_sync(_snapshot_all_users_metrics_async())

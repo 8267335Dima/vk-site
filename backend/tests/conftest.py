@@ -1,15 +1,21 @@
+# --- backend/tests/conftest.py ---
+
 import asyncio
 from typing import AsyncGenerator
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from asgi_lifespan import LifespanManager
+from app.celery_app import celery_app
 from app.db.models import User
 from app.db.session import get_db, AsyncSessionFactory
 from app.main import app
 from app.api.dependencies import limiter
+from sqlalchemy.orm import selectinload
 from app.core.config import settings
+
 
 @pytest_asyncio.fixture(scope="function")
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
@@ -37,27 +43,27 @@ async def async_client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, 
 async def authorized_user_and_headers(async_client: AsyncClient, db_session: AsyncSession) -> tuple[User, dict]:
     """
     Выполняет вход, СОХРАНЯЕТ пользователя в БД, и возвращает:
-    1. Объект User, присоединенный к сессии теста.
+    1. Объект User, присоединенный к сессии теста, с предзагруженными proxies.
     2. Заголовки для авторизованных запросов.
     """
     test_token = settings.VK_HEALTH_CHECK_TOKEN
     assert test_token, "Переменная VK_HEALTH_CHECK_TOKEN должна быть в .env"
 
-    # Выполняем логин, который создаст или обновит пользователя
     r = await async_client.post("/api/v1/auth/vk", json={"vk_token": test_token})
     assert r.status_code == 200
     
     response_data = r.json()
     access_token = response_data.get("access_token")
-    user_id = response_data.get("manager_id") # Получаем ID из ответа API
+    user_id = response_data.get("manager_id")
     
     assert access_token and user_id, "В ответе на логин отсутствуют access_token или manager_id"
     
     headers = {"Authorization": f"Bearer {access_token}"}
 
-    # Явно получаем пользователя из БД в текущей сессии теста,
-    # чтобы убедиться, что он существует и присоединен.
-    user = await db_session.get(User, user_id)
+    stmt = select(User).options(selectinload(User.proxies)).where(User.id == user_id)
+    result = await db_session.execute(stmt)
+    user = result.scalar_one_or_none()
+    
     assert user is not None, "Не удалось найти пользователя в БД после логина"
 
     return user, headers
