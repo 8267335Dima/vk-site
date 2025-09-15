@@ -29,3 +29,6 @@ class PaginatedTasksResponse(BaseModel):
     page: int
     size: int
     has_more: bool
+
+class PreviewResponse(BaseModel):
+    found_count: int

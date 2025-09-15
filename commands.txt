@@ -38,3 +38,27 @@ cd backend && alembic revision --autogenerate -m "add timezone" && alembic upgra
 
 
 тесты: cd backend && pytest -sv tests/test_filters.py
+
+# Запустить тесты аутентификации и переключения профилей
+pytest backend/tests/test_auth.py -v -s
+
+# Запустить тесты задач, связанных с контентом (лайки, сторис, посты)
+pytest backend/tests/test_content_tasks.py -v -s
+
+# Запустить детальную диагностику всех фильтров по реальным данным
+pytest backend/tests/test_filter_diagnostics.py -v -s
+
+# Запустить тесты задач, связанных с друзьями (добавление, удаление, прием заявок)
+pytest backend/tests/test_friend_tasks.py -v -s
+
+# Запустить тесты задач, связанных с группами (вступление, выход)
+pytest backend/tests/test_group_tasks.py -v -s
+
+# Запустить тесты задач рассылки сообщений и поздравлений
+pytest backend/tests/test_messaging_tasks.py -v -s
+
+# Запустить тесты жизненного цикла сценариев
+pytest backend/tests/test_scenarios.py -v -s
+
+# Запустить все тесты сразу
+pytest backend/tests/ -v -s

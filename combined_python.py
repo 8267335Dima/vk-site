@@ -109,172 +109,103 @@ def init_admin(app, engine):
 
 # backend/app/arq_config.py
 from arq.connections import RedisSettings
-
+from app.core.config import settings 
 # Единый источник настроек Redis для ARQ.
 # Используем базу данных Redis №4, чтобы не пересекаться с кэшем или limiter'ом.
-redis_settings = RedisSettings.from_dsn("redis://localhost:6379/4")
+redis_settings = RedisSettings(
+    host=settings.REDIS_HOST,
+    port=settings.REDIS_PORT,
+    database=4
+)
 
 # --- backend/app\main.py ---
 
 # backend/app/main.py
-import asyncio
-import structlog
-from fastapi import APIRouter, FastAPI, Request, status, Depends
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
-from redis.asyncio import Redis
-from redis.exceptions import RedisError
-from fastapi_cache import FastAPICache
-from fastapi_cache.backends.redis import RedisBackend
-from contextlib import asynccontextmanager
-from fastapi_limiter import FastAPILimiter
-from fastapi_limiter.depends import RateLimiter
-from prometheus_fastapi_instrumentator import Instrumentator
 
-# --- ИЗМЕНЕНИЯ ЗДЕСЬ ---
-# from app.celery_app import celery_app # <-- УДАЛЕНО: Celery больше не используется
-from app.arq_config import redis_settings # <-- ИЗМЕНЕНО: Импорт из нового центрального конфига
-from arq.connections import create_pool
-# -------------------------
+import asyncio
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from redis.asyncio import Redis as AsyncRedis
 
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.db.session import engine
 from app.admin import init_admin
-from app.api.endpoints import (
-    auth_router, users_router, websockets_router,
-    stats_router, automations_router, billing_router,
-    analytics_router, scenarios_router, notifications_router, proxies_router,
-    tasks_router, posts_router, teams_router
-)
 from app.services.websocket_manager import redis_listener
-from fastapi.routing import APIRoute
+from app.api.endpoints import (
+    auth_router, users_router, proxies_router, tasks_router,
+    stats_router, automations_router, billing_router, analytics_router,
+    scenarios_router, notifications_router, posts_router, teams_router,
+    websockets_router
+)
 
+# Вызываем настройку логирования в самом начале
 configure_logging()
-log = structlog.get_logger(__name__)
+
+# Создаем фоновую задачу для прослушивания Redis Pub/Sub для WebSockets
+async def run_redis_listener(redis_client):
+    await redis_listener(redis_client)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Управляет жизненным циклом приложения, включая запуск и остановку ресурсов,
-    а также выполняет диагностику при старте.
-    """
-    # --- СТАРТ ПРИЛОЖЕНИЯ ---
-    limiter_redis = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/0", encoding="utf-8", decode_responses=True)
-    cache_redis = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/3", encoding="utf-8")
-    pubsub_redis = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/1", decode_responses=True)
-    redis_task = None
-
-    try:
-        await FastAPILimiter.init(limiter_redis)
-        FastAPICache.init(RedisBackend(cache_redis), prefix="fastapi-cache")
-        redis_task = asyncio.create_task(redis_listener(pubsub_redis))
-        # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
-        # Создаем пул соединений ARQ и сохраняем его в состоянии приложения
-        app.state.arq_pool = await create_pool(redis_settings)
-        # -------------------------
-        log.info("lifespan.startup", message="Dependencies initialized.")
-    except RedisError as e:
-        log.error("lifespan.startup.error", error=str(e), message="Could not connect to Redis.")
-
-    # --- ДИАГНОСТИКА (без изменений) ---
-    print("\n--- FastAPI ROUTE DEPENDENCY DIAGNOSTICS ---")
-    for route in app.routes:
-        if isinstance(route, APIRoute):
-            if route.path == "/api/v1/scenarios" and "POST" in route.methods:
-                print(f"Found route: {route.methods} {route.path}")
-                print(f"Endpoint function: {route.endpoint.__name__}")
-                for dep in route.dependant.dependencies:
-                    if hasattr(dep.call, "__name__"):
-                         print(f"--> Depends on function: '{dep.call.__name__}'")
-                    else:
-                         print(f"--> Depends on object: {dep.call}")
-    print("--- END DIAGNOSTICS ---\n")
-
+    # Код, который выполнится при старте приложения
+    redis_client = AsyncRedis.from_url(
+        f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/1", 
+        decode_responses=True
+    )
+    app.state.redis_client = redis_client
+    
+    # Запускаем listener в фоновом режиме
+    listener_task = asyncio.create_task(run_redis_listener(redis_client))
+    
     yield
-
-    # --- ОСТАНОВКА ПРИЛОЖЕНИЯ ---
-    if redis_task:
-        redis_task.cancel()
-        try:
-            await redis_task
-        except asyncio.CancelledError:
-            log.info("lifespan.shutdown", message="Redis listener task cancelled.")
-
-    await app.state.arq_pool.close()
-
-    # --- ИЗМЕНЕНИЯ ЗДЕСЬ ---
-    await limiter_redis.aclose()
-    await cache_redis.aclose()
-    await pubsub_redis.aclose()
-
-    await FastAPILimiter.close() # Этот метод из библиотеки, его не трогаем
-    FastAPICache.reset()
-
-    await engine.dispose()
-
-    log.info("lifespan.shutdown", message="All resources cleaned up completely.")
+    
+    # Код, который выполнится при остановке приложения
+    listener_task.cancel()
+    try:
+        await listener_task
+    except asyncio.CancelledError:
+        pass # Ожидаемое исключение при отмене
+    await redis_client.close()
 
 
-app = FastAPI(title="Zenith API", version="4.0.0", docs_url="/api/docs", redoc_url="/api/redoc", lifespan=lifespan)
+# --- ВАЖНО: Вот тот самый объект 'app', который мы пытаемся импортировать ---
+app = FastAPI(
+    title="VK SMM Combine API",
+    description="API для сервиса автоматизации SMM-задач ВКонтакте.",
+    version="1.0.0",
+    lifespan=lifespan
+)
 
-instrumentator = Instrumentator().instrument(app)
-instrumentator.expose(app, endpoint="/api/metrics")
-
-app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
-
-init_admin(app, engine)
-
-if settings.ALLOWED_ORIGINS:
-    allowed_origins_list = [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(',')]
-else:
-    allowed_origins_list = ["http://localhost:3000", "http://127.0.0.1:3000"]
-
+# --- Настройка CORS ---
+origins = [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(',')]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins_list,
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-class Tags:
-    AUTH = "Аутентификация"
-    USERS = "Пользователи и Профили"
-    PROXIES = "Прокси"
-    TASKS = "Задачи и История"
-    STATS = "Статистика"
-    AUTOMATIONS = "Автоматизации"
-    BILLING = "Тарифы и оплата"
-    ANALYTICS = "Аналитика"
-    SCENARIOS = "Сценарии"
-    NOTIFICATIONS = "Уведомления"
-    POSTS = "Планировщик постов"
-    TEAMS = "Командный функционал"
-    WEBSOCKETS = "WebSockets"
-    SYSTEM = "Система"
+# --- Инициализация админ-панели SQLAdmin ---
+init_admin(app, engine)
 
-api_router_v1 = APIRouter()
-api_router_v1.include_router(auth_router, prefix="/auth", tags=[Tags.AUTH])
-api_router_v1.include_router(users_router, prefix="/users", tags=[Tags.USERS])
-api_router_v1.include_router(proxies_router, prefix="/proxies", tags=[Tags.PROXIES])
-api_router_v1.include_router(tasks_router, prefix="/tasks", tags=[Tags.TASKS])
-api_router_v1.include_router(stats_router, prefix="/stats", tags=[Tags.STATS])
-api_router_v1.include_router(automations_router, prefix="/automations", tags=[Tags.AUTOMATIONS])
-api_router_v1.include_router(billing_router, prefix="/billing", tags=[Tags.BILLING])
-api_router_v1.include_router(analytics_router, prefix="/analytics", tags=[Tags.ANALYTICS])
-api_router_v1.include_router(scenarios_router, prefix="/scenarios", tags=[Tags.SCENARIOS])
-api_router_v1.include_router(notifications_router, prefix="/notifications", tags=[Tags.NOTIFICATIONS])
-api_router_v1.include_router(posts_router, prefix="/posts", tags=[Tags.POSTS])
-api_router_v1.include_router(teams_router, prefix="/teams", tags=[Tags.TEAMS])
-api_router_v1.include_router(websockets_router, prefix="", tags=[Tags.WEBSOCKETS])
-
-app.include_router(api_router_v1, prefix="/api/v1")
-
-@app.get("/api/health", status_code=status.HTTP_200_OK, tags=[Tags.SYSTEM])
-async def health_check():
-    return {"status": "ok"}
+# --- Подключение всех роутеров API ---
+api_prefix = "/api/v1"
+app.include_router(auth_router, prefix=f"{api_prefix}/auth", tags=["Authentication"])
+app.include_router(users_router, prefix=f"{api_prefix}/users", tags=["Users"])
+app.include_router(proxies_router, prefix=f"{api_prefix}/proxies", tags=["Proxies"])
+app.include_router(tasks_router, prefix=f"{api_prefix}/tasks", tags=["Tasks"])
+app.include_router(stats_router, prefix=f"{api_prefix}/stats", tags=["Statistics"])
+app.include_router(automations_router, prefix=f"{api_prefix}/automations", tags=["Automations"])
+app.include_router(billing_router, prefix=f"{api_prefix}/billing", tags=["Billing"])
+app.include_router(analytics_router, prefix=f"{api_prefix}/analytics", tags=["Analytics"])
+app.include_router(scenarios_router, prefix=f"{api_prefix}/scenarios", tags=["Scenarios"])
+app.include_router(notifications_router, prefix=f"{api_prefix}/notifications", tags=["Notifications"])
+app.include_router(posts_router, prefix=f"{api_prefix}/posts", tags=["Posts"])
+app.include_router(teams_router, prefix=f"{api_prefix}/teams", tags=["Teams"])
+app.include_router(websockets_router, tags=["WebSockets"])
 
 # --- backend/app\worker.py ---
 
@@ -721,7 +652,9 @@ async def login_via_vk(
             plan=PlanName.BASE,
             plan_expires_at=datetime.now(UTC) + timedelta(days=14),
             daily_likes_limit=base_plan_limits["daily_likes_limit"],
-            daily_add_friends_limit=base_plan_limits["daily_add_friends_limit"]
+            daily_add_friends_limit=base_plan_limits["daily_add_friends_limit"],
+            daily_message_limit=base_plan_limits["daily_message_limit"], # <--- ДОБАВЛЕНО
+            daily_posts_limit=base_plan_limits["daily_posts_limit"]     # <--- ДОБАВЛЕНО
         )
         db.add(user)
 
@@ -732,6 +665,9 @@ async def login_via_vk(
         user.plan_expires_at = None
         user.daily_likes_limit = admin_limits["daily_likes_limit"]
         user.daily_add_friends_limit = admin_limits["daily_add_friends_limit"]
+        user.daily_message_limit = admin_limits["daily_message_limit"], # <--- ДОБАВЛЕНО
+        user.daily_posts_limit = admin_limits["daily_posts_limit"]     # <--- ДОБАВЛЕНО
+
 
     await db.flush()
     await db.refresh(user)
@@ -1064,6 +1000,8 @@ async def payment_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         new_limits = get_limits_for_plan(user.plan)
         user.daily_likes_limit = new_limits.get("daily_likes_limit", 0)
         user.daily_add_friends_limit = new_limits.get("daily_add_friends_limit", 0)
+        user.daily_message_limit = new_limits.get("daily_message_limit", 0) # <--- ДОБАВЛЕНО
+        user.daily_posts_limit = new_limits.get("daily_posts_limit", 0)   # <--- ДОБАВЛЕНО
 
         payment.status = "succeeded"
         
@@ -1131,70 +1069,159 @@ async def mark_notifications_as_read(
 
 # --- backend/app/api/endpoints/posts.py ---
 import datetime
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
+import asyncio
+import aiohttp
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
 from arq.connections import ArqRedis
 
-# --- ИЗМЕНЕНИЯ ЗДЕСЬ ---
 from app.db.session import get_db
 from app.db.models import User, ScheduledPost
-from app.api.dependencies import get_current_active_profile, get_arq_pool # Добавляем get_arq_pool
-from app.api.schemas.posts import PostCreate, PostRead, PostUpdate, UploadedImageResponse
+from app.api.dependencies import get_current_active_profile, get_arq_pool
+from app.api.schemas.posts import PostCreate, PostRead, UploadedImagesResponse, PostBatchCreate, UploadedImageResponse
 from app.services.vk_api import VKAPI
 from app.core.security import decrypt_data
+from app.repositories.stats import StatsRepository # <--- ДОБАВЛЕН ИМПОРТ
 import structlog
-# -------------------------
 
 log = structlog.get_logger(__name__)
 router = APIRouter()
 
-@router.post("/upload-image", response_model=UploadedImageResponse)
-async def upload_image_for_post(
-    current_user: User = Depends(get_current_active_profile),
+async def get_vk_api(current_user: User = Depends(get_current_active_profile)) -> VKAPI:
+    """Зависимость для получения готового VK API клиента."""
+    vk_token = decrypt_data(current_user.encrypted_vk_token)
+    if not vk_token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Невалидный токен VK.")
+    return VKAPI(access_token=vk_token)
+
+@router.post("/upload-image-file", response_model=UploadedImageResponse, summary="Загрузить изображение с диска")
+async def upload_image_file(
+    vk_api: VKAPI = Depends(get_vk_api),
     image: UploadFile = File(...)
 ):
-    vk_token = decrypt_data(current_user.encrypted_vk_token)
-    vk_api = VKAPI(access_token=vk_token)
+    """Принимает файл, загружает в VK и возвращает attachment_id."""
     try:
         image_bytes = await image.read()
         attachment_id = await vk_api.upload_photo_for_wall(image_bytes)
         return UploadedImageResponse(attachment_id=attachment_id)
     except Exception as e:
-        log.error("post.upload_image.failed", user_id=current_user.id, error=str(e))
+        log.error("post.upload_image_file.failed", error=str(e))
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Не удалось загрузить изображение.")
 
-@router.post("", response_model=PostRead)
-async def schedule_post(
-    post_data: PostCreate,
-    current_user: User = Depends(get_current_active_profile),
-    db: AsyncSession = Depends(get_db),
-    # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
-    arq_pool: ArqRedis = Depends(get_arq_pool)
-    # -------------------------
+async def _download_image_from_url(url: str) -> bytes:
+    """Скачивает изображение по URL и возвращает его в виде байтов."""
+    if not any(url.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif']):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="URL должен вести на изображение (jpg, png, gif).")
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=15) as response:
+                response.raise_for_status()
+                return await response.read()
+    except aiohttp.ClientError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Не удалось скачать изображение по URL: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Внутренняя ошибка при скачивании изображения: {e}")
+
+@router.post("/upload-images-batch", response_model=UploadedImagesResponse, summary="Загрузить несколько изображений с диска")
+async def upload_images_batch(
+    vk_api: VKAPI = Depends(get_vk_api),
+    images: List[UploadFile] = File(...)
 ):
-    new_post = ScheduledPost(
-        user_id=current_user.id,
-        vk_profile_id=current_user.vk_id,
-        **post_data.model_dump()
-    )
-    db.add(new_post)
-    await db.flush() # Получаем ID для нового поста
+    """Принимает список файлов, параллельно загружает их в VK и возвращает список attachment_id."""
+    if len(images) > 10:
+        raise HTTPException(status_code=400, detail="Можно загрузить не более 10 изображений за раз.")
 
-    # --- ИЗМЕНЕНИЕ ЗДЕСЬ: Используем ARQ вместо Celery ---
-    job = await arq_pool.enqueue_job(
-        'publish_scheduled_post_task', # Имя задачи, зарегистрированной в worker.py
-        post_id=new_post.id,
-        _defer_by=post_data.publish_at - datetime.utcnow() # Откладываем задачу
-    )
-    # ----------------------------------------------------
+    async def upload_one(image: UploadFile):
+        try:
+            image_bytes = await image.read()
+            return await vk_api.upload_photo_for_wall(image_bytes)
+        except Exception as e:
+            log.error("batch_upload.single_file_error", filename=image.filename, error=str(e))
+            return None
 
-    new_post.celery_task_id = job.job_id # Используем старое поле для хранения ID задачи ARQ
+    tasks = [upload_one(img) for img in images]
+    results = await asyncio.gather(*tasks)
+    
+    successful_attachments = [res for res in results if res is not None]
+    
+    if not successful_attachments:
+        raise HTTPException(status_code=500, detail="Не удалось загрузить ни одно из изображений.")
+        
+    return UploadedImagesResponse(attachment_ids=successful_attachments)
+
+@router.post("/schedule-batch", response_model=List[PostRead], status_code=status.HTTP_201_CREATED, summary="Запланировать несколько постов")
+async def schedule_batch_posts(
+    batch_data: PostBatchCreate,
+    current_user: User = Depends(get_current_active_profile),
+    vk_api: VKAPI = Depends(get_vk_api),
+    db: AsyncSession = Depends(get_db),
+    arq_pool: ArqRedis = Depends(get_arq_pool)
+):
+    """Принимает список постов и планирует их все одним запросом, проверяя лимиты."""
+    created_posts_db = []
+    
+    # --- НАЧАЛО БЛОКА ПРОВЕРКИ ЛИМИТОВ ---
+    stats_repo = StatsRepository(db)
+    today_stats = await stats_repo.get_or_create_today_stats(current_user.id)
+    
+    posts_to_create_count = len(batch_data.posts)
+    if posts_to_create_count == 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Список постов для планирования не может быть пустым.")
+
+    if today_stats.posts_created_count + posts_to_create_count > current_user.daily_posts_limit:
+        remaining = current_user.daily_posts_limit - today_stats.posts_created_count
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Достигнут дневной лимит на создание постов. Осталось: {remaining if remaining > 0 else 0}"
+        )
+    # --- КОНЕЦ БЛОКА ПРОВЕРКИ ЛИМИТОВ ---
+    
+    for post_data in batch_data.posts:
+        final_attachments = post_data.attachments or []
+        if post_data.image_url:
+            try:
+                image_bytes = await _download_image_from_url(str(post_data.image_url))
+                attachment_id = await vk_api.upload_photo_for_wall(image_bytes)
+                final_attachments.append(attachment_id)
+            except HTTPException as e:
+                log.warn("schedule_batch.image_download_failed", url=post_data.image_url, detail=e.detail)
+                continue
+
+        new_post = ScheduledPost(
+            user_id=current_user.id,
+            vk_profile_id=current_user.vk_id,
+            post_text=post_data.post_text,
+            attachments=final_attachments,
+            publish_at=post_data.publish_at
+        )
+        db.add(new_post)
+        created_posts_db.append(new_post)
+
+    if not created_posts_db:
+        raise HTTPException(status_code=400, detail="Не удалось создать ни одного поста из пакета (возможно, из-за ошибок загрузки изображений).")
+
+    # --- УВЕЛИЧИВАЕМ СЧЕТЧИК ПОСЛЕ УСПЕШНОГО ДОБАВЛЕНИЯ В СЕССИЮ ---
+    today_stats.posts_created_count += len(created_posts_db)
+    
+    await db.flush() # Получаем ID для всех созданных постов
+
+    # Ставим все задачи в очередь ARQ
+    for post in created_posts_db:
+        job = await arq_pool.enqueue_job(
+            'publish_scheduled_post_task',
+            post_id=post.id,
+            _defer_until=post.publish_at
+        )
+        post.celery_task_id = job.job_id
+
     await db.commit()
-    await db.refresh(new_post)
-    return new_post
+    
+    for post in created_posts_db:
+        await db.refresh(post)
 
-# ... (Здесь могут быть ваши эндпоинты GET, PUT, DELETE для управления постами) ...
+    return created_posts_db
 
 # --- backend/app\api\endpoints\proxies.py ---
 
@@ -1771,10 +1798,13 @@ from app.api.schemas.actions import (
     RemoveFriendsRequest, MassMessagingRequest, JoinGroupsRequest, LeaveGroupsRequest,
     TaskConfigResponse, TaskField
 )
-from app.api.schemas.tasks import ActionResponse, PaginatedTasksResponse
+from app.services.message_service import MessageService
+from app.api.schemas.tasks import ActionResponse, PaginatedTasksResponse, PreviewResponse 
 from app.core.plans import get_plan_config, is_feature_available_for_plan
 from app.core.config_loader import AUTOMATIONS_CONFIG
 from app.core.constants import TaskKey
+from app.core.security import decrypt_data
+from app.services.vk_api import VKAPI
 
 router = APIRouter()
 
@@ -1892,6 +1922,52 @@ async def run_any_task(
     arq_pool: ArqRedis = Depends(get_arq_pool)
 ):
     return await _enqueue_task(current_user, db, arq_pool, task_key.value, request_data)
+
+@router.post("/preview/{task_key}", response_model=PreviewResponse, summary="Предварительный подсчет аудитории для задачи")
+async def preview_task_audience(
+    task_key: TaskKey,
+    request_data: AnyTaskRequest = Body(...),
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Подсчитывает количество пользователей, подходящих под фильтры, без выполнения самой задачи.
+    """
+    # Этот эмиттер не будет отправлять события, он нужен только для инициализации сервиса
+    class DummyEmitter:
+        async def send_log(*args, **kwargs): pass
+    
+    emitter = DummyEmitter()
+    count = 0
+    
+    try:
+        # Мы инициализируем сервис, но вызываем только метод для поиска целей
+        if task_key == TaskKey.MASS_MESSAGING:
+            service = MessageService(db, current_user, emitter)
+            await service._initialize_vk_api()
+            targets = await service.get_mass_messaging_targets(request_data)
+            count = len(targets)
+        
+        elif task_key == TaskKey.ADD_RECOMMENDED:
+            # Логика для этой задачи немного сложнее, так как она уже встроена.
+            # Для превью достаточно отфильтровать рекомендации.
+            vk_api = VKAPI(decrypt_data(current_user.encrypted_vk_token))
+            response = await vk_api.get_recommended_friends(count=200) # Берем с запасом
+            if response and response.get('items'):
+                from app.services.vk_user_filter import apply_filters_to_profiles
+                filtered = await apply_filters_to_profiles(response['items'], request_data.filters)
+                count = len(filtered)
+
+        # Сюда можно добавить elif для других задач (remove_friends и т.д.) по аналогии
+        
+        else:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Предпросмотр для этого типа задачи не поддерживается.")
+            
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+    return PreviewResponse(found_count=count)
+
 
 @router.get("/history", response_model=PaginatedTasksResponse)
 async def get_user_task_history(
@@ -2033,6 +2109,7 @@ async def get_my_team(
 ):
     manager, team = manager_and_team
     
+    # --- ШАГ 1: Загружаем все необходимые данные из НАШЕЙ БД одним запросом ---
     stmt = (
         select(Team)
         .options(
@@ -2049,17 +2126,18 @@ async def get_my_team(
         .where(ManagedProfile.manager_user_id == manager.id)
     )).scalars().all()
     
-    all_profiles_map = {mp.profile_user_id: mp.profile for mp in managed_profiles_db}
-    
-    # --- РЕШЕНИЕ ПРОБЛЕМЫ N+1 ---
-    # 1. Собираем все уникальные VK ID, информацию о которых нужно запросить
+    # --- ШАГ 2: Собираем ВСЕ уникальные VK ID, которые нужно обогатить данными из VK ---
     all_vk_ids_to_fetch = set()
+    # Добавляем VK ID всех участников команды
     for member in team_details.members:
         all_vk_ids_to_fetch.add(member.user.vk_id)
-    for profile in all_profiles_map.values():
-        all_vk_ids_to_fetch.add(profile.vk_id)
+    # Добавляем VK ID всех управляемых профилей
+    for mp in managed_profiles_db:
+        all_vk_ids_to_fetch.add(mp.profile.vk_id)
+    # Добавляем VK ID самого менеджера
+    all_vk_ids_to_fetch.add(manager.vk_id)
 
-    # 2. Делаем один-единственный пакетный запрос к VK API
+    # --- ШАГ 3: Делаем ОДИН пакетный запрос к VK API ---
     vk_info_map = {}
     if all_vk_ids_to_fetch:
         vk_api = VKAPI(decrypt_data(manager.encrypted_vk_token))
@@ -2068,7 +2146,7 @@ async def get_my_team(
         if user_infos:
             vk_info_map = {info['id']: info for info in user_infos}
 
-    # 3. Собираем ответ, используя предзагруженные данные из vk_info_map
+    # --- ШАГ 4: Собираем ответ, используя предзагруженные данные ---
     members_response = []
     for member in team_details.members:
         member_vk_info = vk_info_map.get(member.user.vk_id, {})
@@ -2076,7 +2154,10 @@ async def get_my_team(
         accesses = []
         member_access_map = {pa.profile_user_id for pa in member.profile_accesses}
         
-        for profile in all_profiles_map.values():
+        # Собираем все профили, к которым может быть доступ
+        all_available_profiles = [mp.profile for mp in managed_profiles_db]
+        
+        for profile in all_available_profiles:
             profile_vk_info = vk_info_map.get(profile.vk_id, {})
             accesses.append(TeamMemberAccess(
                 profile=ProfileInfo(
@@ -2492,10 +2573,6 @@ from .websockets import router as websockets_router
 from pydantic import BaseModel, Field
 from typing import Optional, Literal, List, Any
 
-# backend/app/api/schemas/actions.py
-from pydantic import BaseModel, Field
-from typing import Optional, Literal, List, Any
-
 class ActionFilters(BaseModel):
     sex: Optional[Literal[0, 1, 2]] = Field(0, description="0 - любой, 1 - жен, 2 - муж")
     is_online: Optional[bool] = False
@@ -2503,18 +2580,10 @@ class ActionFilters(BaseModel):
     allow_closed_profiles: bool = False
     status_keyword: Optional[str] = Field(None, max_length=100)
     city: Optional[str] = Field(None, max_length=100)
-    only_with_photo: Optional[bool] = Field(False)
-
-    # Для remove_friends
-    remove_banned: Optional[bool] = True
+    only_with_photo: Optional[bool] = Field(False) # Используется в like_feed
+    remove_banned: Optional[bool] = True # Используется в remove_friends
     last_seen_days: Optional[int] = Field(None, ge=1)
     
-class LikeAfterAddConfig(BaseModel):
-    enabled: bool = False
-    targets: List[Literal['avatar', 'wall']] = ['avatar']
-
-# ... (остальные модели без изменений) ...
-
 class LikeAfterAddConfig(BaseModel):
     enabled: bool = False
     targets: List[Literal['avatar', 'wall']] = ['avatar']
@@ -2544,6 +2613,7 @@ class MassMessagingRequest(BaseModel):
     filters: ActionFilters = Field(default_factory=ActionFilters)
     message_text: str = Field(..., min_length=1, max_length=1000)
     only_new_dialogs: bool = Field(False, description="Отправлять только тем, с кем еще не было переписки.")
+    only_unread: bool = Field(False, description="Отправлять только тем, у кого есть непрочитанные сообщения от вас.")
 
 class LeaveGroupsRequest(BaseModel):
     count: int = Field(50, ge=1)
@@ -2560,6 +2630,9 @@ class BirthdayCongratulationRequest(BaseModel):
     message_template_default: str = "С Днем Рождения, {name}!"
     message_template_male: Optional[str] = None
     message_template_female: Optional[str] = None
+    filters: ActionFilters = Field(default_factory=ActionFilters, description="Применить стандартные фильтры к списку именинников.")
+    only_new_dialogs: bool = Field(False, description="Поздравлять только тех, с кем еще не было переписки.")
+    only_unread: bool = Field(False, description="Поздравлять только тех, у кого есть непрочитанные сообщения от вас.")
 
 # --- Для динамической конфигурации UI ---
 class TaskField(BaseModel):
@@ -2696,31 +2769,37 @@ class NotificationsResponse(BaseModel):
 # --- backend/app\api\schemas\posts.py ---
 
 # --- backend/app/api/schemas/posts.py ---
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, HttpUrl
 from datetime import datetime
 from typing import List, Optional
 
 class PostBase(BaseModel):
     post_text: Optional[str] = None
-    attachments: Optional[List[str]] = Field(default_factory=list)
     publish_at: datetime
 
 class PostCreate(PostBase):
-    pass
-
-class PostUpdate(PostBase):
-    pass
+    attachments: Optional[List[str]] = Field(default_factory=list, description="Список готовых attachment ID (photo_id, etc.)")
+    image_url: Optional[HttpUrl] = Field(None, description="URL изображения для автоматической загрузки и прикрепления.")
 
 class PostRead(PostBase):
     id: int
     vk_profile_id: int
+    attachments: Optional[List[str]] = None
     status: str
     vk_post_id: Optional[str] = None
     error_message: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
-class UploadedImageResponse(BaseModel):
+class UploadedImageResponse(BaseModel): 
     attachment_id: str
+
+class UploadedImagesResponse(BaseModel):
+    """Ответ для пакетной загрузки изображений."""
+    attachment_ids: List[str]
+
+class PostBatchCreate(BaseModel):
+    """Схема для пакетного создания постов."""
+    posts: List[PostCreate]
 
 # --- backend/app\api\schemas\proxies.py ---
 
@@ -2864,6 +2943,9 @@ class PaginatedTasksResponse(BaseModel):
     size: int
     has_more: bool
 
+class PreviewResponse(BaseModel):
+    found_count: int
+
 # --- backend/app\api\schemas\teams.py ---
 
 # --- backend/app/api/schemas/teams.py ---
@@ -2971,8 +3053,6 @@ class Settings(BaseSettings):
     REDIS_PORT: int
 
     VK_HEALTH_CHECK_TOKEN: Optional[str] = None
-    VK_TEST_USER_ID: Optional[str] = None
-    VK_TEST_FRIEND_ID: Optional[str] = None
 
     @property
     def database_url(self) -> str:
@@ -3340,6 +3420,8 @@ class PlanPeriod(BaseModel):
 class PlanLimits(BaseModel):
     daily_likes_limit: int = Field(..., ge=0)
     daily_add_friends_limit: int = Field(..., ge=0)
+    daily_message_limit: int = Field(..., ge=0)  # <--- ДОБАВЛЕНО
+    daily_posts_limit: int = Field(..., ge=0)    # <--- ДОБАВЛЕНО
     max_concurrent_tasks: int = Field(..., ge=1)
     max_profiles: Optional[int] = Field(None, ge=1)
     max_team_members: Optional[int] = Field(None, ge=1)
@@ -3402,34 +3484,22 @@ class FriendRequestStatus(enum.Enum):
 # --- backend/app\db\session.py ---
 
 # backend/app/db/session.py
-
 from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
-# --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
-from sqlalchemy.pool import NullPool
-# ------------------------------
 
 from app.core.config import settings
 
-# --- ИЗМЕНИТЕ СОЗДАНИЕ ENGINE, ДОБАВИВ poolclass=NullPool ---
 engine = create_async_engine(
     settings.database_url,
     pool_pre_ping=True,
-    poolclass=NullPool  # <-- Вот это изменение
 )
-# -----------------------------------------------------------
 
-# Создаем фабрику асинхронных сессий
 AsyncSessionFactory = sessionmaker(
     autocommit=False, autoflush=False, bind=engine, class_=AsyncSession
 )
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """
-    Зависимость (dependency) для FastAPI, которая предоставляет сессию базы данных.
-    Гарантирует, что сессия будет закрыта после завершения запроса.
-    """
     async with AsyncSessionFactory() as session:
         yield session
 
@@ -3442,7 +3512,7 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 import datetime
 from sqlalchemy import (
     Column, Integer, String, DateTime, ForeignKey, BigInteger,
-    UniqueConstraint, JSON, Index, Date, Enum
+    UniqueConstraint, JSON, Index, Date, Enum, text
 )
 from sqlalchemy.orm import relationship
 from app.db.base import Base
@@ -3459,6 +3529,7 @@ class DailyStats(Base):
     stories_viewed_count = Column(Integer, default=0, nullable=False)
     friends_removed_count = Column(Integer, default=0, nullable=False)
     messages_sent_count = Column(Integer, default=0, nullable=False)
+    posts_created_count = Column(Integer, nullable=False, server_default=text('0'))
     user = relationship("User", back_populates="daily_stats")
     __table_args__ = (
         UniqueConstraint('user_id', 'date', name='_user_date_uc'),
@@ -3738,6 +3809,7 @@ class User(Base):
     daily_likes_limit = Column(Integer, nullable=False, server_default=text('0'))
     daily_add_friends_limit = Column(Integer, nullable=False, server_default=text('0'))
     daily_message_limit = Column(Integer, nullable=False, server_default=text('0'))
+    daily_posts_limit = Column(Integer, nullable=False, server_default=text('0'))
     delay_profile = Column(Enum(DelayProfile), nullable=False, server_default=DelayProfile.normal.name)
 
     # Связи остаются такими же
@@ -3982,7 +4054,7 @@ class AnalyticsService(BaseVKService):
 
 # --- backend/app\services\automation_service.py ---
 
-# backend/app/services/automation_service.py
+# --- backend/app/services/automation_service.py ---
 import datetime
 from sqlalchemy import select, and_
 from sqlalchemy.dialects.postgresql import insert
@@ -3990,6 +4062,8 @@ from app.services.base import BaseVKService
 from app.services.vk_api import VKAccessDeniedError
 from app.db.models import SentCongratulation
 from app.api.schemas.actions import BirthdayCongratulationRequest
+from app.services.vk_user_filter import apply_filters_to_profiles
+from app.services.message_service import MessageService # <--- НОВЫЙ ИМПОРТ
 
 class AutomationService(BaseVKService):
 
@@ -3999,7 +4073,7 @@ class AutomationService(BaseVKService):
     async def _congratulate_friends_logic(self, params: BirthdayCongratulationRequest):
         await self.emitter.send_log("Запуск задачи: Поздравление друзей с Днем Рождения.", "info")
         
-        friends = await self.vk_api.get_user_friends(self.user.vk_id, fields="bdate,sex")
+        friends = await self.vk_api.get_user_friends(self.user.vk_id, fields="bdate,sex,online,last_seen,is_closed,status,city")
         if not friends:
             await self.emitter.send_log("Не удалось получить список друзей.", "warning")
             return
@@ -4007,13 +4081,37 @@ class AutomationService(BaseVKService):
         today = datetime.date.today()
         today_str = f"{today.day}.{today.month}"
         
-        birthday_friends = [f for f in friends if f.get("bdate") and f.get("bdate").startswith(today_str)]
+        birthday_friends_raw = [f for f in friends if f.get("bdate") and f.get("bdate").startswith(today_str)]
 
-        if not birthday_friends:
+        if not birthday_friends_raw:
             await self.emitter.send_log("Сегодня нет дней рождения у друзей.", "info")
             return
+            
+        await self.emitter.send_log(f"Найдено именинников: {len(birthday_friends_raw)} чел. Применяем стандартные фильтры...", "info")
+        
+        # Шаг 1: Применяем стандартные фильтры (пол, онлайн и т.д.)
+        birthday_friends_filtered = await apply_filters_to_profiles(birthday_friends_raw, params.filters)
+        
+        if not birthday_friends_filtered:
+            await self.emitter.send_log("После стандартных фильтров не осталось именинников.", "success")
+            return
+        
+        # Шаг 2: Применяем фильтры по диалогам, если они включены
+        if params.only_new_dialogs or params.only_unread:
+            message_service = MessageService(self.db, self.user, self.emitter)
+            # Инициализируем vk_api внутри message_service
+            await message_service._initialize_vk_api() 
+            final_targets = await message_service.filter_targets_by_conversation_status(
+                birthday_friends_filtered, params.only_new_dialogs, params.only_unread
+            )
+        else:
+            final_targets = birthday_friends_filtered
 
-        await self.emitter.send_log(f"Найдено именинников: {len(birthday_friends)} чел. Начинаем поздравлять.", "info")
+        if not final_targets:
+            await self.emitter.send_log("После фильтрации диалогов не осталось именинников для поздравления.", "success")
+            return
+            
+        await self.emitter.send_log(f"После всех фильтров осталось: {len(final_targets)} чел. Начинаем поздравлять.", "info")
 
         current_year = today.year
         stmt = select(SentCongratulation.friend_vk_id).where(
@@ -4022,11 +4120,12 @@ class AutomationService(BaseVKService):
         already_congratulated_ids = {row[0] for row in (await self.db.execute(stmt)).all()}
 
         processed_count = 0
-        for friend in birthday_friends:
+        for friend in final_targets: # <--- Используем окончательный список
             friend_id = friend['id']
             if friend_id in already_congratulated_ids:
                 continue
 
+            # ... (остальная логика отправки поздравлений без изменений) ...
             name = friend.get("first_name", "")
             sex = friend.get("sex")
 
@@ -4227,6 +4326,44 @@ class SystemLogEmitter:
              new_notification = Notification(user_id=self.user_id, message=message, level=level)
              db.add(new_notification)
              # коммит будет выполнен в вызывающей функции
+
+class SystemLogEmitter:
+    """
+    Эмиттер-заглушка для фоновых задач (cron), который выводит логи в structlog,
+    а не отправляет их пользователю через Redis.
+    Он полностью имитирует интерфейс RedisEventEmitter для совместимости.
+    """
+    def __init__(self, task_name: str):
+        # Создаем логгер с именем задачи
+        self.log = structlog.get_logger(task_name)
+        self.user_id = None
+        self.task_history_id = None # Для совместимости интерфейса
+
+    def set_context(self, user_id: int, task_history_id: int | None = None):
+        # Привязываем ID пользователя к логам для удобства фильтрации и отладки
+        self.user_id = user_id
+        self.log = self.log.bind(user_id=user_id)
+
+    async def send_log(self, message: str, status: LogLevel, target_url: str | None = None):
+        # Преобразуем статусы в уровни логирования structlog
+        log_method = getattr(self.log, status, self.log.info)
+        log_method(message, url=target_url, status_from_emitter=status)
+
+    async def send_stats_update(self, stats_dict: Dict[str, Any]):
+        # Обновления статистики для UI не нужны в фоновых задачах, просто игнорируем
+        pass
+
+    async def send_task_status_update(self, *args, **kwargs):
+        # Обновления статуса задачи для UI не нужны, игнорируем
+        pass
+
+    async def send_system_notification(self, db: AsyncSession, message: str, level: LogLevel):
+        # Системные уведомления от фоновых задач также создаем в БД
+        if self.user_id:
+             new_notification = Notification(user_id=self.user_id, message=message, level=level)
+             db.add(new_notification)
+             # Коммит будет выполнен в вызывающей функции (в сервисе)
+             self.log.info("system_notification.created", message=message, level=level)
 
 # --- backend/app\services\feed_service.py ---
 
@@ -4602,18 +4739,68 @@ class IncomingRequestService(BaseVKService):
 
 # --- backend/app\services\message_service.py ---
 
-# backend/app/services/message_service.py
+# --- backend/app/services/message_service.py ---
 import random
+from typing import List, Dict, Any
 from app.services.base import BaseVKService
-from app.core.exceptions import InvalidActionSettingsError
+from app.core.exceptions import InvalidActionSettingsError, UserLimitReachedError
 from app.services.vk_api import VKAccessDeniedError
 from app.services.vk_user_filter import apply_filters_to_profiles
 from app.api.schemas.actions import MassMessagingRequest
 
+
 class MessageService(BaseVKService):
 
+    async def filter_targets_by_conversation_status(
+        self,
+        targets: List[Dict[str, Any]],
+        only_new_dialogs: bool,
+        only_unread: bool
+    ) -> List[Dict[str, Any]]:
+        """
+        Фильтрует список целей на основе статуса их диалога с пользователем.
+        Этот метод теперь публичный и может быть использован другими сервисами.
+        """
+        if only_new_dialogs and only_unread:
+            raise InvalidActionSettingsError("Нельзя одновременно использовать 'Только новые диалоги' и 'Только непрочитанные'.")
+
+        final_targets = list(targets) # Создаем копию для работы
+
+        if only_new_dialogs:
+            await self.emitter.send_log("Применяем фильтр: 'Только новые диалоги'...", "info")
+            dialogs = await self.vk_api.get_conversations(count=200)
+            dialog_peer_ids = {conv.get('conversation', {}).get('peer', {}).get('id') for conv in dialogs.get('items', [])}
+            final_targets = [t for t in targets if t.get('id') not in dialog_peer_ids]
+
+        if only_unread:
+            await self.emitter.send_log("Применяем фильтр: 'Только непрочитанные'...", "info")
+            unread_convs = await self.vk_api.get_conversations(count=200, filter='unread')
+            if not unread_convs or not unread_convs.get('items'):
+                return []
+            unread_peer_ids = {conv.get('conversation', {}).get('peer', {}).get('id') for conv in unread_convs.get('items', [])}
+            final_targets = [t for t in targets if t.get('id') in unread_peer_ids]
+            
+        return final_targets
+
+    async def get_mass_messaging_targets(self, params: MassMessagingRequest) -> List[Dict[str, Any]]:
+        """Вспомогательный метод для получения и фильтрации целей для МАССОВОЙ РАССЫЛКИ."""
+        friends_response = await self.vk_api.get_user_friends(self.user.vk_id, fields="sex,online,last_seen,status,is_closed,city")
+        if not friends_response:
+            return []
+
+        # Шаг 1: Применяем стандартные фильтры
+        filtered_friends = await apply_filters_to_profiles(friends_response, params.filters)
+        
+        # Шаг 2: Применяем фильтры по диалогам
+        targets = await self.filter_targets_by_conversation_status(
+            filtered_friends, params.only_new_dialogs, params.only_unread
+        )
+            
+        return targets
+
+    # ... (метод _send_mass_message_logic остается без изменений) ...
     async def send_mass_message(self, params: MassMessagingRequest):
-        return await self._execute_logic(self._send_mass_message_logic, params)
+         return await self._execute_logic(self._send_mass_message_logic, params)
 
     async def _send_mass_message_logic(self, params: MassMessagingRequest):
         if not params.message_text or not params.message_text.strip():
@@ -4622,34 +4809,22 @@ class MessageService(BaseVKService):
         await self.emitter.send_log(f"Запуск массовой рассылки. Цель: {params.count} сообщений.", "info")
         stats = await self._get_today_stats()
 
-        friends_response = await self.vk_api.get_user_friends(self.user.vk_id, fields="sex,online,last_seen,status")
-        if not friends_response:
-            await self.emitter.send_log("Не удалось получить список друзей.", "error")
-            return
+        target_friends = await self.get_mass_messaging_targets(params)
 
-        filtered_friends = apply_filters_to_profiles(friends_response, params.filters)
-        if not filtered_friends:
-            await self.emitter.send_log("После применения фильтров не осталось друзей для рассылки.", "warning")
-            return
-
-        await self.emitter.send_log(f"Найдено друзей по фильтрам: {len(filtered_friends)}. Начинаем обработку.", "info")
-        random.shuffle(filtered_friends)
-        
-        target_friends = filtered_friends
-        if params.only_new_dialogs:
-            dialogs = await self.vk_api.get_conversations(count=200)
-            dialog_peer_ids = {conv.get('conversation', {}).get('peer', {}).get('id') for conv in dialogs.get('items', [])}
-            target_friends = [f for f in filtered_friends if f.get('id') not in dialog_peer_ids]
-            await self.emitter.send_log(f"Режим 'Только новые диалоги'. Осталось целей: {len(target_friends)}.", "info")
-        
         if not target_friends:
-            await self.emitter.send_log("Не найдено подходящих получателей.", "success")
+            await self.emitter.send_log("Не найдено подходящих получателей по заданным фильтрам.", "success")
             return
+            
+        await self.emitter.send_log(f"Найдено получателей по фильтрам: {len(target_friends)}. Начинаем отправку.", "info")
+        random.shuffle(target_friends)
             
         processed_count = 0
         for friend in target_friends:
             if processed_count >= params.count:
                 break
+
+            if stats.messages_sent_count >= self.user.daily_message_limit:
+                raise UserLimitReachedError(f"Достигнут дневной лимит сообщений ({self.user.daily_message_limit}).")
 
             friend_id = friend.get('id')
             name = f"{friend.get('first_name', '')} {friend.get('last_name', '')}"
@@ -5039,20 +5214,54 @@ import aiohttp
 import random
 import json
 import asyncio
-from typing import Optional, Dict, Any, List
+from typing import Literal, Optional, Dict, Any, List
 from app.core.config import settings
 
+# --- ОБНОВЛЕННЫЙ БЛОК ИСКЛЮЧЕНИЙ ---
 class VKAPIError(Exception):
+    """Базовое исключение для всех ошибок VK API."""
     def __init__(self, message: str, error_code: int):
         self.message = message
         self.error_code = error_code
         super().__init__(f"VK API Error [{self.error_code}]: {self.message}")
 
-class VKRateLimitError(VKAPIError): pass
-class VKFloodControlError(VKAPIError): pass # Ошибка 9 - Flood control
-class VKInvalidTokenError(VKAPIError): pass
-class VKAccessDeniedError(VKAPIError): pass
-class VKAuthError(VKAPIError): pass
+class VKAuthError(VKAPIError):
+    """Ошибка авторизации (неверный токен). Код: 5."""
+    pass
+
+class VKRateLimitError(VKAPIError):
+    """Слишком много однотипных действий. Код: 6."""
+    pass
+
+class VKAccessDeniedError(VKAPIError):
+    """Нет доступа к контенту (закрытый профиль, ЧС и т.д.). Коды: 15, 18, 203, 902."""
+    pass
+
+class VKFloodControlError(VKAPIError):
+    """Слишком много запросов в секунду (флуд-контроль). Код: 9."""
+    pass
+
+class VKCaptchaError(VKAPIError):
+    """Требуется ввод капчи. Код: 14."""
+    pass
+
+class VKTooManyRequestsError(VKAPIError):
+    """Превышен лимит запросов в Execute. Код: 29"""
+    pass
+
+# Карта для сопоставления кодов ошибок с классами исключений
+ERROR_CODE_MAP = {
+    5: VKAuthError,
+    6: VKRateLimitError,
+    9: VKFloodControlError,
+    14: VKCaptchaError,
+    15: VKAccessDeniedError,
+    18: VKAccessDeniedError,
+    29: VKTooManyRequestsError,
+    203: VKAccessDeniedError,
+    902: VKAccessDeniedError,
+}
+# --- КОНЕЦ БЛОКА ИСКЛЮЧЕНИЙ ---
 
 class VKAPI:
     def __init__(self, access_token: str, proxy: Optional[str] = None):
@@ -5071,7 +5280,6 @@ class VKAPI:
 
         async with aiohttp.ClientSession() as session:
             try:
-                # Цикл повторных попыток для обхода временных лимитов
                 for attempt in range(3):
                     async with session.post(f"{self.base_url}{method}", data=params, proxy=self.proxy, timeout=20) as response:
                         data = await response.json()
@@ -5081,27 +5289,27 @@ class VKAPI:
                             error_code = error_data.get('error_code')
                             error_msg = error_data.get('error_msg', 'Unknown VK error')
                             
-                            # Если это Flood Control или Rate Limit, ждем и пробуем снова
-                            if error_code == 6 or error_code == 9:
-                                wait_time = 1 + attempt
+                            # --- УЛУЧШЕННАЯ ЛОГИКА ОБРАБОТКИ ОШИБОК ---
+                            if error_code in [6, 9]: # Rate Limit или Flood Control
+                                wait_time = 1 + attempt * 2 # Увеличиваем паузу с каждой попыткой
                                 print(f"  [API-WARN] Сработал Flood/Rate Control (ошибка {error_code}). Пауза {wait_time} сек. Попытка {attempt + 2}/3...")
                                 await asyncio.sleep(wait_time)
-                                continue # Переходим к следующей итерации цикла
-                            
-                            # Для других ошибок - сразу выходим
-                            if error_code == 5: raise VKAuthError(error_msg, error_code)
-                            elif error_code in [15, 18, 203, 902]: raise VKAccessDeniedError(error_msg, error_code)
-                            else: raise VKAPIError(error_msg, error_code)
+                                continue
 
-                        # Если ошибки нет, возвращаем результат
+                            # Выбираем правильный класс исключения из карты
+                            ExceptionClass = ERROR_CODE_MAP.get(error_code, VKAPIError)
+                            raise ExceptionClass(error_msg, error_code)
+                            # --- КОНЕЦ УЛУЧШЕННОЙ ЛОГИКИ ---
+
                         return data.get('response')
                 
                 # Если все попытки провалились
-                raise VKAPIError("Превышено количество попыток после ошибок Flood/Rate Control", 9)
+                raise VKFloodControlError("Превышено количество попыток после ошибок Flood/Rate Control.", 9)
 
             except aiohttp.ClientError as e:
-                raise VKAPIError(f"HTTP Request failed: {e}", 0)
+                raise VKAPIError(f"Сетевая ошибка: {e}. Проверьте прокси и подключение к интернету.", 0)
 
+    # ... остальная часть файла vk_api.py без изменений ...
     async def execute(self, calls: List[Dict[str, Any]]) -> Optional[List[Any]]:
         if not 25 >= len(calls) > 0:
             raise ValueError("Number of calls for execute method must be between 1 and 25.")
@@ -5114,8 +5322,6 @@ class VKAPI:
         if user_ids:
             params['user_ids'] = user_ids
         response = await self._make_request("users.get", params=params)
-        # Обратите внимание: users.get МОЖЕТ возвращать counters для ОДНОГО пользователя, но не для списка друзей.
-        # Эта логика остается, так как она полезна для точечных проверок (например, при приеме заявок).
         if response and isinstance(response, list):
             return response[0] if user_ids is None and len(response) == 1 else response
         return None
@@ -5128,7 +5334,6 @@ class VKAPI:
             return None
             
         items = response["items"]
-        # Если VK вернул просто список ID, преобразуем его в стандартный формат
         if fields == "" and isinstance(items, list) and all(isinstance(x, int) for x in items):
             return [{"id": user_id} for user_id in items]
         
@@ -5161,8 +5366,9 @@ class VKAPI:
     async def send_message(self, user_id: int, message: str) -> Optional[int]:
         return await self._make_request("messages.send", params={"user_id": user_id, "message": message, "random_id": random.randint(0, 2**31)})
 
-    async def get_conversations(self, count: int = 200) -> Optional[Dict[str, Any]]:
-        return await self._make_request("messages.getConversations", params={"count": count})
+    async def get_conversations(self, count: int = 200, filter: Optional[Literal['all', 'unread', 'important', 'unanswered']] = 'all') -> Optional[Dict[str, Any]]:
+        """Получает диалоги с возможностью фильтрации."""
+        return await self._make_request("messages.getConversations", params={"count": count, "filter": filter})
 
     async def get_photos(self, owner_id: int, count: int = 200) -> Optional[Dict[str, Any]]:
         return await self._make_request("photos.getAll", params={"owner_id": owner_id, "count": count, "extended": 1})
@@ -5605,7 +5811,12 @@ from app.db.models import User, TaskHistory, ScheduledPost, ScheduledPostStatus,
 from app.db.session import AsyncSessionFactory
 from app.services.event_emitter import RedisEventEmitter
 from app.core.exceptions import UserActionException
-from app.services.vk_api import VKAPI, VKAuthError
+# --- НОВЫЕ ИМПОРТЫ ОШИБОК ---
+from app.services.vk_api import (
+    VKAPI, VKAuthError, VKFloodControlError, VKRateLimitError, 
+    VKAccessDeniedError, VKCaptchaError, VKAPIError
+)
+# ------------------------------
 from app.core.constants import TaskKey
 from app.tasks.service_maps import TASK_CONFIG_MAP
 from app.core.security import decrypt_data
@@ -5616,11 +5827,7 @@ log = structlog.get_logger(__name__)
 
 
 async def _execute_task_logic(ctx, task_history_id: int):
-    """
-    Универсальная функция для выполнения логики любой задачи.
-    """
     async with AsyncSessionFactory() as session:
-        # Шаг 1: "Жадно" загружаем все, что нам нужно.
         stmt = (
             select(TaskHistory)
             .where(TaskHistory.id == task_history_id)
@@ -5628,20 +5835,18 @@ async def _execute_task_logic(ctx, task_history_id: int):
                 selectinload(TaskHistory.user).selectinload(User.proxies)
             )
         )
-        result = await session.execute(stmt)
-        task_history = result.scalar_one_or_none()
+        task_history = (await session.execute(stmt)).scalar_one_or_none()
 
         if not task_history or not task_history.user:
             log.error("task.logic.not_found", task_history_id=task_history_id)
             return
 
-        # Шаг 2: Извлекаем все необходимые данные в локальные переменные.
         user_for_task = task_history.user
         current_task_name = task_history.task_name
         current_created_at = task_history.created_at
         task_parameters = task_history.parameters or {}
-
-        # Шаг 3: Отсоединяем объект пользователя от сессии.
+        
+        # Отсоединяем, чтобы избежать проблем с состоянием сессии
         session.expunge(user_for_task)
 
         redis_pool = ctx['redis_pool']
@@ -5649,10 +5854,8 @@ async def _execute_task_logic(ctx, task_history_id: int):
         emitter.set_context(user_for_task.id, task_history_id)
         
         try:
-            # Шаг 4: Теперь можно безопасно коммитить изменение статуса.
             task_history.status = "STARTED"
             await session.commit()
-            
             await emitter.send_task_status_update(status="STARTED", task_name=current_task_name, created_at=current_created_at)
 
             task_key_str = next((item.id for item in AUTOMATIONS_CONFIG if item.name == current_task_name), None)
@@ -5668,20 +5871,49 @@ async def _execute_task_logic(ctx, task_history_id: int):
             task_history.status = "SUCCESS"
             task_history.result = "Задача успешно выполнена."
 
-        except VKAuthError as e:
+        # --- ОБНОВЛЕННЫЙ БЛОК ОБРАБОТКИ ОШИБОК ---
+        except VKAuthError:
             task_history.status = "FAILURE"
             task_history.result = "Ошибка авторизации VK. Токен невалиден."
-            log.error("task_runner.auth_error_critical", user_id=user_for_task.id, error=str(e))
-            await emitter.send_system_notification(session, "Критическая ошибка: токен VK недействителен. Автоматизации остановлены.", "error")
+            log.error("task_runner.auth_error_critical", user_id=user_for_task.id)
+            await emitter.send_system_notification(session, "Критическая ошибка: токен VK недействителен. Все автоматизации остановлены. Пожалуйста, войдите в систему заново.", "error")
             await session.execute(update(Automation).where(Automation.user_id == user_for_task.id).values(is_active=False))
+        
+        except (VKFloodControlError, VKRateLimitError) as e:
+            task_history.status = "FAILURE"
+            task_history.result = "VK временно ограничил активность вашего аккаунта."
+            log.warn("task_runner.rate_limit", user_id=user_for_task.id, error=str(e))
+            await emitter.send_system_notification(session, "VK временно ограничил вашу активность из-за большого количества действий. Попробуйте запустить задачу позже или снизьте интенсивность в настройках.", "warning")
+
+        except VKCaptchaError as e:
+            task_history.status = "FAILURE"
+            task_history.result = "VK требует ввод капчи. Работа остановлена."
+            log.warn("task_runner.captcha_required", user_id=user_for_task.id, error=str(e))
+            await emitter.send_system_notification(session, "ВКонтакте требует ввод капчи. Автоматизация не может продолжаться. Пожалуйста, зайдите в VK с компьютера и проявите активность, чтобы капча исчезла.", "warning")
+
+        except VKAccessDeniedError as e:
+            task_history.status = "FAILURE"
+            task_history.result = f"Ошибка доступа VK: {e.message}"
+            log.info("task_runner.access_denied", user_id=user_for_task.id, error=str(e))
+            # Системное уведомление здесь не нужно, т.к. это штатная ситуация (например, закрытый профиль)
+            
+        except VKAPIError as e:
+            task_history.status = "FAILURE"
+            task_history.result = f"Ошибка VK API: {e.message}"
+            log.error("task_runner.generic_vk_error", user_id=user_for_task.id, error=str(e))
+            await emitter.send_system_notification(session, f"Произошла непредвиденная ошибка при обращении к API ВКонтакте: '{e.message}'. Если ошибка повторяется, обратитесь в поддержку.", "error")
+
         except UserActionException as e:
             task_history.status = "FAILURE"
             task_history.result = str(e)
-            await emitter.send_system_notification(session, str(e), "error")
+            await emitter.send_system_notification(session, str(e), "warning")
+            
         except Exception as e:
             task_history.status = "FAILURE"
-            task_history.result = f"Непредвиденная ошибка: {type(e).__name__}"
+            task_history.result = f"Внутренняя ошибка сервера: {type(e).__name__}"
             log.exception("task_runner.unhandled_exception", id=task_history_id)
+            await emitter.send_system_notification(session, "Произошла внутренняя ошибка сервера при выполнении задачи. Мы уже работаем над решением.", "error")
+        # --- КОНЕЦ БЛОКА ОБРАБОТКИ ОШИБОК ---
         
         finally:
             final_status = task_history.status
@@ -5692,49 +5924,45 @@ async def _execute_task_logic(ctx, task_history_id: int):
             
             await emitter.send_task_status_update(status=final_status, result=final_result, task_name=current_task_name, created_at=current_created_at)
 
-
-# --- Определяем все задачи, теперь они принимают `ctx` ---
-
+# ... (все задачи-обертки `like_feed_task`, `add_recommended_friends_task` и т.д. остаются без изменений) ...
 async def like_feed_task(ctx, task_history_id: int, **kwargs):
     await _execute_task_logic(ctx, task_history_id)
-
 async def add_recommended_friends_task(ctx, task_history_id: int, **kwargs):
     await _execute_task_logic(ctx, task_history_id)
-
 async def accept_friend_requests_task(ctx, task_history_id: int, **kwargs):
     await _execute_task_logic(ctx, task_history_id)
-
 async def remove_friends_by_criteria_task(ctx, task_history_id: int, **kwargs):
     await _execute_task_logic(ctx, task_history_id)
-
 async def view_stories_task(ctx, task_history_id: int, **kwargs):
     await _execute_task_logic(ctx, task_history_id)
-
 async def birthday_congratulation_task(ctx, task_history_id: int, **kwargs):
     await _execute_task_logic(ctx, task_history_id)
-
 async def mass_messaging_task(ctx, task_history_id: int, **kwargs):
     await _execute_task_logic(ctx, task_history_id)
-
 async def eternal_online_task(ctx, task_history_id: int, **kwargs):
     await _execute_task_logic(ctx, task_history_id)
-
 async def leave_groups_by_criteria_task(ctx, task_history_id: int, **kwargs):
     await _execute_task_logic(ctx, task_history_id)
-
 async def join_groups_by_criteria_task(ctx, task_history_id: int, **kwargs):
     await _execute_task_logic(ctx, task_history_id)
 
 
-# --- Задачи со своей собственной логикой ---
-
+# --- ОБНОВЛЕННАЯ ЗАДАЧА ДЛЯ ПЛАНИРОВЩИКА ПОСТОВ ---
 async def publish_scheduled_post_task(ctx, post_id: int):
     async with AsyncSessionFactory() as session:
-        post = await session.get(ScheduledPost, post_id)
+        post = await session.get(ScheduledPost, post_id, options=[selectinload(ScheduledPost.user)])
         if not post or post.status != ScheduledPostStatus.scheduled:
             return
 
-        user = await session.get(User, post.user_id)
+        user = post.user
+        # --- ИНИЦИАЛИЗАЦИЯ EMITTER'А ДЛЯ УВЕДОМЛЕНИЙ ---
+        redis_pool = ctx.get('redis_pool')
+        emitter = None
+        if redis_pool:
+            emitter = RedisEventEmitter(redis_pool)
+            emitter.set_context(user.id)
+        # ---------------------------------------------
+
         if not user:
             post.status = ScheduledPostStatus.failed
             post.error_message = "Пользователь не найден"
@@ -5745,15 +5973,14 @@ async def publish_scheduled_post_task(ctx, post_id: int):
         if not vk_token:
             post.status = ScheduledPostStatus.failed
             post.error_message = "Токен пользователя недействителен"
+            if emitter:
+                await emitter.send_system_notification(session, "Не удалось опубликовать запланированный пост: токен VK недействителен.", "error")
             await session.commit()
             return
 
         vk_api = VKAPI(access_token=vk_token)
 
         try:
-            # wall.post не существует в vk_api.py, предполагаем, что это была опечатка и имелся в виду универсальный метод
-            # или специальный метод для постов, которого нет в предоставленных файлах.
-            # Для исправления используем базовый _make_request.
             result = await vk_api._make_request("wall.post", params={
                 "owner_id": int(post.vk_profile_id),
                 "message": post.post_text or "",
@@ -5761,14 +5988,21 @@ async def publish_scheduled_post_task(ctx, post_id: int):
             })
             post.status = ScheduledPostStatus.published
             post.vk_post_id = str(result.get("post_id"))
-        except VKAuthError as e:
+            if emitter:
+                await emitter.send_system_notification(session, "Запланированный пост успешно опубликован.", "success")
+
+        except (VKAPIError, Exception) as e:
             post.status = ScheduledPostStatus.failed
-            post.error_message = f"Ошибка авторизации: {e.message}. Обновите токен."
-        except Exception as e:
-            post.status = ScheduledPostStatus.failed
-            post.error_message = str(e)
+            # Устанавливаем понятное сообщение об ошибке
+            error_message = str(e.message) if isinstance(e, VKAPIError) else str(e)
+            post.error_message = error_message
+            log.error("post_scheduler.failed", post_id=post.id, user_id=user.id, error=error_message)
+            if emitter:
+                await emitter.send_system_notification(session, f"Не удалось опубликовать запланированный пост. Ошибка: {error_message}", "error")
 
         await session.commit()
+# --- КОНЕЦ ОБНОВЛЕННОЙ ЗАДАЧИ ---
+
 
 async def run_scenario_from_scheduler_task(ctx, scenario_id: int, user_id: int):
     log.info("scenario.runner.start", scenario_id=scenario_id, user_id=user_id)

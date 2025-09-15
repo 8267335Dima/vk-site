@@ -3,20 +3,54 @@ import aiohttp
 import random
 import json
 import asyncio
-from typing import Optional, Dict, Any, List
+from typing import Literal, Optional, Dict, Any, List
 from app.core.config import settings
 
+# --- ОБНОВЛЕННЫЙ БЛОК ИСКЛЮЧЕНИЙ ---
 class VKAPIError(Exception):
+    """Базовое исключение для всех ошибок VK API."""
     def __init__(self, message: str, error_code: int):
         self.message = message
         self.error_code = error_code
         super().__init__(f"VK API Error [{self.error_code}]: {self.message}")
 
-class VKRateLimitError(VKAPIError): pass
-class VKFloodControlError(VKAPIError): pass # Ошибка 9 - Flood control
-class VKInvalidTokenError(VKAPIError): pass
-class VKAccessDeniedError(VKAPIError): pass
-class VKAuthError(VKAPIError): pass
+class VKAuthError(VKAPIError):
+    """Ошибка авторизации (неверный токен). Код: 5."""
+    pass
+
+class VKRateLimitError(VKAPIError):
+    """Слишком много однотипных действий. Код: 6."""
+    pass
+
+class VKAccessDeniedError(VKAPIError):
+    """Нет доступа к контенту (закрытый профиль, ЧС и т.д.). Коды: 15, 18, 203, 902."""
+    pass
+
+class VKFloodControlError(VKAPIError):
+    """Слишком много запросов в секунду (флуд-контроль). Код: 9."""
+    pass
+
+class VKCaptchaError(VKAPIError):
+    """Требуется ввод капчи. Код: 14."""
+    pass
+
+class VKTooManyRequestsError(VKAPIError):
+    """Превышен лимит запросов в Execute. Код: 29"""
+    pass
+
+# Карта для сопоставления кодов ошибок с классами исключений
+ERROR_CODE_MAP = {
+    5: VKAuthError,
+    6: VKRateLimitError,
+    9: VKFloodControlError,
+    14: VKCaptchaError,
+    15: VKAccessDeniedError,
+    18: VKAccessDeniedError,
+    29: VKTooManyRequestsError,
+    203: VKAccessDeniedError,
+    902: VKAccessDeniedError,
+}
+# --- КОНЕЦ БЛОКА ИСКЛЮЧЕНИЙ ---
 
 class VKAPI:
     def __init__(self, access_token: str, proxy: Optional[str] = None):
@@ -35,7 +69,6 @@ class VKAPI:
 
         async with aiohttp.ClientSession() as session:
             try:
-                # Цикл повторных попыток для обхода временных лимитов
                 for attempt in range(3):
                     async with session.post(f"{self.base_url}{method}", data=params, proxy=self.proxy, timeout=20) as response:
                         data = await response.json()
@@ -45,27 +78,27 @@ class VKAPI:
                             error_code = error_data.get('error_code')
                             error_msg = error_data.get('error_msg', 'Unknown VK error')
                             
-                            # Если это Flood Control или Rate Limit, ждем и пробуем снова
-                            if error_code == 6 or error_code == 9:
-                                wait_time = 1 + attempt
+                            # --- УЛУЧШЕННАЯ ЛОГИКА ОБРАБОТКИ ОШИБОК ---
+                            if error_code in [6, 9]: # Rate Limit или Flood Control
+                                wait_time = 1 + attempt * 2 # Увеличиваем паузу с каждой попыткой
                                 print(f"  [API-WARN] Сработал Flood/Rate Control (ошибка {error_code}). Пауза {wait_time} сек. Попытка {attempt + 2}/3...")
                                 await asyncio.sleep(wait_time)
-                                continue # Переходим к следующей итерации цикла
-                            
-                            # Для других ошибок - сразу выходим
-                            if error_code == 5: raise VKAuthError(error_msg, error_code)
-                            elif error_code in [15, 18, 203, 902]: raise VKAccessDeniedError(error_msg, error_code)
-                            else: raise VKAPIError(error_msg, error_code)
+                                continue
 
-                        # Если ошибки нет, возвращаем результат
+                            # Выбираем правильный класс исключения из карты
+                            ExceptionClass = ERROR_CODE_MAP.get(error_code, VKAPIError)
+                            raise ExceptionClass(error_msg, error_code)
+                            # --- КОНЕЦ УЛУЧШЕННОЙ ЛОГИКИ ---
+
                         return data.get('response')
                 
                 # Если все попытки провалились
-                raise VKAPIError("Превышено количество попыток после ошибок Flood/Rate Control", 9)
+                raise VKFloodControlError("Превышено количество попыток после ошибок Flood/Rate Control.", 9)
 
             except aiohttp.ClientError as e:
-                raise VKAPIError(f"HTTP Request failed: {e}", 0)
+                raise VKAPIError(f"Сетевая ошибка: {e}. Проверьте прокси и подключение к интернету.", 0)
 
+    # ... остальная часть файла vk_api.py без изменений ...
     async def execute(self, calls: List[Dict[str, Any]]) -> Optional[List[Any]]:
         if not 25 >= len(calls) > 0:
             raise ValueError("Number of calls for execute method must be between 1 and 25.")
@@ -78,8 +111,6 @@ class VKAPI:
         if user_ids:
             params['user_ids'] = user_ids
         response = await self._make_request("users.get", params=params)
-        # Обратите внимание: users.get МОЖЕТ возвращать counters для ОДНОГО пользователя, но не для списка друзей.
-        # Эта логика остается, так как она полезна для точечных проверок (например, при приеме заявок).
         if response and isinstance(response, list):
             return response[0] if user_ids is None and len(response) == 1 else response
         return None
@@ -92,7 +123,6 @@ class VKAPI:
             return None
             
         items = response["items"]
-        # Если VK вернул просто список ID, преобразуем его в стандартный формат
         if fields == "" and isinstance(items, list) and all(isinstance(x, int) for x in items):
             return [{"id": user_id} for user_id in items]
         
@@ -125,8 +155,9 @@ class VKAPI:
     async def send_message(self, user_id: int, message: str) -> Optional[int]:
         return await self._make_request("messages.send", params={"user_id": user_id, "message": message, "random_id": random.randint(0, 2**31)})
 
-    async def get_conversations(self, count: int = 200) -> Optional[Dict[str, Any]]:
-        return await self._make_request("messages.getConversations", params={"count": count})
+    async def get_conversations(self, count: int = 200, filter: Optional[Literal['all', 'unread', 'important', 'unanswered']] = 'all') -> Optional[Dict[str, Any]]:
+        """Получает диалоги с возможностью фильтрации."""
+        return await self._make_request("messages.getConversations", params={"count": count, "filter": filter})
 
     async def get_photos(self, owner_id: int, count: int = 200) -> Optional[Dict[str, Any]]:
         return await self._make_request("photos.getAll", params={"owner_id": owner_id, "count": count, "extended": 1})

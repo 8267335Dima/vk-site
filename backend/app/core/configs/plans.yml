@@ -1,4 +1,7 @@
-# --- backend/app/core/configs/plans.yml ---
+# backend/app/core/configs/plans.yml
+# Единый источник правды о всех тарифных планах в системе.
+# Содержит отображаемую информацию, цены, возможности и числовые лимиты.
+
 Expired:
   display_name: Истекший
   description: "Срок действия вашего тарифа истек. Функциональность ограничена."
@@ -9,6 +12,8 @@ Expired:
   limits:
     daily_likes_limit: 50
     daily_add_friends_limit: 5
+    daily_message_limit: 10 # <-- ОБНОВЛЕНО
+    daily_posts_limit: 2 # <-- ОБНОВЛЕНО
     max_concurrent_tasks: 1
   available_features: []
 
@@ -23,8 +28,22 @@ Expired:
   limits:
     daily_likes_limit: 1000
     daily_add_friends_limit: 40
+    daily_message_limit: 100 # <-- ОБНОВЛЕНО
+    daily_posts_limit: 30 # <-- ОБНОВЛЕНО
     max_concurrent_tasks: 3
-  available_features: "*" # Даем все на 14 дней
+  available_features: # Указываем явно фичи тарифа Plus, чтобы не дать случайно доступ к PRO/Agency
+    - "like_feed"
+    - "add_recommended"
+    - "accept_friends"
+    - "remove_friends"
+    - "view_stories"
+    - "mass_messaging"
+    - "leave_groups"
+    - "join_groups"
+    - "birthday_congratulation"
+    - "eternal_online"
+    - "automations_center"
+    - "post_scheduler"
 
 Plus:
   display_name: Plus
@@ -47,20 +66,22 @@ Plus:
   limits:
     daily_likes_limit: 1000
     daily_add_friends_limit: 40
+    daily_message_limit: 100 # <-- ОБНОВЛЕНО
+    daily_posts_limit: 30 # <-- ОБНОВЛЕНО
     max_concurrent_tasks: 3
   available_features:
-    - 'like_feed'
-    - 'add_recommended'
-    - 'accept_friends'
-    - 'remove_friends'
-    - 'view_stories'
-    - 'mass_messaging'
-    - 'leave_groups'
-    - 'join_groups'
-    - 'birthday_congratulation'
-    - 'eternal_online'
-    - 'automations_center'
-    - 'post_scheduler'
+    - "like_feed"
+    - "add_recommended"
+    - "accept_friends"
+    - "remove_friends"
+    - "view_stories"
+    - "mass_messaging"
+    - "leave_groups"
+    - "join_groups"
+    - "birthday_congratulation"
+    - "eternal_online"
+    - "automations_center"
+    - "post_scheduler"
 
 PRO:
   display_name: PRO
@@ -82,10 +103,12 @@ PRO:
     - "Гибкая настройка скорости"
     - "Повышенные лимиты"
   limits:
-    daily_likes_limit: 2000
-    daily_add_friends_limit: 60
+    daily_likes_limit: 2500 # <-- ОБНОВЛЕНО
+    daily_add_friends_limit: 70 # <-- ОБНОВЛЕНО
+    daily_message_limit: 300 # <-- ОБНОВЛЕНО
+    daily_posts_limit: 100 # <-- ОБНОВЛЕНО
     max_concurrent_tasks: 5
-  available_features: "*"
+  available_features: "*" # Даем доступ ко всем существующим и будущим функциям
 
 Agency:
   display_name: Agency
@@ -106,8 +129,10 @@ Agency:
     - "Максимальные лимиты"
     - "Приоритетная поддержка"
   limits:
-    daily_likes_limit: 3000
-    daily_add_friends_limit: 80
+    daily_likes_limit: 5000 # <-- ОБНОВЛЕНО
+    daily_add_friends_limit: 100 # <-- ОБНОВЛЕНО
+    daily_message_limit: 1000 # <-- ОБНОВЛЕНО
+    daily_posts_limit: 250 # <-- ОБНОВЛЕНО
     max_concurrent_tasks: 10
     max_profiles: 5
     max_team_members: 5

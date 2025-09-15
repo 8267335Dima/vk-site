@@ -1,7 +1,7 @@
 import datetime
 from sqlalchemy import (
     Column, Integer, String, DateTime, ForeignKey, BigInteger,
-    UniqueConstraint, JSON, Index, Date, Enum
+    UniqueConstraint, JSON, Index, Date, Enum, text
 )
 from sqlalchemy.orm import relationship
 from app.db.base import Base
@@ -18,6 +18,7 @@ class DailyStats(Base):
     stories_viewed_count = Column(Integer, default=0, nullable=False)
     friends_removed_count = Column(Integer, default=0, nullable=False)
     messages_sent_count = Column(Integer, default=0, nullable=False)
+    posts_created_count = Column(Integer, nullable=False, server_default=text('0'))
     user = relationship("User", back_populates="daily_stats")
     __table_args__ = (
         UniqueConstraint('user_id', 'date', name='_user_date_uc'),

@@ -2,10 +2,6 @@
 from pydantic import BaseModel, Field
 from typing import Optional, Literal, List, Any
 
-# backend/app/api/schemas/actions.py
-from pydantic import BaseModel, Field
-from typing import Optional, Literal, List, Any
-
 class ActionFilters(BaseModel):
     sex: Optional[Literal[0, 1, 2]] = Field(0, description="0 - любой, 1 - жен, 2 - муж")
     is_online: Optional[bool] = False
@@ -13,18 +9,10 @@ class ActionFilters(BaseModel):
     allow_closed_profiles: bool = False
     status_keyword: Optional[str] = Field(None, max_length=100)
     city: Optional[str] = Field(None, max_length=100)
-    only_with_photo: Optional[bool] = Field(False)
-
-    # Для remove_friends
-    remove_banned: Optional[bool] = True
+    only_with_photo: Optional[bool] = Field(False) # Используется в like_feed
+    remove_banned: Optional[bool] = True # Используется в remove_friends
     last_seen_days: Optional[int] = Field(None, ge=1)
     
-class LikeAfterAddConfig(BaseModel):
-    enabled: bool = False
-    targets: List[Literal['avatar', 'wall']] = ['avatar']
-
-# ... (остальные модели без изменений) ...
-
 class LikeAfterAddConfig(BaseModel):
     enabled: bool = False
     targets: List[Literal['avatar', 'wall']] = ['avatar']
@@ -54,6 +42,7 @@ class MassMessagingRequest(BaseModel):
     filters: ActionFilters = Field(default_factory=ActionFilters)
     message_text: str = Field(..., min_length=1, max_length=1000)
     only_new_dialogs: bool = Field(False, description="Отправлять только тем, с кем еще не было переписки.")
+    only_unread: bool = Field(False, description="Отправлять только тем, у кого есть непрочитанные сообщения от вас.")
 
 class LeaveGroupsRequest(BaseModel):
     count: int = Field(50, ge=1)
@@ -70,6 +59,9 @@ class BirthdayCongratulationRequest(BaseModel):
     message_template_default: str = "С Днем Рождения, {name}!"
     message_template_male: Optional[str] = None
     message_template_female: Optional[str] = None
+    filters: ActionFilters = Field(default_factory=ActionFilters, description="Применить стандартные фильтры к списку именинников.")
+    only_new_dialogs: bool = Field(False, description="Поздравлять только тех, с кем еще не было переписки.")
+    only_unread: bool = Field(False, description="Поздравлять только тех, у кого есть непрочитанные сообщения от вас.")
 
 # --- Для динамической конфигурации UI ---
 class TaskField(BaseModel):

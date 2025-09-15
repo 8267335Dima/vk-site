@@ -2,7 +2,7 @@
 import datetime
 import asyncio
 import aiohttp
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
 from arq.connections import ArqRedis
@@ -13,6 +13,7 @@ from app.api.dependencies import get_current_active_profile, get_arq_pool
 from app.api.schemas.posts import PostCreate, PostRead, UploadedImagesResponse, PostBatchCreate, UploadedImageResponse
 from app.services.vk_api import VKAPI
 from app.core.security import decrypt_data
+from app.repositories.stats import StatsRepository # <--- ДОБАВЛЕН ИМПОРТ
 import structlog
 
 log = structlog.get_logger(__name__)
@@ -41,14 +42,13 @@ async def upload_image_file(
 
 async def _download_image_from_url(url: str) -> bytes:
     """Скачивает изображение по URL и возвращает его в виде байтов."""
-    # Простая проверка на то, что URL ведет на изображение
     if not any(url.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif']):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="URL должен вести на изображение (jpg, png, gif).")
     
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=15) as response:
-                response.raise_for_status() # Вызовет ошибку для статусов 4xx/5xx
+                response.raise_for_status()
                 return await response.read()
     except aiohttp.ClientError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Не удалось скачать изображение по URL: {e}")
@@ -70,9 +70,8 @@ async def upload_images_batch(
             return await vk_api.upload_photo_for_wall(image_bytes)
         except Exception as e:
             log.error("batch_upload.single_file_error", filename=image.filename, error=str(e))
-            return None # Возвращаем None в случае ошибки для одного из файлов
+            return None
 
-    # Запускаем все загрузки параллельно
     tasks = [upload_one(img) for img in images]
     results = await asyncio.gather(*tasks)
     
@@ -91,8 +90,24 @@ async def schedule_batch_posts(
     db: AsyncSession = Depends(get_db),
     arq_pool: ArqRedis = Depends(get_arq_pool)
 ):
-    """Принимает список постов и планирует их все одним запросом."""
+    """Принимает список постов и планирует их все одним запросом, проверяя лимиты."""
     created_posts_db = []
+    
+    # --- НАЧАЛО БЛОКА ПРОВЕРКИ ЛИМИТОВ ---
+    stats_repo = StatsRepository(db)
+    today_stats = await stats_repo.get_or_create_today_stats(current_user.id)
+    
+    posts_to_create_count = len(batch_data.posts)
+    if posts_to_create_count == 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Список постов для планирования не может быть пустым.")
+
+    if today_stats.posts_created_count + posts_to_create_count > current_user.daily_posts_limit:
+        remaining = current_user.daily_posts_limit - today_stats.posts_created_count
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Достигнут дневной лимит на создание постов. Осталось: {remaining if remaining > 0 else 0}"
+        )
+    # --- КОНЕЦ БЛОКА ПРОВЕРКИ ЛИМИТОВ ---
     
     for post_data in batch_data.posts:
         final_attachments = post_data.attachments or []
@@ -102,7 +117,6 @@ async def schedule_batch_posts(
                 attachment_id = await vk_api.upload_photo_for_wall(image_bytes)
                 final_attachments.append(attachment_id)
             except HTTPException as e:
-                # Если не удалось скачать картинку для одного поста, пропускаем его
                 log.warn("schedule_batch.image_download_failed", url=post_data.image_url, detail=e.detail)
                 continue
 
@@ -117,8 +131,11 @@ async def schedule_batch_posts(
         created_posts_db.append(new_post)
 
     if not created_posts_db:
-        raise HTTPException(status_code=400, detail="Не удалось создать ни одного поста из пакета.")
+        raise HTTPException(status_code=400, detail="Не удалось создать ни одного поста из пакета (возможно, из-за ошибок загрузки изображений).")
 
+    # --- УВЕЛИЧИВАЕМ СЧЕТЧИК ПОСЛЕ УСПЕШНОГО ДОБАВЛЕНИЯ В СЕССИЮ ---
+    today_stats.posts_created_count += len(created_posts_db)
+    
     await db.flush() # Получаем ID для всех созданных постов
 
     # Ставим все задачи в очередь ARQ

@@ -8,8 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from asgi_lifespan import LifespanManager
 from sqlalchemy import select
 from typing import AsyncGenerator
+
+# ИСПРАВЛЕНИЕ ЗДЕСЬ: импортируем 'api' и даем ему псевдоним 'app'
+from app.main import api as app 
 from app.db.session import get_db, AsyncSessionFactory
-from app.main import app
 from app.api.dependencies import limiter
 from app.db.models import User
 from app.services.vk_api import VKAPI
@@ -17,14 +19,12 @@ from app.core.config import settings
 from app.core.security import decrypt_data
 from app.core.constants import PlanName
 
-# Меняем scope на "module", чтобы клиент и сессия создавались один раз на весь модуль тестов
-# Это значительно ускоряет выполнение
-@pytest_asyncio.fixture(scope="module")
+@pytest_asyncio.fixture(scope="function")
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionFactory() as session:
         yield session
 
-@pytest_asyncio.fixture(scope="module")
+@pytest_asyncio.fixture(scope="function")
 async def async_client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     async def _override_get_db() -> AsyncGenerator[AsyncSession, None]: 
         yield db_session
@@ -38,7 +38,7 @@ async def async_client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, 
     
     app.dependency_overrides.clear()
 
-@pytest_asyncio.fixture(scope="module")
+@pytest_asyncio.fixture(scope="function")
 async def authorized_user_and_headers(async_client: AsyncClient, db_session: AsyncSession) -> tuple[User, dict]:
     """
     Выполняет вход ОДИН РАЗ для всего модуля тестов, переводит пользователя на PRO тариф
@@ -59,7 +59,6 @@ async def authorized_user_and_headers(async_client: AsyncClient, db_session: Asy
     user = await db_session.get(User, user_id)
     assert user is not None, "Не удалось найти пользователя в БД после логина"
 
-    # Принудительно ставим PRO тариф для доступа ко всем функциям
     if user.plan != PlanName.PRO:
         user.plan = PlanName.PRO
         await db_session.commit()
@@ -67,7 +66,7 @@ async def authorized_user_and_headers(async_client: AsyncClient, db_session: Asy
 
     return user, headers
 
-@pytest_asyncio.fixture(scope="module")
+@pytest_asyncio.fixture(scope="function")
 async def vk_api_client(authorized_user_and_headers: tuple[User, dict]) -> VKAPI:
     """Создает и предоставляет реальный клиент VK API для тестов."""
     user, _ = authorized_user_and_headers
@@ -75,7 +74,6 @@ async def vk_api_client(authorized_user_and_headers: tuple[User, dict]) -> VKAPI
     assert token, "Не удалось расшифровать токен VK"
     
     api_client = VKAPI(access_token=token)
-    # Сохраняем ID пользователя для удобства
     setattr(api_client, "user_id", user.vk_id)
     
     return api_client

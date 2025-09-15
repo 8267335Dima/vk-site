@@ -60,7 +60,9 @@ async def login_via_vk(
             plan=PlanName.BASE,
             plan_expires_at=datetime.now(UTC) + timedelta(days=14),
             daily_likes_limit=base_plan_limits["daily_likes_limit"],
-            daily_add_friends_limit=base_plan_limits["daily_add_friends_limit"]
+            daily_add_friends_limit=base_plan_limits["daily_add_friends_limit"],
+            daily_message_limit=base_plan_limits["daily_message_limit"], # <--- ДОБАВЛЕНО
+            daily_posts_limit=base_plan_limits["daily_posts_limit"]     # <--- ДОБАВЛЕНО
         )
         db.add(user)
 
@@ -71,6 +73,9 @@ async def login_via_vk(
         user.plan_expires_at = None
         user.daily_likes_limit = admin_limits["daily_likes_limit"]
         user.daily_add_friends_limit = admin_limits["daily_add_friends_limit"]
+        user.daily_message_limit = admin_limits["daily_message_limit"], # <--- ДОБАВЛЕНО
+        user.daily_posts_limit = admin_limits["daily_posts_limit"]     # <--- ДОБАВЛЕНО
+
 
     await db.flush()
     await db.refresh(user)

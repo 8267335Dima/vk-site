@@ -19,6 +19,7 @@ class User(Base):
     daily_likes_limit = Column(Integer, nullable=False, server_default=text('0'))
     daily_add_friends_limit = Column(Integer, nullable=False, server_default=text('0'))
     daily_message_limit = Column(Integer, nullable=False, server_default=text('0'))
+    daily_posts_limit = Column(Integer, nullable=False, server_default=text('0'))
     delay_profile = Column(Enum(DelayProfile), nullable=False, server_default=DelayProfile.normal.name)
 
     # Связи остаются такими же

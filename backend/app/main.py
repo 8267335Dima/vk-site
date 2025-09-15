@@ -1,159 +1,86 @@
 # backend/app/main.py
-import asyncio
-import structlog
-from fastapi import APIRouter, FastAPI, Request, status, Depends
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
-from redis.asyncio import Redis
-from redis.exceptions import RedisError
-from fastapi_cache import FastAPICache
-from fastapi_cache.backends.redis import RedisBackend
-from contextlib import asynccontextmanager
-from fastapi_limiter import FastAPILimiter
-from fastapi_limiter.depends import RateLimiter
-from prometheus_fastapi_instrumentator import Instrumentator
 
-# --- ИЗМЕНЕНИЯ ЗДЕСЬ ---
-# from app.celery_app import celery_app # <-- УДАЛЕНО: Celery больше не используется
-from app.arq_config import redis_settings # <-- ИЗМЕНЕНО: Импорт из нового центрального конфига
-from arq.connections import create_pool
-# -------------------------
+import asyncio
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from redis.asyncio import Redis as AsyncRedis
 
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.db.session import engine
 from app.admin import init_admin
-from app.api.endpoints import (
-    auth_router, users_router, websockets_router,
-    stats_router, automations_router, billing_router,
-    analytics_router, scenarios_router, notifications_router, proxies_router,
-    tasks_router, posts_router, teams_router
-)
 from app.services.websocket_manager import redis_listener
-from fastapi.routing import APIRoute
+from app.api.endpoints import (
+    auth_router, users_router, proxies_router, tasks_router,
+    stats_router, automations_router, billing_router, analytics_router,
+    scenarios_router, notifications_router, posts_router, teams_router,
+    websockets_router
+)
 
+# Вызываем настройку логирования в самом начале
 configure_logging()
-log = structlog.get_logger(__name__)
+
+# Создаем фоновую задачу для прослушивания Redis Pub/Sub для WebSockets
+async def run_redis_listener(redis_client):
+    await redis_listener(redis_client)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Управляет жизненным циклом приложения, включая запуск и остановку ресурсов,
-    а также выполняет диагностику при старте.
-    """
-    # --- СТАРТ ПРИЛОЖЕНИЯ ---
-    limiter_redis = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/0", encoding="utf-8", decode_responses=True)
-    cache_redis = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/3", encoding="utf-8")
-    pubsub_redis = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/1", decode_responses=True)
-    redis_task = None
-
-    try:
-        await FastAPILimiter.init(limiter_redis)
-        FastAPICache.init(RedisBackend(cache_redis), prefix="fastapi-cache")
-        redis_task = asyncio.create_task(redis_listener(pubsub_redis))
-        # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
-        # Создаем пул соединений ARQ и сохраняем его в состоянии приложения
-        app.state.arq_pool = await create_pool(redis_settings)
-        # -------------------------
-        log.info("lifespan.startup", message="Dependencies initialized.")
-    except RedisError as e:
-        log.error("lifespan.startup.error", error=str(e), message="Could not connect to Redis.")
-
-    # --- ДИАГНОСТИКА (без изменений) ---
-    print("\n--- FastAPI ROUTE DEPENDENCY DIAGNOSTICS ---")
-    for route in app.routes:
-        if isinstance(route, APIRoute):
-            if route.path == "/api/v1/scenarios" and "POST" in route.methods:
-                print(f"Found route: {route.methods} {route.path}")
-                print(f"Endpoint function: {route.endpoint.__name__}")
-                for dep in route.dependant.dependencies:
-                    if hasattr(dep.call, "__name__"):
-                         print(f"--> Depends on function: '{dep.call.__name__}'")
-                    else:
-                         print(f"--> Depends on object: {dep.call}")
-    print("--- END DIAGNOSTICS ---\n")
-
+    # Код, который выполнится при старте приложения
+    redis_client = AsyncRedis.from_url(
+        f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/1", 
+        decode_responses=True
+    )
+    app.state.redis_client = redis_client
+    
+    # Запускаем listener в фоновом режиме
+    listener_task = asyncio.create_task(run_redis_listener(redis_client))
+    
     yield
-
-    # --- ОСТАНОВКА ПРИЛОЖЕНИЯ ---
-    if redis_task:
-        redis_task.cancel()
-        try:
-            await redis_task
-        except asyncio.CancelledError:
-            log.info("lifespan.shutdown", message="Redis listener task cancelled.")
-
-    await app.state.arq_pool.close()
-
-    # --- ИЗМЕНЕНИЯ ЗДЕСЬ ---
-    await limiter_redis.aclose()
-    await cache_redis.aclose()
-    await pubsub_redis.aclose()
-
-    await FastAPILimiter.close() # Этот метод из библиотеки, его не трогаем
-    FastAPICache.reset()
-
-    await engine.dispose()
-
-    log.info("lifespan.shutdown", message="All resources cleaned up completely.")
+    
+    # Код, который выполнится при остановке приложения
+    listener_task.cancel()
+    try:
+        await listener_task
+    except asyncio.CancelledError:
+        pass # Ожидаемое исключение при отмене
+    await redis_client.close()
 
 
-app = FastAPI(title="Zenith API", version="4.0.0", docs_url="/api/docs", redoc_url="/api/redoc", lifespan=lifespan)
+# --- ВАЖНО: Вот тот самый объект 'app', который мы пытаемся импортировать ---
+app = FastAPI(
+    title="VK SMM Combine API",
+    description="API для сервиса автоматизации SMM-задач ВКонтакте.",
+    version="1.0.0",
+    lifespan=lifespan
+)
 
-instrumentator = Instrumentator().instrument(app)
-instrumentator.expose(app, endpoint="/api/metrics")
-
-app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
-
-init_admin(app, engine)
-
-if settings.ALLOWED_ORIGINS:
-    allowed_origins_list = [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(',')]
-else:
-    allowed_origins_list = ["http://localhost:3000", "http://127.0.0.1:3000"]
-
+# --- Настройка CORS ---
+origins = [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(',')]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins_list,
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-class Tags:
-    AUTH = "Аутентификация"
-    USERS = "Пользователи и Профили"
-    PROXIES = "Прокси"
-    TASKS = "Задачи и История"
-    STATS = "Статистика"
-    AUTOMATIONS = "Автоматизации"
-    BILLING = "Тарифы и оплата"
-    ANALYTICS = "Аналитика"
-    SCENARIOS = "Сценарии"
-    NOTIFICATIONS = "Уведомления"
-    POSTS = "Планировщик постов"
-    TEAMS = "Командный функционал"
-    WEBSOCKETS = "WebSockets"
-    SYSTEM = "Система"
+# --- Инициализация админ-панели SQLAdmin ---
+init_admin(app, engine)
 
-api_router_v1 = APIRouter()
-api_router_v1.include_router(auth_router, prefix="/auth", tags=[Tags.AUTH])
-api_router_v1.include_router(users_router, prefix="/users", tags=[Tags.USERS])
-api_router_v1.include_router(proxies_router, prefix="/proxies", tags=[Tags.PROXIES])
-api_router_v1.include_router(tasks_router, prefix="/tasks", tags=[Tags.TASKS])
-api_router_v1.include_router(stats_router, prefix="/stats", tags=[Tags.STATS])
-api_router_v1.include_router(automations_router, prefix="/automations", tags=[Tags.AUTOMATIONS])
-api_router_v1.include_router(billing_router, prefix="/billing", tags=[Tags.BILLING])
-api_router_v1.include_router(analytics_router, prefix="/analytics", tags=[Tags.ANALYTICS])
-api_router_v1.include_router(scenarios_router, prefix="/scenarios", tags=[Tags.SCENARIOS])
-api_router_v1.include_router(notifications_router, prefix="/notifications", tags=[Tags.NOTIFICATIONS])
-api_router_v1.include_router(posts_router, prefix="/posts", tags=[Tags.POSTS])
-api_router_v1.include_router(teams_router, prefix="/teams", tags=[Tags.TEAMS])
-api_router_v1.include_router(websockets_router, prefix="", tags=[Tags.WEBSOCKETS])
-
-app.include_router(api_router_v1, prefix="/api/v1")
-
-@app.get("/api/health", status_code=status.HTTP_200_OK, tags=[Tags.SYSTEM])
-async def health_check():
-    return {"status": "ok"}
+# --- Подключение всех роутеров API ---
+api_prefix = "/api/v1"
+app.include_router(auth_router, prefix=f"{api_prefix}/auth", tags=["Authentication"])
+app.include_router(users_router, prefix=f"{api_prefix}/users", tags=["Users"])
+app.include_router(proxies_router, prefix=f"{api_prefix}/proxies", tags=["Proxies"])
+app.include_router(tasks_router, prefix=f"{api_prefix}/tasks", tags=["Tasks"])
+app.include_router(stats_router, prefix=f"{api_prefix}/stats", tags=["Statistics"])
+app.include_router(automations_router, prefix=f"{api_prefix}/automations", tags=["Automations"])
+app.include_router(billing_router, prefix=f"{api_prefix}/billing", tags=["Billing"])
+app.include_router(analytics_router, prefix=f"{api_prefix}/analytics", tags=["Analytics"])
+app.include_router(scenarios_router, prefix=f"{api_prefix}/scenarios", tags=["Scenarios"])
+app.include_router(notifications_router, prefix=f"{api_prefix}/notifications", tags=["Notifications"])
+app.include_router(posts_router, prefix=f"{api_prefix}/posts", tags=["Posts"])
+app.include_router(teams_router, prefix=f"{api_prefix}/teams", tags=["Teams"])
+app.include_router(websockets_router, tags=["WebSockets"])

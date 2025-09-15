@@ -2,6 +2,7 @@
 
 services:
   postgres:
+    # ... без изменений ...
     image: postgres:16-alpine
     container_name: social_pilot_postgres_local_dev
     env_file: ./.env
@@ -17,6 +18,7 @@ services:
       retries: 5
 
   redis:
+    # ... без изменений ...
     image: redis:7-alpine
     container_name: social_pilot_redis_local_dev
     ports:
@@ -32,23 +34,30 @@ services:
 
   # Сервис для ARQ Worker, работающий с вашим локальным кодом
   worker:
-    image: python:3.11-slim
+    build:
+      context: .
+      dockerfile: worker.Dockerfile
     container_name: social_pilot_worker_local_dev
-    command: >
-      sh -c "pip install poetry && 
-             poetry config virtualenvs.create false && 
-             poetry install --no-root && 
-             arq --watch . app.worker.WorkerSettings"
     volumes:
-      - ./backend:/app/backend
-    working_dir: /app/backend
+      - ./backend:/app
     env_file:
-      - ./.env
+      - ./.env # <-- Сначала загружаем все переменные из .env
+
+    # --- ДОБАВЬТЕ ЭТОТ БЛОК ---
+    # Переопределяем адрес сервера БД специально для этого контейнера
+    environment:
+      - POSTGRES_SERVER=postgres # <-- Используем имя сервиса
+      - REDIS_HOST=redis # <-- Также делаем это и для Redis, это лучшая практика
+    # ---------------------------
+
     restart: always
     depends_on:
       redis:
         condition: service_healthy
+      postgres: # <-- Добавим зависимость и от postgres
+        condition: service_healthy
 
+# ... блок volumes без изменений ...
 volumes:
   postgres_data_dev: {}
   redis_data_dev: {}

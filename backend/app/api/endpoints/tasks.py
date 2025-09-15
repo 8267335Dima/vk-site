@@ -14,10 +14,13 @@ from app.api.schemas.actions import (
     RemoveFriendsRequest, MassMessagingRequest, JoinGroupsRequest, LeaveGroupsRequest,
     TaskConfigResponse, TaskField
 )
-from app.api.schemas.tasks import ActionResponse, PaginatedTasksResponse
+from app.services.message_service import MessageService
+from app.api.schemas.tasks import ActionResponse, PaginatedTasksResponse, PreviewResponse 
 from app.core.plans import get_plan_config, is_feature_available_for_plan
 from app.core.config_loader import AUTOMATIONS_CONFIG
 from app.core.constants import TaskKey
+from app.core.security import decrypt_data
+from app.services.vk_api import VKAPI
 
 router = APIRouter()
 
@@ -135,6 +138,52 @@ async def run_any_task(
     arq_pool: ArqRedis = Depends(get_arq_pool)
 ):
     return await _enqueue_task(current_user, db, arq_pool, task_key.value, request_data)
+
+@router.post("/preview/{task_key}", response_model=PreviewResponse, summary="Предварительный подсчет аудитории для задачи")
+async def preview_task_audience(
+    task_key: TaskKey,
+    request_data: AnyTaskRequest = Body(...),
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Подсчитывает количество пользователей, подходящих под фильтры, без выполнения самой задачи.
+    """
+    # Этот эмиттер не будет отправлять события, он нужен только для инициализации сервиса
+    class DummyEmitter:
+        async def send_log(*args, **kwargs): pass
+    
+    emitter = DummyEmitter()
+    count = 0
+    
+    try:
+        # Мы инициализируем сервис, но вызываем только метод для поиска целей
+        if task_key == TaskKey.MASS_MESSAGING:
+            service = MessageService(db, current_user, emitter)
+            await service._initialize_vk_api()
+            targets = await service.get_mass_messaging_targets(request_data)
+            count = len(targets)
+        
+        elif task_key == TaskKey.ADD_RECOMMENDED:
+            # Логика для этой задачи немного сложнее, так как она уже встроена.
+            # Для превью достаточно отфильтровать рекомендации.
+            vk_api = VKAPI(decrypt_data(current_user.encrypted_vk_token))
+            response = await vk_api.get_recommended_friends(count=200) # Берем с запасом
+            if response and response.get('items'):
+                from app.services.vk_user_filter import apply_filters_to_profiles
+                filtered = await apply_filters_to_profiles(response['items'], request_data.filters)
+                count = len(filtered)
+
+        # Сюда можно добавить elif для других задач (remove_friends и т.д.) по аналогии
+        
+        else:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Предпросмотр для этого типа задачи не поддерживается.")
+            
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+    return PreviewResponse(found_count=count)
+
 
 @router.get("/history", response_model=PaginatedTasksResponse)
 async def get_user_task_history(

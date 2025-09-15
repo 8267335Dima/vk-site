@@ -1,4 +1,4 @@
-# backend/app/services/automation_service.py
+# --- backend/app/services/automation_service.py ---
 import datetime
 from sqlalchemy import select, and_
 from sqlalchemy.dialects.postgresql import insert
@@ -6,6 +6,8 @@ from app.services.base import BaseVKService
 from app.services.vk_api import VKAccessDeniedError
 from app.db.models import SentCongratulation
 from app.api.schemas.actions import BirthdayCongratulationRequest
+from app.services.vk_user_filter import apply_filters_to_profiles
+from app.services.message_service import MessageService # <--- НОВЫЙ ИМПОРТ
 
 class AutomationService(BaseVKService):
 
@@ -15,7 +17,7 @@ class AutomationService(BaseVKService):
     async def _congratulate_friends_logic(self, params: BirthdayCongratulationRequest):
         await self.emitter.send_log("Запуск задачи: Поздравление друзей с Днем Рождения.", "info")
         
-        friends = await self.vk_api.get_user_friends(self.user.vk_id, fields="bdate,sex")
+        friends = await self.vk_api.get_user_friends(self.user.vk_id, fields="bdate,sex,online,last_seen,is_closed,status,city")
         if not friends:
             await self.emitter.send_log("Не удалось получить список друзей.", "warning")
             return
@@ -23,13 +25,37 @@ class AutomationService(BaseVKService):
         today = datetime.date.today()
         today_str = f"{today.day}.{today.month}"
         
-        birthday_friends = [f for f in friends if f.get("bdate") and f.get("bdate").startswith(today_str)]
+        birthday_friends_raw = [f for f in friends if f.get("bdate") and f.get("bdate").startswith(today_str)]
 
-        if not birthday_friends:
+        if not birthday_friends_raw:
             await self.emitter.send_log("Сегодня нет дней рождения у друзей.", "info")
             return
+            
+        await self.emitter.send_log(f"Найдено именинников: {len(birthday_friends_raw)} чел. Применяем стандартные фильтры...", "info")
+        
+        # Шаг 1: Применяем стандартные фильтры (пол, онлайн и т.д.)
+        birthday_friends_filtered = await apply_filters_to_profiles(birthday_friends_raw, params.filters)
+        
+        if not birthday_friends_filtered:
+            await self.emitter.send_log("После стандартных фильтров не осталось именинников.", "success")
+            return
+        
+        # Шаг 2: Применяем фильтры по диалогам, если они включены
+        if params.only_new_dialogs or params.only_unread:
+            message_service = MessageService(self.db, self.user, self.emitter)
+            # Инициализируем vk_api внутри message_service
+            await message_service._initialize_vk_api() 
+            final_targets = await message_service.filter_targets_by_conversation_status(
+                birthday_friends_filtered, params.only_new_dialogs, params.only_unread
+            )
+        else:
+            final_targets = birthday_friends_filtered
 
-        await self.emitter.send_log(f"Найдено именинников: {len(birthday_friends)} чел. Начинаем поздравлять.", "info")
+        if not final_targets:
+            await self.emitter.send_log("После фильтрации диалогов не осталось именинников для поздравления.", "success")
+            return
+            
+        await self.emitter.send_log(f"После всех фильтров осталось: {len(final_targets)} чел. Начинаем поздравлять.", "info")
 
         current_year = today.year
         stmt = select(SentCongratulation.friend_vk_id).where(
@@ -38,11 +64,12 @@ class AutomationService(BaseVKService):
         already_congratulated_ids = {row[0] for row in (await self.db.execute(stmt)).all()}
 
         processed_count = 0
-        for friend in birthday_friends:
+        for friend in final_targets: # <--- Используем окончательный список
             friend_id = friend['id']
             if friend_id in already_congratulated_ids:
                 continue
 
+            # ... (остальная логика отправки поздравлений без изменений) ...
             name = friend.get("first_name", "")
             sex = friend.get("sex")
 

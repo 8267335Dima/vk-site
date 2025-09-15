@@ -154,6 +154,8 @@ async def payment_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         new_limits = get_limits_for_plan(user.plan)
         user.daily_likes_limit = new_limits.get("daily_likes_limit", 0)
         user.daily_add_friends_limit = new_limits.get("daily_add_friends_limit", 0)
+        user.daily_message_limit = new_limits.get("daily_message_limit", 0) # <--- ДОБАВЛЕНО
+        user.daily_posts_limit = new_limits.get("daily_posts_limit", 0)   # <--- ДОБАВЛЕНО
 
         payment.status = "succeeded"
         
