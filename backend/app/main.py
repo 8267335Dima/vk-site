@@ -84,16 +84,14 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             log.info("lifespan.shutdown", message="Redis listener task cancelled.")
 
-    # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
-    # Корректно закрываем пул соединений ARQ при остановке
     await app.state.arq_pool.close()
-    # -------------------------
 
+    # --- ИЗМЕНЕНИЯ ЗДЕСЬ ---
     await limiter_redis.aclose()
     await cache_redis.aclose()
     await pubsub_redis.aclose()
 
-    await FastAPILimiter.close()
+    await FastAPILimiter.close() # Этот метод из библиотеки, его не трогаем
     FastAPICache.reset()
 
     await engine.dispose()

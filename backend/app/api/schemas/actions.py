@@ -2,23 +2,28 @@
 from pydantic import BaseModel, Field
 from typing import Optional, Literal, List, Any
 
+# backend/app/api/schemas/actions.py
+from pydantic import BaseModel, Field
+from typing import Optional, Literal, List, Any
+
 class ActionFilters(BaseModel):
     sex: Optional[Literal[0, 1, 2]] = Field(0, description="0 - любой, 1 - жен, 2 - муж")
     is_online: Optional[bool] = False
-    last_seen_hours: Optional[int] = Field(None, ge=1, description="Фильтр по последнему визиту в часах")
+    last_seen_hours: Optional[int] = Field(None, ge=1)
     allow_closed_profiles: bool = False
     status_keyword: Optional[str] = Field(None, max_length=100)
-    only_with_photo: Optional[bool] = Field(False, description="Применять только к постам с фото (для like_feed)")
+    city: Optional[str] = Field(None, max_length=100)
+    only_with_photo: Optional[bool] = Field(False)
 
     # Для remove_friends
     remove_banned: Optional[bool] = True
-    last_seen_days: Optional[int] = Field(None, ge=1, description="Фильтр по последнему визиту в днях")
+    last_seen_days: Optional[int] = Field(None, ge=1)
+    
+class LikeAfterAddConfig(BaseModel):
+    enabled: bool = False
+    targets: List[Literal['avatar', 'wall']] = ['avatar']
 
-    # Для accept_friends
-    min_friends: Optional[int] = Field(None, ge=0)
-    max_friends: Optional[int] = Field(None, ge=0)
-    min_followers: Optional[int] = Field(None, ge=0)
-    max_followers: Optional[int] = Field(None, ge=0)
+# ... (остальные модели без изменений) ...
 
 class LikeAfterAddConfig(BaseModel):
     enabled: bool = False

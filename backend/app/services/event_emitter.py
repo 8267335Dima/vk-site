@@ -1,6 +1,7 @@
 # backend/app/services/event_emitter.py
 import datetime
 import json
+from datetime import UTC 
 import structlog
 from typing import Literal, Dict, Any
 from redis.asyncio import Redis
@@ -27,7 +28,8 @@ class RedisEventEmitter:
 
     async def send_log(self, message: str, status: LogLevel, target_url: str | None = None):
         payload = {
-            "timestamp": datetime.datetime.utcnow().isoformat(),
+            # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
+            "timestamp": datetime.datetime.now(UTC).isoformat(),
             "message": message,
             "status": status,
             "url": target_url,

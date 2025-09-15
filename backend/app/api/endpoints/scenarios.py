@@ -311,6 +311,9 @@ async def update_scenario(
 
     # удаляем старые шаги, если новые переданы
     if scenario_data.nodes is not None:
+
+        db_scenario.first_step_id = None
+        
         for old_step in db_scenario.steps:
             await db.delete(old_step)
         await db.flush()
@@ -323,15 +326,15 @@ async def update_scenario(
         # проставляем связи
         _apply_edges(node_map, scenario_data.edges or [])
 
-        # стартовый шаг
-        db_scenario.first_step_id = _find_start_step(node_map, scenario_data.nodes)
+        # находим и устанавливаем ID нового стартового шага
+        new_start_step_obj = next((step for step in node_map.values() if step.details.get("action_type") == "start"), None)
+        if new_start_step_obj:
+            db_scenario.first_step_id = new_start_step_obj.id
 
     await db.commit()
 
-    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ (аналогичное) ---
     await db.refresh(db_scenario)
     await db.refresh(db_scenario, attribute_names=["steps"])
-    # -------------------------
 
     nodes, edges = _db_to_graph(db_scenario)
     return ScenarioSchema(
@@ -342,7 +345,6 @@ async def update_scenario(
         nodes=nodes,
         edges=edges,
     )
-
 
 
 @router.delete("/{scenario_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -358,6 +360,11 @@ async def delete_scenario(
     db_scenario = result.scalar_one_or_none()
     if not db_scenario:
         raise HTTPException(status_code=404, detail="Сценарий не найден.")
+
+    # <<< ИЗМЕНЕНИЕ ЗДЕСЬ: РАЗРЫВАЕМ СВЯЗЬ ПЕРЕД УДАЛЕНИЕМ >>>
+    # Это гарантирует, что база данных не будет блокировать удаление шагов.
+    db_scenario.first_step_id = None
+    await db.flush()  # Отправляем изменение в БД до основного удаления
 
     await db.delete(db_scenario)
     await db.commit()

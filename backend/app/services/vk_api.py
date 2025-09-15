@@ -1,7 +1,8 @@
-# --- backend/app/services/vk_api.py ---
+# backend/app/services/vk_api.py
 import aiohttp
 import random
 import json
+import asyncio
 from typing import Optional, Dict, Any, List
 from app.core.config import settings
 
@@ -12,6 +13,7 @@ class VKAPIError(Exception):
         super().__init__(f"VK API Error [{self.error_code}]: {self.message}")
 
 class VKRateLimitError(VKAPIError): pass
+class VKFloodControlError(VKAPIError): pass # Ошибка 9 - Flood control
 class VKInvalidTokenError(VKAPIError): pass
 class VKAccessDeniedError(VKAPIError): pass
 class VKAuthError(VKAPIError): pass
@@ -22,6 +24,7 @@ class VKAPI:
         self.proxy = proxy
         self.api_version = settings.VK_API_VERSION
         self.base_url = "https://api.vk.com/method/"
+        self.user_id = None
 
     async def _make_request(self, method: str, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         if params is None:
@@ -32,31 +35,42 @@ class VKAPI:
 
         async with aiohttp.ClientSession() as session:
             try:
-                async with session.post(f"{self.base_url}{method}", data=params, proxy=self.proxy, timeout=20) as response:
-                    response.raise_for_status()
-                    data = await response.json()
-                    
-                    if 'error' in data:
-                        error_data = data['error']
-                        error_code = error_data.get('error_code')
-                        error_msg = error_data.get('error_msg', 'Unknown VK error')
+                # Цикл повторных попыток для обхода временных лимитов
+                for attempt in range(3):
+                    async with session.post(f"{self.base_url}{method}", data=params, proxy=self.proxy, timeout=20) as response:
+                        data = await response.json()
                         
-                        if error_code == 5: raise VKAuthError(error_msg, error_code)
-                        elif error_code == 6: raise VKRateLimitError(error_msg, error_code)
-                        elif error_code in [15, 18, 203, 902]: raise VKAccessDeniedError(error_msg, error_code)
-                        else: raise VKAPIError(error_msg, error_code)
+                        if 'error' in data:
+                            error_data = data['error']
+                            error_code = error_data.get('error_code')
+                            error_msg = error_data.get('error_msg', 'Unknown VK error')
+                            
+                            # Если это Flood Control или Rate Limit, ждем и пробуем снова
+                            if error_code == 6 or error_code == 9:
+                                wait_time = 1 + attempt
+                                print(f"  [API-WARN] Сработал Flood/Rate Control (ошибка {error_code}). Пауза {wait_time} сек. Попытка {attempt + 2}/3...")
+                                await asyncio.sleep(wait_time)
+                                continue # Переходим к следующей итерации цикла
+                            
+                            # Для других ошибок - сразу выходим
+                            if error_code == 5: raise VKAuthError(error_msg, error_code)
+                            elif error_code in [15, 18, 203, 902]: raise VKAccessDeniedError(error_msg, error_code)
+                            else: raise VKAPIError(error_msg, error_code)
 
-                    return data.get('response')
+                        # Если ошибки нет, возвращаем результат
+                        return data.get('response')
+                
+                # Если все попытки провалились
+                raise VKAPIError("Превышено количество попыток после ошибок Flood/Rate Control", 9)
+
             except aiohttp.ClientError as e:
                 raise VKAPIError(f"HTTP Request failed: {e}", 0)
 
     async def execute(self, calls: List[Dict[str, Any]]) -> Optional[List[Any]]:
         if not 25 >= len(calls) > 0:
             raise ValueError("Number of calls for execute method must be between 1 and 25.")
-
         code_lines = [f'API.{call["method"]}({json.dumps(call.get("params", {}), ensure_ascii=False)})' for call in calls]
         code = f"return [{','.join(code_lines)}];"
-        
         return await self._make_request("execute", params={"code": code})
 
     async def get_user_info(self, user_ids: Optional[str] = None, fields: Optional[str] = "photo_200,sex,online,last_seen,is_closed,status,counters,photo_id") -> Optional[Any]:
@@ -64,6 +78,8 @@ class VKAPI:
         if user_ids:
             params['user_ids'] = user_ids
         response = await self._make_request("users.get", params=params)
+        # Обратите внимание: users.get МОЖЕТ возвращать counters для ОДНОГО пользователя, но не для списка друзей.
+        # Эта логика остается, так как она полезна для точечных проверок (например, при приеме заявок).
         if response and isinstance(response, list):
             return response[0] if user_ids is None and len(response) == 1 else response
         return None
@@ -71,7 +87,16 @@ class VKAPI:
     async def get_user_friends(self, user_id: int, fields: str = "sex,bdate,city,online,last_seen,is_closed,deactivated") -> Optional[List[Dict[str, Any]]]:
         params = {"user_id": user_id, "fields": fields, "order": "random"}
         response = await self._make_request("friends.get", params=params)
-        return response.get("items") if response else None
+        
+        if not response or "items" not in response:
+            return None
+            
+        items = response["items"]
+        # Если VK вернул просто список ID, преобразуем его в стандартный формат
+        if fields == "" and isinstance(items, list) and all(isinstance(x, int) for x in items):
+            return [{"id": user_id} for user_id in items]
+        
+        return items
 
     async def add_friend(self, user_id: int, text: Optional[str] = None) -> Optional[Dict[str, Any]]:
         params = {"user_id": user_id}
@@ -90,15 +115,6 @@ class VKAPI:
         if 'extended' in params and params['extended'] == 1:
             params['fields'] = "sex,online,last_seen,is_closed,status,counters"
         return await self._make_request("friends.getRequests", params=params)
-
-    async def accept_friend_request(self, user_id: int) -> Optional[Dict[str, Any]]:
-        return await self._make_request("friends.add", params={"user_id": user_id})
-
-    async def get_recommended_friends(self, count: int = 100) -> Optional[Dict[str, Any]]:
-        return await self._make_request("friends.getSuggestions", params={"count": count, "filter": "mutual", "fields": "sex,online,last_seen,is_closed,photo_id"})
-        
-    async def get_newsfeed(self, count: int = 100, filters: str = "post,photo") -> Optional[Dict[str, Any]]:
-        return await self._make_request("newsfeed.get", params={"filters": filters, "count": count})
 
     async def add_like(self, item_type: str, owner_id: int, item_id: int) -> Optional[Dict[str, Any]]:
         return await self._make_request("likes.add", params={"type": item_type, "owner_id": owner_id, "item_id": item_id})
