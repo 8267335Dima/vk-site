@@ -28,14 +28,13 @@ npm run db:upgrade (создаст таблицы в базе)
 Откройте терминал в frontend/.
 npm run services:up (если сервисы еще не запущены)
 npm run dev (запустит весь ваш код)
-Тестирование:
-Убедитесь, что сервисы запущены (npm run services:up).
-Из VS Code: Просто нажимайте "Play" на панели "Testing".
-Из терминала (в frontend/): npm test
-Остановка:
-Нажмите Ctrl+C в терминале, где запущен dev.
+
+
 Выполните npm run services:down, чтобы остановить Postgres и Redis.
 
 cd frontend && yarn dev
 arq --watch . app.worker.WorkerSettings
 cd backend && alembic revision --autogenerate -m "add timezone" && alembic upgrade head
+
+
+тесты: cd backend && pytest -sv tests/test_filters.py
