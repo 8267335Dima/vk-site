@@ -1,7 +1,7 @@
 import datetime
 from sqlalchemy import (
     Column, Integer, String, DateTime, ForeignKey, Text,
-    UniqueConstraint, Boolean, JSON,
+    UniqueConstraint, Boolean, JSON, Enum
 )
 from sqlalchemy.orm import relationship
 from app.db.base import Base
@@ -48,7 +48,7 @@ class SupportTicket(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     subject = Column(String(255), nullable=False)
-    status = Column(enum.Enum(TicketStatus), default=TicketStatus.OPEN, nullable=False, index=True)
+    status = Column(Enum(TicketStatus), default=TicketStatus.OPEN, nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), onupdate=datetime.datetime.utcnow)
     

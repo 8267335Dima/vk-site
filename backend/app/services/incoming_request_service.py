@@ -1,9 +1,26 @@
-# backend/app/services/incoming_request_service.py
+# --- backend/app/services/incoming_request_service.py ---
+from typing import List, Dict, Any
 from app.services.base import BaseVKService
 from app.services.vk_user_filter import apply_filters_to_profiles
 from app.api.schemas.actions import AcceptFriendsRequest
 
 class IncomingRequestService(BaseVKService):
+
+    async def get_accept_friends_targets(self, params: AcceptFriendsRequest) -> List[Dict[str, Any]]:
+        """
+        ПОИСК ЦЕЛЕЙ: Получает и фильтрует входящие заявки в друзья.
+        """
+        response = await self.vk_api.get_incoming_friend_requests(extended=1)
+        if not response or not response.get('items'):
+            await self.emitter.send_log("Входящие заявки не найдены.", "info")
+            return []
+        
+        profiles = response.get('items', [])
+        await self.emitter.send_log(f"Найдено {len(profiles)} заявок. Начинаем фильтрацию...", "info")
+        
+        filtered_profiles = await apply_filters_to_profiles(profiles, params.filters)
+        return filtered_profiles
+
     async def accept_friend_requests(self, params: AcceptFriendsRequest):
         return await self._execute_logic(self._accept_friend_requests_logic, params)
 
@@ -11,27 +28,19 @@ class IncomingRequestService(BaseVKService):
         await self.emitter.send_log("Начинаем прием заявок в друзья...", "info")
         stats = await self._get_today_stats()
         
-        response = await self.vk_api.get_incoming_friend_requests(extended=1)
-        if not response or not response.get('items'):
-            await self.emitter.send_log("Входящие заявки не найдены.", "info")
-            return
-        
-        profiles = response.get('items', [])
-        await self.emitter.send_log(f"Найдено {len(profiles)} заявок. Начинаем фильтрацию...", "info")
-        
-        filtered_profiles = apply_filters_to_profiles(profiles, params.filters)
+        # ШАГ 1: Получаем цели
+        targets = await self.get_accept_friends_targets(params)
 
-        await self.emitter.send_log(f"После фильтрации осталось: {len(filtered_profiles)}.", "info")
+        await self.emitter.send_log(f"После фильтрации осталось: {len(targets)}.", "info")
         
-        if not filtered_profiles:
+        if not targets:
             await self.emitter.send_log("Подходящих заявок для приема не найдено.", "success")
             return
         
         processed_count = 0
         batch_size = 25
-        for i in range(0, len(filtered_profiles), batch_size):
-            batch = filtered_profiles[i:i + batch_size]
-            
+        for i in range(0, len(targets), batch_size):
+            batch = targets[i:i + batch_size]
             calls = [{"method": "friends.add", "params": {"user_id": p.get('id')}} for p in batch]
 
             await self.humanizer.imitate_simple_action()
@@ -46,7 +55,7 @@ class IncomingRequestService(BaseVKService):
                 name = f"{profile.get('first_name', '')} {profile.get('last_name', '')}"
                 url = f"https://vk.com/id{user_id}"
                 
-                if result in [1, 2, 4]:  # Коды успешного добавления от VK API
+                if result in [1, 2, 4]:
                     processed_count += 1
                     await self._increment_stat(stats, 'friend_requests_accepted_count')
                     await self.emitter.send_log(f"Принята заявка от {name}", "success", target_url=url)

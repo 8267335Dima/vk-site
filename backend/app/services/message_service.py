@@ -6,6 +6,8 @@ from app.core.exceptions import InvalidActionSettingsError, UserLimitReachedErro
 from app.services.vk_api import VKAccessDeniedError
 from app.services.vk_user_filter import apply_filters_to_profiles
 from app.api.schemas.actions import MassMessagingRequest
+# --- НОВЫЙ ИМПОРТ ---
+from app.services.message_humanizer import MessageHumanizer
 
 
 class MessageService(BaseVKService):
@@ -18,12 +20,11 @@ class MessageService(BaseVKService):
     ) -> List[Dict[str, Any]]:
         """
         Фильтрует список целей на основе статуса их диалога с пользователем.
-        Этот метод теперь публичный и может быть использован другими сервисами.
         """
         if only_new_dialogs and only_unread:
             raise InvalidActionSettingsError("Нельзя одновременно использовать 'Только новые диалоги' и 'Только непрочитанные'.")
 
-        final_targets = list(targets) # Создаем копию для работы
+        final_targets = list(targets) 
 
         if only_new_dialogs:
             await self.emitter.send_log("Применяем фильтр: 'Только новые диалоги'...", "info")
@@ -47,17 +48,14 @@ class MessageService(BaseVKService):
         if not friends_response:
             return []
 
-        # Шаг 1: Применяем стандартные фильтры
         filtered_friends = await apply_filters_to_profiles(friends_response, params.filters)
         
-        # Шаг 2: Применяем фильтры по диалогам
         targets = await self.filter_targets_by_conversation_status(
             filtered_friends, params.only_new_dialogs, params.only_unread
         )
             
         return targets
 
-    # ... (метод _send_mass_message_logic остается без изменений) ...
     async def send_mass_message(self, params: MassMessagingRequest):
          return await self._execute_logic(self._send_mass_message_logic, params)
 
@@ -76,33 +74,53 @@ class MessageService(BaseVKService):
             
         await self.emitter.send_log(f"Найдено получателей по фильтрам: {len(target_friends)}. Начинаем отправку.", "info")
         random.shuffle(target_friends)
+        
+        # Ограничиваем количество целей согласно запросу
+        targets_to_process = target_friends[:params.count]
             
         processed_count = 0
-        for friend in target_friends:
-            if processed_count >= params.count:
-                break
-
-            if stats.messages_sent_count >= self.user.daily_message_limit:
-                raise UserLimitReachedError(f"Достигнут дневной лимит сообщений ({self.user.daily_message_limit}).")
-
-            friend_id = friend.get('id')
-            name = f"{friend.get('first_name', '')} {friend.get('last_name', '')}"
-            url = f"https://vk.com/id{friend_id}"
+        
+        # --- ИЗМЕНЕНИЕ: Добавляем ветку для "человечной" отправки ---
+        if params.humanized_sending.enabled:
+            await self.emitter.send_log("Активирован режим 'человечной' отправки.", "info")
+            humanizer = MessageHumanizer(self.vk_api, self.emitter)
             
-            final_message = params.message_text.replace("{name}", friend.get('first_name', ''))
-
-            await self.humanizer.imitate_page_view()
-
-            try:
-                if await self.vk_api.send_message(friend_id, final_message):
+            for target in targets_to_process:
+                # Проверяем лимит перед каждой отправкой
+                if stats.messages_sent_count >= self.user.daily_message_limit:
+                    raise UserLimitReachedError(f"Достигнут дневной лимит сообщений ({self.user.daily_message_limit}).")
+                
+                # Отправляем через хуманайзер, который сам вернет результат и залогирует
+                result = await humanizer.send_messages_sequentially(
+                    targets=[target], # Отправляем по одному
+                    message_template=params.message_text,
+                    speed=params.humanized_sending.speed,
+                    simulate_typing=params.humanized_sending.simulate_typing
+                )
+                if result > 0:
                     processed_count += 1
                     await self._increment_stat(stats, 'messages_sent_count')
-                    await self.emitter.send_log(f"Сообщение для {name} успешно отправлено.", "success", target_url=url)
-                else:
-                    await self.emitter.send_log(f"Не удалось отправить сообщение для {name}.", "error", target_url=url)
-            except VKAccessDeniedError:
-                await self.emitter.send_log(f"Не удалось отправить сообщение (профиль закрыт или ЧС): {name}", "warning", target_url=url)
-            except Exception as e:
-                await self.emitter.send_log(f"Ошибка при отправке сообщения для {name}: {e}", "error", target_url=url)
+
+        else: # Старая логика быстрой отправки
+            for friend in targets_to_process:
+                if stats.messages_sent_count >= self.user.daily_message_limit:
+                    raise UserLimitReachedError(f"Достигнут дневной лимит сообщений ({self.user.daily_message_limit}).")
+
+                friend_id = friend.get('id')
+                name = f"{friend.get('first_name', '')} {friend.get('last_name', '')}"
+                url = f"https://vk.com/id{friend_id}"
+                
+                final_message = params.message_text.replace("{name}", friend.get('first_name', ''))
+
+                # Здесь можно оставить минимальную задержку из старого хуманайзера
+                await self.humanizer.imitate_simple_action()
+
+                try:
+                    if await self.vk_api.send_message(friend_id, final_message):
+                        processed_count += 1
+                        await self._increment_stat(stats, 'messages_sent_count')
+                        await self.emitter.send_log(f"Сообщение для {name} успешно отправлено.", "success", target_url=url)
+                except VKAccessDeniedError:
+                    await self.emitter.send_log(f"Не удалось отправить (профиль закрыт или ЧС): {name}", "warning", target_url=url)
 
         await self.emitter.send_log(f"Рассылка завершена. Отправлено сообщений: {processed_count}.", "success")

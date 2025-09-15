@@ -33,3 +33,18 @@ class AutomationGroup(str, Enum):
     STANDARD = "standard"
     ONLINE = "online"
     CONTENT = "content"
+
+class CronSettings:
+    # Время в секундах, на которое блокируется запуск однотипных cron-задач,
+    # чтобы избежать двойного выполнения при высокой нагрузке. 4 минуты.
+    AUTOMATION_JOB_LOCK_EXPIRATION_SECONDS: int = 240
+
+    # Шанс (от 0.0 до 1.0), с которым "Интеллектуальное присутствие"
+    # пропустит 10-минутный цикл для имитации человеческого перерыва.
+    HUMANIZE_ONLINE_SKIP_CHANCE: float = 0.15
+
+    # Записи в истории задач старше этого количества дней будут удалены для PRO/Agency тарифов.
+    TASK_HISTORY_RETENTION_DAYS_PRO: int = 90
+
+    # Записи в истории задач старше этого количества дней будут удалены для бесплатных тарифов.
+    TASK_HISTORY_RETENTION_DAYS_BASE: int = 30

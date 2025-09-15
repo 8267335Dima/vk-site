@@ -1,6 +1,6 @@
 # backend/app/core/schemas/config.py
 from pydantic import BaseModel, Field
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Dict, Any
 
 class AutomationConfig(BaseModel):
     id: str
@@ -11,6 +11,7 @@ class AutomationConfig(BaseModel):
     modal_count_label: Optional[str] = None
     default_count: Optional[int] = None
     group: Optional[Literal["standard", "online", "content"]] = "standard"
+    default_settings: Optional[Dict[str, Any]] = None
 
 class PlanPeriod(BaseModel):
     months: int = Field(..., gt=0)

@@ -1,110 +1,5 @@
 
 
-# --- backend/app\admin.py ---
-
-# backend/app/admin.py
-import secrets
-from datetime import timedelta
-from fastapi import Request, HTTPException, status
-from sqladmin import Admin, ModelView
-from sqladmin.authentication import AuthenticationBackend
-from jose import jwt, JWTError
-
-# УЛУЧШЕНИЕ: Импортируем модели из нового структурированного пакета
-from app.db.models import User, Payment, Automation, DailyStats, ActionLog
-from app.core.config import settings
-from app.core.security import create_access_token
-from app.db.session import AsyncSessionFactory
-
-class AdminAuth(AuthenticationBackend):
-    async def login(self, request: Request) -> bool:
-        form = await request.form()
-        username, password = form.get("username"), form.get("password")
-
-        is_user_correct = secrets.compare_digest(username, settings.ADMIN_USER)
-        is_password_correct = secrets.compare_digest(password, settings.ADMIN_PASSWORD)
-
-        if is_user_correct and is_password_correct:
-            access_token_expires = timedelta(hours=8)
-            token_data = {"sub": username, "scope": "admin_access"}
-            access_token = create_access_token(data=token_data, expires_delta=access_token_expires)
-            request.session.update({"token": access_token})
-            return True
-
-        return False
-
-    async def logout(self, request: Request) -> bool:
-        request.session.clear()
-        return True
-
-    async def authenticate(self, request: Request) -> bool:
-        if settings.ADMIN_IP_WHITELIST:
-            allowed_ips = [ip.strip() for ip in settings.ADMIN_IP_WHITELIST.split(',')]
-            if request.client and request.client.host not in allowed_ips:
-                return False
-
-        token = request.session.get("token")
-        if not token:
-            return False
-
-        try:
-            payload = jwt.decode(
-                token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
-            )
-            if payload.get("scope") != "admin_access":
-                return False
-            
-            async with AsyncSessionFactory() as session:
-                admin_user = await session.get(User, int(settings.ADMIN_VK_ID))
-                if not admin_user or not admin_user.is_admin:
-                    return False
-
-        except JWTError:
-            return False
-
-        return True
-
-authentication_backend = AdminAuth(secret_key=settings.SECRET_KEY)
-
-
-class UserAdmin(ModelView, model=User):
-    column_list = [User.id, User.vk_id, User.plan, User.plan_expires_at, User.is_admin, User.created_at]
-    form_columns = [User.plan, User.plan_expires_at, User.is_admin, User.daily_likes_limit, User.daily_add_friends_limit]
-    column_searchable_list = [User.vk_id]
-    column_default_sort = ("created_at", True)
-    name_plural = "Пользователи"
-
-class PaymentAdmin(ModelView, model=Payment):
-    column_list = [Payment.id, Payment.user_id, Payment.plan_name, Payment.amount, Payment.status, Payment.created_at]
-    column_searchable_list = [Payment.user_id]
-    column_default_sort = ("created_at", True)
-    name_plural = "Платежи"
-
-class AutomationAdmin(ModelView, model=Automation):
-    column_list = [Automation.user_id, Automation.automation_type, Automation.is_active, Automation.last_run_at]
-    column_searchable_list = [Automation.user_id]
-    name_plural = "Автоматизации"
-
-class DailyStatsAdmin(ModelView, model=DailyStats):
-    column_list = [c.name for c in DailyStats.__table__.c]
-    column_default_sort = ("date", True)
-    name_plural = "Дневная статистика"
-
-class ActionLogAdmin(ModelView, model=ActionLog):
-    column_list = [ActionLog.user_id, ActionLog.action_type, ActionLog.message, ActionLog.status, ActionLog.timestamp]
-    column_searchable_list = [ActionLog.user_id]
-    column_default_sort = ("timestamp", True)
-    name_plural = "Логи действий"
-
-
-def init_admin(app, engine):
-    admin = Admin(app, engine, authentication_backend=authentication_backend)
-    admin.add_view(UserAdmin)
-    admin.add_view(PaymentAdmin)
-    admin.add_view(AutomationAdmin)
-    admin.add_view(DailyStatsAdmin)
-    admin.add_view(ActionLogAdmin)
-
 # --- backend/app\arq_config.py ---
 
 # backend/app/arq_config.py
@@ -137,7 +32,7 @@ from app.api.endpoints import (
     auth_router, users_router, proxies_router, tasks_router,
     stats_router, automations_router, billing_router, analytics_router,
     scenarios_router, notifications_router, posts_router, teams_router,
-    websockets_router
+    websockets_router, support_router
 )
 
 # Вызываем настройку логирования в самом начале
@@ -201,6 +96,7 @@ app.include_router(stats_router, prefix=f"{api_prefix}/stats", tags=["Statistics
 app.include_router(automations_router, prefix=f"{api_prefix}/automations", tags=["Automations"])
 app.include_router(billing_router, prefix=f"{api_prefix}/billing", tags=["Billing"])
 app.include_router(analytics_router, prefix=f"{api_prefix}/analytics", tags=["Analytics"])
+app.include_router(support_router, prefix=f"{api_prefix}/support", tags=["Support"])
 app.include_router(scenarios_router, prefix=f"{api_prefix}/scenarios", tags=["Scenarios"])
 app.include_router(notifications_router, prefix=f"{api_prefix}/notifications", tags=["Notifications"])
 app.include_router(posts_router, prefix=f"{api_prefix}/posts", tags=["Posts"])
@@ -210,78 +106,43 @@ app.include_router(websockets_router, tags=["WebSockets"])
 # --- backend/app\worker.py ---
 
 # backend/app/worker.py
-import asyncio
 from arq import cron
-from arq.connections import create_pool
-
-# Импортируем настройки из нового центрального файла
 from app.arq_config import redis_settings
 
-# Импортируем асинхронные функции, которые будут нашими задачами
-from app.tasks.cron_jobs import (
-    aggregate_daily_stats_job,
-    check_expired_plans_job,
-    generate_all_heatmaps_job,
-    update_friend_request_statuses_job,
-    run_standard_automations_job,
-    run_online_automations_job,
-)
-from app.tasks.maintenance_jobs import clear_old_task_history_job
-from app.tasks.profile_parser_jobs import snapshot_all_users_metrics_job
-from app.tasks.main_tasks import (
-    like_feed_task,
-    add_recommended_friends_task,
-    accept_friend_requests_task,
-    remove_friends_by_criteria_task,
-    view_stories_task,
-    birthday_congratulation_task,
-    mass_messaging_task,
-    eternal_online_task,
-    leave_groups_by_criteria_task,
-    join_groups_by_criteria_task,
-    publish_scheduled_post_task,
-    run_scenario_from_scheduler_task,
-)
+# --- ИМПОРТЫ ИЗ НОВЫХ МОДУЛЕЙ ---
+from app.tasks.cron_jobs import *
+from app.tasks.maintenance_jobs import *
+from app.tasks.profile_parser_jobs import *
+from app.tasks.standard_tasks import *
+from app.tasks.system_tasks import *
 
 functions = [
-    like_feed_task,
-    add_recommended_friends_task,
-    accept_friend_requests_task,
-    remove_friends_by_criteria_task,
-    view_stories_task,
-    birthday_congratulation_task,
-    mass_messaging_task,
-    eternal_online_task,
-    leave_groups_by_criteria_task,
+    # Задачи из standard_tasks.py
+    like_feed_task, add_recommended_friends_task, accept_friend_requests_task,
+    remove_friends_by_criteria_task, view_stories_task, birthday_congratulation_task,
+    mass_messaging_task, eternal_online_task, leave_groups_by_criteria_task,
     join_groups_by_criteria_task,
-    publish_scheduled_post_task,
-    run_scenario_from_scheduler_task,
+    publish_scheduled_post_task, run_scenario_from_scheduler_task,
 ]
 
-# --- ИЗМЕНЕНИЯ ЗДЕСЬ: Исправлен синтаксис для ARQ cron ---
 cron_jobs = [
     cron(aggregate_daily_stats_job, hour=2, minute=5),
     cron(snapshot_all_users_metrics_job, hour=3),
     cron(clear_old_task_history_job, hour=4),
-    # "Каждые 4 часа" -> {0, 4, 8, 12, 16, 20}
     cron(update_friend_request_statuses_job, hour={0, 4, 8, 12, 16, 20}, minute=0),
     cron(generate_all_heatmaps_job, hour=5),
-    # "Каждые 15 минут" -> {0, 15, 30, 45}
     cron(check_expired_plans_job, minute={0, 15, 30, 45}),
-    # "Каждые 5 минут" -> {0, 5, 10, ...}
     cron(run_standard_automations_job, minute=set(range(0, 60, 5))),
-    # "Каждые 10 минут" -> {0, 10, 20, ...}
     cron(run_online_automations_job, minute={0, 10, 20, 30, 40, 50}),
 ]
-# ----------------------------------------------------
 
 async def startup(ctx):
-    print("Воркер ARQ запущен и готов к работе.")
+    from arq.connections import create_pool
     ctx['redis_pool'] = await create_pool(redis_settings)
+    print("Воркер ARQ запущен и готов к работе.")
 
 async def shutdown(ctx):
-    if 'redis_pool' in ctx:
-        await ctx['redis_pool'].close()
+    if 'redis_pool' in ctx: await ctx['redis_pool'].close()
     print("Воркер ARQ остановлен.")
 
 class WorkerSettings:
@@ -292,6 +153,257 @@ class WorkerSettings:
     on_shutdown = shutdown
 
 # --- backend/app\__init__.py ---
+
+
+
+# --- backend/app\admin\auth.py ---
+
+import secrets
+from datetime import timedelta
+from jose import jwt, JWTError
+from fastapi import Request
+from sqladmin.authentication import AuthenticationBackend
+
+from app.db.models import User
+from app.core.config import settings
+from app.core.security import create_access_token
+from app.db.session import AsyncSessionFactory
+
+class AdminAuth(AuthenticationBackend):
+    async def login(self, request: Request) -> bool:
+        form = await request.form()
+        username, password = form.get("username"), form.get("password")
+
+        is_user_correct = secrets.compare_digest(username, settings.ADMIN_USER)
+        is_password_correct = secrets.compare_digest(password, settings.ADMIN_PASSWORD)
+
+        if is_user_correct and is_password_correct:
+            access_token_expires = timedelta(hours=8)
+            token_data = {"sub": username, "scope": "admin_access"}
+            access_token = create_access_token(data=token_data, expires_delta=access_token_expires)
+            request.session.update({"token": access_token})
+            return True
+
+        return False
+
+    async def logout(self, request: Request) -> bool:
+        request.session.clear()
+        return True
+
+    async def authenticate(self, request: Request) -> bool:
+        if settings.ADMIN_IP_WHITELIST:
+            allowed_ips = [ip.strip() for ip in settings.ADMIN_IP_WHITELIST.split(',')]
+            if request.client and request.client.host not in allowed_ips:
+                return False
+
+        token = request.session.get("token")
+        if not token:
+            return False
+
+        try:
+            payload = jwt.decode(
+                token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+            )
+            if payload.get("scope") != "admin_access":
+                return False
+            
+            async with AsyncSessionFactory() as session:
+                admin_user = await session.get(User, int(settings.ADMIN_VK_ID))
+                if not admin_user or not admin_user.is_admin:
+                    return False
+
+        except JWTError:
+            return False
+
+        return True
+
+authentication_backend = AdminAuth(secret_key=settings.SECRET_KEY)
+
+# --- backend/app\admin\__init__.py ---
+
+from sqladmin import Admin
+from .auth import authentication_backend
+
+# Импортируем все наши представления из модулей
+from .views.user import UserAdmin
+from .views.support import SupportTicketAdmin
+from .views.payment import PaymentAdmin
+from .views.stats import AutomationAdmin, DailyStatsAdmin, ActionLogAdmin
+
+def init_admin(app, engine):
+    admin = Admin(app, engine, authentication_backend=authentication_backend, title="SMM Combine Admin")
+    
+    # Регистрируем импортированные представления
+    admin.add_view(UserAdmin)
+    admin.add_view(SupportTicketAdmin)
+    admin.add_view(PaymentAdmin)
+    admin.add_view(AutomationAdmin)
+    admin.add_view(DailyStatsAdmin)
+    admin.add_view(ActionLogAdmin)
+
+# --- backend/app\admin\views\payment.py ---
+
+from sqladmin import ModelView
+from app.db.models import Payment
+
+class PaymentAdmin(ModelView, model=Payment):
+    name_plural = "Платежи"
+    icon = "fa-solid fa-ruble-sign"
+    can_create = False
+    can_edit = False
+    can_delete = True
+    
+    column_list = [Payment.id, Payment.user, Payment.plan_name, Payment.amount, Payment.status, Payment.created_at]
+    column_searchable_list = [Payment.user_id, "user.vk_id"]
+    column_filters = [Payment.status, Payment.plan_name]
+    column_default_sort = ("created_at", True)
+
+# --- backend/app\admin\views\stats.py ---
+
+from sqladmin import ModelView
+from app.db.models import Automation, DailyStats, ActionLog
+
+class AutomationAdmin(ModelView, model=Automation):
+    name_plural = "Автоматизации"
+    icon = "fa-solid fa-robot"
+    column_list = [Automation.user, Automation.automation_type, Automation.is_active, Automation.last_run_at]
+    column_searchable_list = [Automation.user_id, "user.vk_id"]
+    column_filters = [Automation.automation_type, Automation.is_active]
+
+class DailyStatsAdmin(ModelView, model=DailyStats):
+    name_plural = "Дневная статистика"
+    icon = "fa-solid fa-chart-line"
+    can_create = False
+    can_edit = False
+    column_list = [c.name for c in DailyStats.__table__.c]
+    column_default_sort = ("date", True)
+    column_searchable_list = [DailyStats.user_id]
+
+class ActionLogAdmin(ModelView, model=ActionLog):
+    name_plural = "Логи действий"
+    icon = "fa-solid fa-clipboard-list"
+    can_create = False
+    can_edit = False
+    column_list = [ActionLog.id, ActionLog.user, ActionLog.action_type, ActionLog.message, ActionLog.status, ActionLog.timestamp]
+    column_searchable_list = [ActionLog.user_id, "user.vk_id"]
+    column_filters = [ActionLog.action_type, ActionLog.status]
+    column_default_sort = ("timestamp", True)
+
+# --- backend/app\admin\views\support.py ---
+
+import datetime
+from fastapi import Request
+from sqladmin import ModelView, action
+from app.db.models import SupportTicket, TicketMessage, TicketStatus, User
+from app.core.config import settings
+from app.db.session import AsyncSessionFactory
+
+class TicketMessageAdmin(ModelView, model=TicketMessage):
+    """Inline-представление для сообщений внутри тикета."""
+    can_create = True
+    can_edit = False
+    can_delete = False
+    can_list = False
+    column_list = [TicketMessage.author, TicketMessage.message, TicketMessage.created_at]
+    
+    async def on_model_change(self, data: dict, model: TicketMessage, is_created: bool, request: Request) -> None:
+        if is_created:
+            async with AsyncSessionFactory() as session:
+                admin_user = await session.get(User, int(settings.ADMIN_VK_ID))
+                if admin_user:
+                    model.author_id = admin_user.id
+                    
+                    # Обновляем статус тикета и время
+                    ticket = await session.get(SupportTicket, model.ticket_id)
+                    if ticket:
+                        ticket.status = TicketStatus.IN_PROGRESS
+                        ticket.updated_at = datetime.datetime.utcnow()
+
+class SupportTicketAdmin(ModelView, model=SupportTicket):
+    name = "Тикет"
+    name_plural = "Техподдержка"
+    icon = "fa-solid fa-headset"
+    
+    column_list = [SupportTicket.id, SupportTicket.user, SupportTicket.subject, SupportTicket.status, SupportTicket.updated_at]
+    column_details_list = [SupportTicket.id, SupportTicket.user, SupportTicket.subject, SupportTicket.status, SupportTicket.created_at, SupportTicket.updated_at, SupportTicket.messages]
+    
+    column_searchable_list = [SupportTicket.id, SupportTicket.subject, "user.vk_id"]
+    column_filters = [SupportTicket.status]
+    column_default_sort = ("updated_at", True)
+    
+    form_excluded_columns = [SupportTicket.created_at, SupportTicket.updated_at]
+    form_include_related = {"messages": {"model": TicketMessageAdmin}}
+
+    @action(
+        name="close_tickets", label="Закрыть тикет(ы)",
+        confirmation_message="Уверены, что хотите закрыть выбранные тикеты?",
+        add_in_list=True, add_in_detail=True
+    )
+    async def close_tickets_action(self, request: Request, pks: list[int]):
+        async with AsyncSessionFactory() as session:
+            for pk in pks:
+                ticket = await session.get(SupportTicket, pk)
+                if ticket:
+                    ticket.status = TicketStatus.CLOSED
+            await session.commit()
+        return {"message": f"Закрыто тикетов: {len(pks)}"}
+
+# --- backend/app\admin\views\user.py ---
+
+# Содержит UserAdmin
+from sqladmin import ModelView, action
+from app.db.models import User
+from datetime import timedelta, datetime, timezone
+from fastapi import Request
+from sqladmin import ModelView, action
+from app.db.models import User
+from app.db.session import AsyncSessionFactory
+from app.core.plans import get_limits_for_plan
+
+class UserAdmin(ModelView, model=User):
+    name_plural = "Пользователи"
+    icon = "fa-solid fa-users"
+    
+    column_list = [
+        User.id, User.vk_id, User.plan, User.plan_expires_at,
+        User.is_admin, User.created_at
+    ]
+    column_formatters = {
+        User.vk_id: lambda m, a: f'<a href="https://vk.com/id{m.vk_id}" target="_blank">{m.vk_id}</a>'
+    }
+    column_searchable_list = [User.vk_id, User.id]
+    column_filters = [User.plan, User.is_admin]
+    column_default_sort = ("created_at", True)
+    
+    form_columns = [
+        User.plan, User.plan_expires_at, User.is_admin, User.daily_likes_limit,
+        User.daily_add_friends_limit, User.daily_message_limit, User.daily_posts_limit,
+    ]
+    
+    @action(
+        name="extend_subscription", label="Продлить подписку (+30 дней)",
+        confirmation_message="Уверены, что хотите продлить подписку на 30 дней?",
+        add_in_detail=True, add_in_list=True,
+    )
+    async def extend_subscription_action(self, request: Request, pks: list[int]):
+        async with AsyncSessionFactory() as session:
+            for pk in pks:
+                user = await session.get(User, pk)
+                if not user: continue
+                
+                start_date = user.plan_expires_at if user.plan_expires_at and user.plan_expires_at > datetime.now(timezone.utc) else datetime.now(timezone.utc)
+                user.plan_expires_at = start_date + timedelta(days=30)
+                
+                if user.plan == "Expired":
+                    user.plan = "Plus"
+                    new_limits = get_limits_for_plan("Plus")
+                    for key, value in new_limits.items():
+                        setattr(user, key, value)
+
+            await session.commit()
+        return {"message": f"Подписка продлена для {len(pks)} пользователей."}
+
+# --- backend/app\admin\views\__init__.py ---
 
 
 
@@ -414,111 +526,59 @@ async def get_current_user_from_ws(token: str = Query(...)) -> User:
 
 # --- backend/app/api/endpoints/analytics.py ---
 import datetime
-from collections import Counter
 from fastapi import APIRouter, Depends, Query
 from fastapi_cache.decorator import cache
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import FriendsHistory, User, DailyStats, ProfileMetric, FriendRequestLog, FriendRequestStatus
+from app.db.models import User, ProfileMetric, FriendRequestLog, PostActivityHeatmap
 from app.api.dependencies import get_current_active_profile
 from app.db.session import get_db
 from app.api.schemas.analytics import (
-    AudienceAnalyticsResponse, AudienceStatItem, 
-    SexDistributionResponse,
-    ProfileGrowthResponse, ProfileGrowthItem,
-    ProfileSummaryResponse, FriendRequestConversionResponse
+    AudienceAnalyticsResponse, ProfileGrowthResponse, ProfileGrowthItem,
+    ProfileSummaryResponse, FriendRequestConversionResponse, PostActivityHeatmapResponse
 )
 from app.services.vk_api import VKAPI
 from app.core.security import decrypt_data
-from app.db.models import PostActivityHeatmap
-from app.api.schemas.analytics import PostActivityHeatmapResponse
+from app.services.analytics_service import AnalyticsService
+from app.services.event_emitter import SystemLogEmitter 
 
 router = APIRouter()
 
 
-def calculate_age(bdate: str) -> int | None:
-    try:
-        parts = bdate.split('.')
-        if len(parts) == 3:
-            birth_date = datetime.datetime.strptime(bdate, "%d.%m.%Y")
-            today = datetime.date.today()
-            return today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
-    except (ValueError, TypeError):
-        return None
-    return None
-
-def get_age_group(age: int) -> str:
-    if age < 18: return "< 18"
-    if 18 <= age <= 24: return "18-24"
-    if 25 <= age <= 34: return "25-34"
-    if 35 <= age <= 44: return "35-44"
-    if age >= 45: return "45+"
-    return "Не указан"
-
 @router.get("/audience", response_model=AudienceAnalyticsResponse)
-@cache(expire=21600)
-async def get_audience_analytics(current_user: User = Depends(get_current_active_profile)):
-    vk_token = decrypt_data(current_user.encrypted_vk_token)
-    vk_api = VKAPI(access_token=vk_token)
+@cache(expire=21600) # Кэширование на 6 часов
+async def get_audience_analytics(
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
+    """Возвращает аналитику по аудитории, используя сервисный слой."""
+    # Эмиттер здесь не будет ничего отправлять, он нужен только для инициализации сервиса
+    emitter = SystemLogEmitter(task_name="analytics_endpoint") 
+    service = AnalyticsService(db=db, user=current_user, emitter=emitter)
+    return await service.get_audience_distribution()
 
-    friends = await vk_api.get_user_friends(user_id=current_user.vk_id, fields="sex,bdate,city")
-    if not friends:
-        return AudienceAnalyticsResponse(city_distribution=[], age_distribution=[], sex_distribution=[])
-
-    city_counter = Counter(
-        friend['city']['title']
-        for friend in friends
-        if friend.get('city') and friend.get('city', {}).get('title') and not friend.get('deactivated')
-    )
-    top_cities = [
-        AudienceStatItem(name=city, value=count)
-        for city, count in city_counter.most_common(5)
-    ]
-
-    ages = [calculate_age(friend['bdate']) for friend in friends if friend.get('bdate') and not friend.get('deactivated')]
-    age_groups = [get_age_group(age) for age in ages if age is not None]
-    age_counter = Counter(age_groups)
-    
-    age_distribution = [
-        AudienceStatItem(name=group, value=count)
-        for group, count in sorted(age_counter.items())
-    ]
-
-    sex_counter = Counter(
-        'Мужчины' if f.get('sex') == 2 else ('Женщины' if f.get('sex') == 1 else 'Не указан')
-        for f in friends if not f.get('deactivated')
-    )
-    sex_distribution = [SexDistributionResponse(name=k, value=v) for k, v in sex_counter.items()]
-
-    return AudienceAnalyticsResponse(
-        city_distribution=top_cities,
-        age_distribution=age_distribution,
-        sex_distribution=sex_distribution
-    )
 
 @router.get("/profile-summary", response_model=ProfileSummaryResponse)
-@cache(expire=3600)
+@cache(expire=3600) # Кэширование на 1 час
 async def get_profile_summary(current_user: User = Depends(get_current_active_profile)):
+    """Возвращает сводную информацию о профиле (кол-во друзей, фото и т.д.)."""
     vk_token = decrypt_data(current_user.encrypted_vk_token)
     vk_api = VKAPI(access_token=vk_token)
     
     user_info_list = await vk_api.get_user_info(user_ids=str(current_user.vk_id), fields="counters")
     user_info = user_info_list[0] if user_info_list else {}
     
-    friends = user_info.get('counters', {}).get('friends', 0)
-    followers = user_info.get('counters', {}).get('followers', 0)
-    photos = user_info.get('counters', {}).get('photos', 0)
-    
+    counters = user_info.get('counters', {})
     wall_info = await vk_api.get_wall(owner_id=current_user.vk_id, count=0)
-    wall_posts = wall_info.get('count', 0) if wall_info else 0
     
     return ProfileSummaryResponse(
-        friends=friends,
-        followers=followers,
-        photos=photos,
-        wall_posts=wall_posts
+        friends=counters.get('friends', 0),
+        followers=counters.get('followers', 0),
+        photos=counters.get('photos', 0),
+        wall_posts=wall_info.get('count', 0) if wall_info else 0
     )
+
 
 @router.get("/profile-growth", response_model=ProfileGrowthResponse)
 async def get_profile_growth_analytics(
@@ -526,6 +586,7 @@ async def get_profile_growth_analytics(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
+    """Возвращает динамику роста профиля за выбранный период."""
     end_date = datetime.date.today()
     start_date = end_date - datetime.timedelta(days=days - 1)
 
@@ -550,11 +611,13 @@ async def get_profile_growth_analytics(
 
     return ProfileGrowthResponse(data=response_data)
 
+
 @router.get("/friend-request-conversion", response_model=FriendRequestConversionResponse)
 async def get_friend_request_conversion_stats(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
+    """Возвращает статистику конверсии отправленных заявок в друзья."""
     stmt = (
         select(FriendRequestLog.status, func.count(FriendRequestLog.id))
         .where(FriendRequestLog.user_id == current_user.id)
@@ -574,17 +637,19 @@ async def get_friend_request_conversion_stats(
         conversion_rate=conversion_rate
     )
 
+
 @router.get("/post-activity-heatmap", response_model=PostActivityHeatmapResponse)
 async def get_post_activity_heatmap(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
+    """Возвращает тепловую карту активности друзей."""
     stmt = select(PostActivityHeatmap).where(PostActivityHeatmap.user_id == current_user.id)
     result = await db.execute(stmt)
     heatmap_data = result.scalar_one_or_none()
     
     if not heatmap_data:
-        return PostActivityHeatmapResponse(data=[[0]*24]*7) # Возвращаем пустую матрицу
+        return PostActivityHeatmapResponse(data=[[0]*24]*7)
         
     return PostActivityHeatmapResponse(data=heatmap_data.heatmap_data.get("data", [[0]*24]*7))
 
@@ -1780,6 +1845,112 @@ async def get_activity_stats(
             
     return ActivityStatsResponse(period_days=days, data=response_data)
 
+# --- backend/app\api\endpoints\support.py ---
+
+import datetime
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, update
+from sqlalchemy.orm import selectinload
+from typing import List
+
+from app.db.session import get_db
+from app.db.models import User, SupportTicket, TicketMessage, TicketStatus
+from app.api.dependencies import get_current_active_profile
+from app.api.schemas.support import SupportTicketCreate, SupportTicketRead, TicketMessageCreate, SupportTicketList
+
+router = APIRouter()
+
+@router.get("", response_model=List[SupportTicketList])
+async def get_my_tickets(
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
+    """Получить список всех тикетов текущего пользователя."""
+    stmt = select(SupportTicket).where(SupportTicket.user_id == current_user.id).order_by(SupportTicket.updated_at.desc())
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+@router.post("", response_model=SupportTicketRead, status_code=status.HTTP_201_CREATED)
+async def create_ticket(
+    ticket_data: SupportTicketCreate,
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
+    """Создать новый тикет в техподдержку."""
+    new_ticket = SupportTicket(
+        user_id=current_user.id,
+        subject=ticket_data.subject,
+        status=TicketStatus.OPEN
+    )
+    
+    first_message = TicketMessage(
+        ticket=new_ticket,
+        author_id=current_user.id,
+        message=ticket_data.message
+    )
+    
+    db.add(new_ticket)
+    db.add(first_message)
+    await db.commit()
+    await db.refresh(new_ticket, attribute_names=['messages'])
+    return new_ticket
+
+@router.get("/{ticket_id}", response_model=SupportTicketRead)
+async def get_ticket_details(
+    ticket_id: int,
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
+    """Получить детали тикета и всю переписку по нему."""
+    stmt = select(SupportTicket).where(
+        SupportTicket.id == ticket_id,
+        SupportTicket.user_id == current_user.id
+    ).options(selectinload(SupportTicket.messages))
+    
+    result = await db.execute(stmt)
+    ticket = result.scalar_one_or_none()
+    
+    if not ticket:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Тикет не найден.")
+    
+    return ticket
+
+@router.post("/{ticket_id}/messages", response_model=SupportTicketRead)
+async def reply_to_ticket(
+    ticket_id: int,
+    message_data: TicketMessageCreate,
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
+    """Ответить на тикет."""
+    # Получаем тикет и блокируем его для обновления
+    stmt = select(SupportTicket).where(
+        SupportTicket.id == ticket_id,
+        SupportTicket.user_id == current_user.id
+    ).with_for_update()
+    
+    ticket = (await db.execute(stmt)).scalar_one_or_none()
+    if not ticket:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Тикет не найден.")
+    if ticket.status == TicketStatus.CLOSED:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Этот тикет закрыт.")
+
+    new_message = TicketMessage(
+        ticket_id=ticket.id,
+        author_id=current_user.id,
+        message=message_data.message
+    )
+    db.add(new_message)
+    
+    # Меняем статус на OPEN, если на него ответил пользователь (вдруг админ поставил IN_PROGRESS)
+    ticket.status = TicketStatus.OPEN
+    ticket.updated_at = datetime.datetime.utcnow()
+    
+    await db.commit()
+    await db.refresh(ticket, attribute_names=['messages'])
+    return ticket
+
 # --- backend/app\api\endpoints\tasks.py ---
 
 # backend/app/api/endpoints/tasks.py
@@ -2563,9 +2734,10 @@ from .billing import router as billing_router
 from .analytics import router as analytics_router
 from .scenarios import router as scenarios_router
 from .notifications import router as notifications_router
-from .posts import router as posts_router  # <--- ВОТ ЭТА СТРОКА ДОБАВЛЕНА
+from .posts import router as posts_router
 from .teams import router as teams_router
 from .websockets import router as websockets_router
+from .support import router as support_router
 
 # --- backend/app\api\schemas\actions.py ---
 
@@ -2908,6 +3080,46 @@ class FriendsDynamicItem(BaseModel):
 
 class FriendsDynamicResponse(BaseModel):
     data: List[FriendsDynamicItem]
+
+# --- backend/app\api\schemas\support.py ---
+
+from pydantic import BaseModel, Field, ConfigDict
+from datetime import datetime
+from typing import List
+
+# --- Схемы для сообщений ---
+class TicketMessageRead(BaseModel):
+    id: int
+    author_id: int
+    message: str
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+class TicketMessageCreate(BaseModel):
+    message: str = Field(..., min_length=1, max_length=5000)
+
+# --- Схемы для тикетов ---
+class SupportTicketRead(BaseModel):
+    id: int
+    user_id: int
+    subject: str
+    status: str
+    created_at: datetime
+    updated_at: datetime | None = None
+    messages: List[TicketMessageRead] = []
+    model_config = ConfigDict(from_attributes=True)
+    
+class SupportTicketCreate(BaseModel):
+    subject: str = Field(..., min_length=5, max_length=100)
+    message: str = Field(..., min_length=10, max_length=5000)
+
+class SupportTicketList(BaseModel):
+    """Схема для отображения в списке, без сообщений."""
+    id: int
+    subject: str
+    status: str
+    updated_at: datetime | None = None
+    model_config = ConfigDict(from_attributes=True)
 
 # --- backend/app\api\schemas\tasks.py ---
 
@@ -3626,11 +3838,12 @@ class Payment(Base):
 
 import datetime
 from sqlalchemy import (
-    Column, Integer, String, DateTime, ForeignKey,
+    Column, Integer, String, DateTime, ForeignKey, Text,
     UniqueConstraint, Boolean, JSON,
 )
 from sqlalchemy.orm import relationship
 from app.db.base import Base
+import enum
 
 class Proxy(Base):
     __tablename__ = "proxies"
@@ -3663,6 +3876,33 @@ class FilterPreset(Base):
     user = relationship("User", back_populates="filter_presets")
     __table_args__ = (UniqueConstraint('user_id', 'name', 'action_type', name='_user_name_action_uc'),)
 
+class TicketStatus(str, enum.Enum):
+    OPEN = "open"
+    IN_PROGRESS = "in_progress"
+    CLOSED = "closed"
+
+class SupportTicket(Base):
+    __tablename__ = "support_tickets"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    subject = Column(String(255), nullable=False)
+    status = Column(enum.Enum(TicketStatus), default=TicketStatus.OPEN, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), onupdate=datetime.datetime.utcnow)
+    
+    user = relationship("User")
+    messages = relationship("TicketMessage", back_populates="ticket", cascade="all, delete-orphan", order_by="TicketMessage.created_at")
+
+class TicketMessage(Base):
+    __tablename__ = "ticket_messages"
+    id = Column(Integer, primary_key=True)
+    ticket_id = Column(Integer, ForeignKey("support_tickets.id", ondelete="CASCADE"), nullable=False, index=True)
+    author_id = Column(Integer, ForeignKey("users.id"), nullable=False) # ID автора (юзер или админ)
+    message = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow)
+    
+    ticket = relationship("SupportTicket", back_populates="messages")
+    author = relationship("User")
 
 # --- backend/app\db\models\task.py ---
 
@@ -3982,16 +4222,86 @@ class UserRepository(BaseRepository):
 # --- backend/app/services/analytics_service.py ---
 import datetime
 import pytz
+from collections import Counter
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from app.services.base import BaseVKService
-from app.db.models import PostActivityHeatmap
+from app.db.models import PostActivityHeatmap, User
 from app.services.vk_api import VKAPIError
+from app.api.schemas.analytics import AudienceAnalyticsResponse, AudienceStatItem, SexDistributionResponse
 import structlog
 
 log = structlog.get_logger(__name__)
 
+# --- Вспомогательные функции, которые были в эндпоинте ---
+def _calculate_age(bdate: str) -> int | None:
+    try:
+        parts = bdate.split('.')
+        if len(parts) == 3:
+            birth_date = datetime.datetime.strptime(bdate, "%d.%m.%Y")
+            today = datetime.date.today()
+            return today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
+    except (ValueError, TypeError):
+        return None
+    return None
+
+def _get_age_group(age: int) -> str:
+    if age < 18: return "< 18"
+    if 18 <= age <= 24: return "18-24"
+    if 25 <= age <= 34: return "25-34"
+    if 35 <= age <= 44: return "35-44"
+    if age >= 45: return "45+"
+    return "Не указан"
+# --- Конец вспомогательных функций ---
+
+
 class AnalyticsService(BaseVKService):
+
+    # --- НОВЫЙ МЕТОД, В КОТОРЫЙ ПЕРЕНЕСЕНА ВСЯ ЛОГИКА ---
+    async def get_audience_distribution(self) -> AudienceAnalyticsResponse:
+        """
+        Получает друзей пользователя из VK и рассчитывает распределение
+        по городам, возрасту и полу.
+        """
+        await self._initialize_vk_api()
+        
+        friends = await self.vk_api.get_user_friends(user_id=self.user.vk_id, fields="sex,bdate,city")
+        if not friends:
+            return AudienceAnalyticsResponse(city_distribution=[], age_distribution=[], sex_distribution=[])
+
+        # Расчет по городам
+        city_counter = Counter(
+            friend['city']['title']
+            for friend in friends
+            if friend.get('city') and friend.get('city', {}).get('title') and not friend.get('deactivated')
+        )
+        top_cities = [
+            AudienceStatItem(name=city, value=count)
+            for city, count in city_counter.most_common(5)
+        ]
+
+        # Расчет по возрасту
+        ages = [_calculate_age(friend['bdate']) for friend in friends if friend.get('bdate') and not friend.get('deactivated')]
+        age_groups = [_get_age_group(age) for age in ages if age is not None]
+        age_counter = Counter(age_groups)
+        age_distribution = [
+            AudienceStatItem(name=group, value=count)
+            for group, count in sorted(age_counter.items())
+        ]
+
+        # Расчет по полу
+        sex_counter = Counter(
+            'Мужчины' if f.get('sex') == 2 else ('Женщины' if f.get('sex') == 1 else 'Не указан')
+            for f in friends if not f.get('deactivated')
+        )
+        sex_distribution = [SexDistributionResponse(name=k, value=v) for k, v in sex_counter.items()]
+
+        return AudienceAnalyticsResponse(
+            city_distribution=top_cities,
+            age_distribution=age_distribution,
+            sex_distribution=sex_distribution
+        )
+    # --- КОНЕЦ НОВОГО МЕТОДА ---
 
     async def generate_post_activity_heatmap(self):
         await self._initialize_vk_api()
@@ -4005,48 +4315,31 @@ class AnalyticsService(BaseVKService):
         if not friends:
             return
 
-        # Инициализируем матрицу 7 дней x 24 часа нулями
         heatmap = [[0 for _ in range(24)] for _ in range(7)]
-        
         now = datetime.datetime.utcnow()
-        # Анализируем активность за последние 2 недели
         two_weeks_ago = now - datetime.timedelta(weeks=2)
 
         for friend in friends:
             last_seen_data = friend.get("last_seen")
-            if not last_seen_data:
-                continue
-            
-            seen_timestamp = last_seen_data.get("time")
-            if not seen_timestamp:
+            if not last_seen_data or not (seen_timestamp := last_seen_data.get("time")):
                 continue
             
             seen_time = datetime.datetime.fromtimestamp(seen_timestamp, tz=pytz.UTC)
             
             if seen_time > two_weeks_ago:
-                day_of_week = seen_time.weekday() # 0 = Понедельник, 6 = Воскресенье
-                hour_of_day = seen_time.hour
-                heatmap[day_of_week][hour_of_day] += 1
+                heatmap[seen_time.weekday()][seen_time.hour] += 1
         
-        # Нормализуем данные, чтобы получить значения от 0 до 100 для удобства фронтенда
         max_activity = max(max(row) for row in heatmap)
+        normalized_heatmap = heatmap
         if max_activity > 0:
-            normalized_heatmap = [
-                [int((count / max_activity) * 100) for count in row]
-                for row in heatmap
-            ]
-        else:
-            normalized_heatmap = heatmap
+            normalized_heatmap = [[int((count / max_activity) * 100) for count in row] for row in heatmap]
         
         stmt = insert(PostActivityHeatmap).values(
             user_id=self.user.id,
             heatmap_data={"data": normalized_heatmap},
         ).on_conflict_do_update(
             index_elements=['user_id'],
-            set_={
-                "heatmap_data": {"data": normalized_heatmap},
-                "last_updated_at": datetime.datetime.utcnow()
-            }
+            set_={"heatmap_data": {"data": normalized_heatmap}, "last_updated_at": datetime.datetime.utcnow()}
         )
         await self.db.execute(stmt)
         await self.db.commit()
@@ -4612,70 +4905,83 @@ class GroupManagementService(BaseVKService):
 
 # --- backend/app\services\humanizer.py ---
 
-# backend/app/services/humanizer.py
 import asyncio
 import random
+import time
+import datetime
 from typing import Callable, Awaitable
 from app.db.models import DelayProfile
-import structlog
-
-log = structlog.get_logger(__name__)
 
 DELAY_CONFIG = {
-    DelayProfile.fast: {
-        "page_load": (0.8, 1.5),
-        "scroll": (0.5, 1.2),
-        "action_decision": (0.7, 1.3),
-        "short_action": (0.6, 1.1),
-    },
-    DelayProfile.normal: {
-        "page_load": (1.5, 3.0),
-        "scroll": (1.0, 2.5),
-        "action_decision": (1.2, 2.8),
-        "short_action": (1.0, 2.0),
-    },
-    DelayProfile.slow: {
-        "page_load": (3.0, 5.5),
-        "scroll": (2.5, 4.0),
-        "action_decision": (2.8, 5.0),
-        "short_action": (2.0, 3.5),
-    },
+    DelayProfile.fast: {"base": 0.7, "variation": 0.3, "burst_chance": 0.4},
+    DelayProfile.normal: {"base": 1.5, "variation": 0.4, "burst_chance": 0.25},
+    DelayProfile.slow: {"base": 3.0, "variation": 0.5, "burst_chance": 0.1},
 }
 
 class Humanizer:
     def __init__(self, delay_profile: DelayProfile, logger_func: Callable[..., Awaitable[None]]):
         self.profile = DELAY_CONFIG.get(delay_profile, DELAY_CONFIG[DelayProfile.normal])
         self._log = logger_func
-        self.session_multiplier = random.uniform(0.9, 1.1)
+        self.session_start_time = time.time()
+        self.actions_in_session = 0
+        self.burst_actions_left = 0
 
-    async def _sleep(self, min_sec: float, max_sec: float, log_message: str | None = None):
-        delay = random.uniform(min_sec, max_sec) * self.session_multiplier
-        if log_message:
-            await self._log(f"{log_message} (пауза ~{delay:.1f} сек.)", status="debug")
+    def _get_time_of_day_factor(self) -> float:
+        """Возвращает множитель в зависимости от времени суток (имитация 'прайм-тайм')."""
+        current_hour = datetime.datetime.now().hour
+        if 5 <= current_hour < 10: return 1.1  # Утренняя активность
+        if 18 <= current_hour < 23: return 1.25 # Вечерний прайм-тайм
+        if 1 <= current_hour < 5: return 0.8   # Ночью действия быстрее
+        return 1.0
+
+    def _get_fatigue_factor(self) -> float:
+        """Чем дольше сессия, тем выше 'усталость' и медленнее действия."""
+        minutes_passed = (time.time() - self.session_start_time) / 60
+        fatigue = 1.0 + (self.actions_in_session * 0.007) + (minutes_passed * 0.015)
+        return min(fatigue, 1.8)
+
+    async def _sleep(self, base_delay: float):
+        self.actions_in_session += 1
+
+        if self.burst_actions_left > 0:
+            self.burst_actions_left -= 1
+            delay = base_delay * random.uniform(0.2, 0.4)
+            await asyncio.sleep(delay)
+            return
+
+        fatigue = self._get_fatigue_factor()
+        time_factor = self._get_time_of_day_factor()
+        variation = self.profile["variation"]
+        
+        delay = base_delay * fatigue * time_factor * random.uniform(1.0 - variation, 1.0 + variation)
+
+        if random.random() < 0.1: # 10% шанс на длинную паузу (отвлекся на чай)
+            hesitation = random.uniform(5.0, 12.0)
+            await self._log(f"Имитация отвлечения на {hesitation:.1f} сек.", "debug")
+            delay += hesitation
+
+        await self._log(f"Пауза ~{delay:.1f}с (усталость:x{fatigue:.2f}, время:x{time_factor:.2f})", "debug")
         await asyncio.sleep(delay)
 
-    async def imitate_page_view(self):
-        load_min, load_max = self.profile["page_load"]
-        await self._sleep(load_min, load_max, "Имитация загрузки страницы...")
+    async def think(self, action_type: str):
+        """Имитация 'обдумывания' действия перед его выполнением."""
+        base_thinking_time = self.profile['base']
+        if action_type == 'message': base_thinking_time *= 1.8
+        if action_type == 'add_friend': base_thinking_time *= 1.5
+        await self._sleep(base_thinking_time)
+
+    async def read_and_scroll(self):
+        """Имитация загрузки, скроллинга и чтения контента."""
+        await self._sleep(self.profile['base'] * 1.2) # "Загрузка"
         
-        if random.random() < 0.7:
-            scroll_min, scroll_max = self.profile["scroll"]
-            scroll_times = random.randint(1, 4)
-            
-            if scroll_times > 0:
-                await self._log(f"Имитация скроллинга ({scroll_times} раз)...", status="debug")
-                for _ in range(scroll_times):
-                    await self._sleep(scroll_min * 0.8, scroll_max * 1.2)
-            
-        decision_min, decision_max = self.profile["action_decision"]
-        await self._sleep(decision_min, decision_max, "Пауза перед действием...")
-
-    async def imitate_simple_action(self):
-        if random.random() < 0.3:
-            await self._sleep(0.3, 0.8)
-
-        action_min, action_max = self.profile["short_action"]
-        await self._sleep(action_min, action_max)
+        scroll_count = random.choices([0, 1, 2, 3, 4], weights=[20, 30, 30, 15, 5], k=1)[0]
+        if scroll_count > 0:
+            for _ in range(scroll_count):
+                await self._sleep(self.profile['base'] * 0.7)
+        
+        if random.random() < self.profile["burst_chance"]:
+            self.burst_actions_left = random.randint(3, 8)
+            await self._log(f"Начало 'пакетного' режима на {self.burst_actions_left} действий.", "debug")
 
 # --- backend/app\services\incoming_request_service.py ---
 
@@ -5207,195 +5513,6 @@ class StoryService(BaseVKService):
         await self._increment_stat(stats, 'stories_viewed_count', total_stories_count)
         await self.emitter.send_log(f"Успешно просмотрено {total_stories_count} историй.", "success")
 
-# --- backend/app\services\vk_api.py ---
-
-# backend/app/services/vk_api.py
-import aiohttp
-import random
-import json
-import asyncio
-from typing import Literal, Optional, Dict, Any, List
-from app.core.config import settings
-
-# --- ОБНОВЛЕННЫЙ БЛОК ИСКЛЮЧЕНИЙ ---
-class VKAPIError(Exception):
-    """Базовое исключение для всех ошибок VK API."""
-    def __init__(self, message: str, error_code: int):
-        self.message = message
-        self.error_code = error_code
-        super().__init__(f"VK API Error [{self.error_code}]: {self.message}")
-
-class VKAuthError(VKAPIError):
-    """Ошибка авторизации (неверный токен). Код: 5."""
-    pass
-
-class VKRateLimitError(VKAPIError):
-    """Слишком много однотипных действий. Код: 6."""
-    pass
-
-class VKAccessDeniedError(VKAPIError):
-    """Нет доступа к контенту (закрытый профиль, ЧС и т.д.). Коды: 15, 18, 203, 902."""
-    pass
-
-class VKFloodControlError(VKAPIError):
-    """Слишком много запросов в секунду (флуд-контроль). Код: 9."""
-    pass
-
-class VKCaptchaError(VKAPIError):
-    """Требуется ввод капчи. Код: 14."""
-    pass
-
-class VKTooManyRequestsError(VKAPIError):
-    """Превышен лимит запросов в Execute. Код: 29"""
-    pass
-
-# Карта для сопоставления кодов ошибок с классами исключений
-ERROR_CODE_MAP = {
-    5: VKAuthError,
-    6: VKRateLimitError,
-    9: VKFloodControlError,
-    14: VKCaptchaError,
-    15: VKAccessDeniedError,
-    18: VKAccessDeniedError,
-    29: VKTooManyRequestsError,
-    203: VKAccessDeniedError,
-    902: VKAccessDeniedError,
-}
-# --- КОНЕЦ БЛОКА ИСКЛЮЧЕНИЙ ---
-
-class VKAPI:
-    def __init__(self, access_token: str, proxy: Optional[str] = None):
-        self.access_token = access_token
-        self.proxy = proxy
-        self.api_version = settings.VK_API_VERSION
-        self.base_url = "https://api.vk.com/method/"
-        self.user_id = None
-
-    async def _make_request(self, method: str, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
-        if params is None:
-            params = {}
-        
-        params['access_token'] = self.access_token
-        params['v'] = self.api_version
-
-        async with aiohttp.ClientSession() as session:
-            try:
-                for attempt in range(3):
-                    async with session.post(f"{self.base_url}{method}", data=params, proxy=self.proxy, timeout=20) as response:
-                        data = await response.json()
-                        
-                        if 'error' in data:
-                            error_data = data['error']
-                            error_code = error_data.get('error_code')
-                            error_msg = error_data.get('error_msg', 'Unknown VK error')
-                            
-                            # --- УЛУЧШЕННАЯ ЛОГИКА ОБРАБОТКИ ОШИБОК ---
-                            if error_code in [6, 9]: # Rate Limit или Flood Control
-                                wait_time = 1 + attempt * 2 # Увеличиваем паузу с каждой попыткой
-                                print(f"  [API-WARN] Сработал Flood/Rate Control (ошибка {error_code}). Пауза {wait_time} сек. Попытка {attempt + 2}/3...")
-                                await asyncio.sleep(wait_time)
-                                continue
-
-                            # Выбираем правильный класс исключения из карты
-                            ExceptionClass = ERROR_CODE_MAP.get(error_code, VKAPIError)
-                            raise ExceptionClass(error_msg, error_code)
-                            # --- КОНЕЦ УЛУЧШЕННОЙ ЛОГИКИ ---
-
-                        return data.get('response')
-                
-                # Если все попытки провалились
-                raise VKFloodControlError("Превышено количество попыток после ошибок Flood/Rate Control.", 9)
-
-            except aiohttp.ClientError as e:
-                raise VKAPIError(f"Сетевая ошибка: {e}. Проверьте прокси и подключение к интернету.", 0)
-
-    # ... остальная часть файла vk_api.py без изменений ...
-    async def execute(self, calls: List[Dict[str, Any]]) -> Optional[List[Any]]:
-        if not 25 >= len(calls) > 0:
-            raise ValueError("Number of calls for execute method must be between 1 and 25.")
-        code_lines = [f'API.{call["method"]}({json.dumps(call.get("params", {}), ensure_ascii=False)})' for call in calls]
-        code = f"return [{','.join(code_lines)}];"
-        return await self._make_request("execute", params={"code": code})
-
-    async def get_user_info(self, user_ids: Optional[str] = None, fields: Optional[str] = "photo_200,sex,online,last_seen,is_closed,status,counters,photo_id") -> Optional[Any]:
-        params = {'fields': fields}
-        if user_ids:
-            params['user_ids'] = user_ids
-        response = await self._make_request("users.get", params=params)
-        if response and isinstance(response, list):
-            return response[0] if user_ids is None and len(response) == 1 else response
-        return None
-    
-    async def get_user_friends(self, user_id: int, fields: str = "sex,bdate,city,online,last_seen,is_closed,deactivated") -> Optional[List[Dict[str, Any]]]:
-        params = {"user_id": user_id, "fields": fields, "order": "random"}
-        response = await self._make_request("friends.get", params=params)
-        
-        if not response or "items" not in response:
-            return None
-            
-        items = response["items"]
-        if fields == "" and isinstance(items, list) and all(isinstance(x, int) for x in items):
-            return [{"id": user_id} for user_id in items]
-        
-        return items
-
-    async def add_friend(self, user_id: int, text: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        params = {"user_id": user_id}
-        if text:
-            params["text"] = text
-        return await self._make_request("friends.add", params=params)
-
-    async def get_wall(self, owner_id: int, count: int = 5) -> Optional[Dict[str, Any]]:
-        return await self._make_request("wall.get", params={"owner_id": owner_id, "count": count})
-
-    async def get_stories(self) -> Optional[Dict[str, Any]]:
-        return await self._make_request("stories.get", params={})
-
-    async def get_incoming_friend_requests(self, count: int = 1000, **kwargs) -> Optional[Dict[str, Any]]:
-        params = {"count": count, **kwargs}
-        if 'extended' in params and params['extended'] == 1:
-            params['fields'] = "sex,online,last_seen,is_closed,status,counters"
-        return await self._make_request("friends.getRequests", params=params)
-
-    async def add_like(self, item_type: str, owner_id: int, item_id: int) -> Optional[Dict[str, Any]]:
-        return await self._make_request("likes.add", params={"type": item_type, "owner_id": owner_id, "item_id": item_id})
-    
-    async def delete_friend(self, user_id: int) -> Optional[Dict[str, Any]]:
-        return await self._make_request("friends.delete", params={"user_id": user_id})
-
-    async def send_message(self, user_id: int, message: str) -> Optional[int]:
-        return await self._make_request("messages.send", params={"user_id": user_id, "message": message, "random_id": random.randint(0, 2**31)})
-
-    async def get_conversations(self, count: int = 200, filter: Optional[Literal['all', 'unread', 'important', 'unanswered']] = 'all') -> Optional[Dict[str, Any]]:
-        """Получает диалоги с возможностью фильтрации."""
-        return await self._make_request("messages.getConversations", params={"count": count, "filter": filter})
-
-    async def get_photos(self, owner_id: int, count: int = 200) -> Optional[Dict[str, Any]]:
-        return await self._make_request("photos.getAll", params={"owner_id": owner_id, "count": count, "extended": 1})
-
-    async def set_online(self) -> Optional[int]:
-        return await self._make_request("account.setOnline")
-    
-    async def get_groups(self, user_id: int, extended: int = 1, fields: str = "members_count", count: int = 1000) -> Optional[Dict[str, Any]]:
-        return await self._make_request("groups.get", params={"user_id": user_id, "extended": extended, "fields": fields, "count": count})
-
-    async def leave_group(self, group_id: int) -> Optional[int]:
-        return await self._make_request("groups.leave", params={"group_id": group_id})
-
-    async def search_groups(self, query: str, count: int = 100, sort: int = 6) -> Optional[Dict[str, Any]]:
-        return await self._make_request("groups.search", params={"q": query, "count": count, "sort": sort})
-    
-    async def join_group(self, group_id: int) -> Optional[int]:
-        return await self._make_request("groups.join", params={"group_id": group_id})
-
-async def is_token_valid(vk_token: str) -> Optional[int]:
-    vk_api = VKAPI(access_token=vk_token)
-    try:
-        user_info = await vk_api.get_user_info()
-        return user_info.get('id') if user_info else None
-    except VKAPIError:
-        return None
-
 # --- backend/app\services\vk_user_filter.py ---
 
 # backend/app/services/vk_user_filter.py
@@ -5498,6 +5615,311 @@ async def redis_listener(redis_client: Redis):
 # --- backend/app\services\__init__.py ---
 
 
+
+# --- backend/app\services\vk_api\account.py ---
+
+#backend/app/services/vk_api/account.py
+
+from typing import Optional
+from .base import BaseVKSection
+
+class AccountAPI(BaseVKSection):
+    async def setOnline(self) -> Optional[int]:
+        return await self._make_request("account.setOnline")
+
+# --- backend/app\services\vk_api\base.py ---
+
+import aiohttp
+import asyncio
+
+# --- ИСКЛЮЧЕНИЯ ---
+class VKAPIError(Exception):
+    def __init__(self, message: str, error_code: int):
+        self.message = message
+        self.error_code = error_code
+        super().__init__(f"VK API Error [{self.error_code}]: {self.message}")
+
+class VKAuthError(VKAPIError): pass
+class VKRateLimitError(VKAPIError): pass
+class VKAccessDeniedError(VKAPIError): pass
+class VKFloodControlError(VKAPIError): pass
+class VKCaptchaError(VKAPIError): pass
+class VKTooManyRequestsError(VKAPIError): pass
+
+ERROR_CODE_MAP = {
+    5: VKAuthError, 6: VKRateLimitError, 9: VKFloodControlError, 14: VKCaptchaError,
+    15: VKAccessDeniedError, 18: VKAccessDeniedError, 29: VKTooManyRequestsError,
+    203: VKAccessDeniedError, 902: VKAccessDeniedError,
+}
+
+# --- БАЗОВЫЙ КЛАСС ДЛЯ РАЗДЕЛОВ ---
+class BaseVKSection:
+    def __init__(self, request_method: callable):
+        self._make_request = request_method
+
+# --- backend/app\services\vk_api\friends.py ---
+
+
+#backend/app/services/vk_api/friends.py
+
+from typing import Optional, Dict, Any
+from .base import BaseVKSection
+
+class FriendsAPI(BaseVKSection):
+    async def get(self, user_id: int, fields: str, order: str = "random") -> Optional[Dict[str, Any]]:
+        params = {"user_id": user_id, "fields": fields, "order": order}
+        response = await self._make_request("friends.get", params=params)
+        if not response or "items" not in response:
+            return None
+        # Возвращаем полный ответ, т.к. он содержит `count`
+        return response
+
+    async def getRequests(self, count: int = 1000, extended: int = 0, **kwargs) -> Optional[Dict[str, Any]]:
+        params = {"count": count, "extended": extended, **kwargs}
+        if extended == 1:
+            params['fields'] = "sex,online,last_seen,is_closed,status,counters"
+        return await self._make_request("friends.getRequests", params=params)
+
+    async def getSuggestions(self, count: int = 200, fields: str = "sex,online,last_seen,is_closed,status,counters,photo_id") -> Optional[Dict[str, Any]]:
+        params = {"filter": "mutual", "count": count, "fields": fields}
+        return await self._make_request("friends.getSuggestions", params)
+
+    async def add(self, user_id: int, text: Optional[str] = None) -> Optional[int]:
+        params = {"user_id": user_id}
+        if text: params["text"] = text
+        return await self._make_request("friends.add", params=params)
+
+    async def delete(self, user_id: int) -> Optional[Dict[str, Any]]:
+        return await self._make_request("friends.delete", params={"user_id": user_id})
+
+# --- backend/app\services\vk_api\groups.py ---
+
+from typing import Optional, Dict, Any
+from .base import BaseVKSection
+
+class GroupsAPI(BaseVKSection):
+    async def get(self, user_id: int, extended: int = 1, fields: str = "members_count", count: int = 1000) -> Optional[Dict[str, Any]]:
+        params = {"user_id": user_id, "extended": extended, "fields": fields, "count": count}
+        return await self._make_request("groups.get", params=params)
+
+    async def leave(self, group_id: int) -> Optional[int]:
+        return await self._make_request("groups.leave", params={"group_id": group_id})
+
+    async def search(self, query: str, count: int = 100, sort: int = 6) -> Optional[Dict[str, Any]]:
+        return await self._make_request("groups.search", params={"q": query, "count": count, "sort": sort})
+
+    async def join(self, group_id: int) -> Optional[int]:
+        return await self._make_request("groups.join", params={"group_id": group_id})
+
+# --- backend/app\services\vk_api\likes.py ---
+
+from typing import Optional, Dict, Any
+from .base import BaseVKSection
+
+class LikesAPI(BaseVKSection):
+    async def add(self, item_type: str, owner_id: int, item_id: int) -> Optional[Dict[str, Any]]:
+        params = {"type": item_type, "owner_id": owner_id, "item_id": item_id}
+        return await self._make_request("likes.add", params=params)
+
+# --- backend/app\services\vk_api\messages.py ---
+
+import random
+from typing import Optional, Dict, Any, Literal
+from .base import BaseVKSection
+
+class MessagesAPI(BaseVKSection):
+    async def send(self, user_id: int, message: str) -> Optional[int]:
+        params = {"user_id": user_id, "message": message, "random_id": random.randint(0, 2**31)}
+        return await self._make_request("messages.send", params=params)
+    
+    async def getConversations(self, count: int = 200, filter: Optional[Literal['all', 'unread', 'important', 'unanswered']] = 'all') -> Optional[Dict[str, Any]]:
+        params = {"count": count, "filter": filter}
+        return await self._make_request("messages.getConversations", params=params)
+
+# --- backend/app\services\vk_api\newsfeed.py ---
+
+from typing import Optional, Dict, Any
+from .base import BaseVKSection
+
+class NewsfeedAPI(BaseVKSection):
+    async def get(self, count: int, filters: str) -> Optional[Dict[str, Any]]:
+        """
+        Возвращает список новостей для текущего пользователя.
+        https://dev.vk.com/method/newsfeed.get
+        """
+        params = {"count": count, "filters": filters}
+        return await self._make_request("newsfeed.get", params=params)
+
+# --- backend/app\services\vk_api\photos.py ---
+
+from typing import Optional, Dict, Any
+from .base import BaseVKSection
+import aiohttp
+
+class PhotosAPI(BaseVKSection):
+    async def getAll(self, owner_id: int, count: int = 200) -> Optional[Dict[str, Any]]:
+        params = {"owner_id": owner_id, "count": count, "extended": 1}
+        return await self._make_request("photos.getAll", params=params)
+
+    async def getWallUploadServer(self) -> Optional[Dict[str, Any]]:
+        return await self._make_request('photos.getWallUploadServer')
+
+    async def saveWallPhoto(self, upload_data: dict) -> Optional[Dict[str, Any]]:
+        return await self._make_request('photos.saveWallPhoto', params=upload_data)
+        
+    async def upload_for_wall(self, photo_data: bytes, proxy: Optional[str] = None) -> Optional[str]:
+        upload_server = await self.getWallUploadServer()
+        if not upload_server or 'upload_url' not in upload_server:
+            return None
+        
+        form = aiohttp.FormData()
+        form.add_field('photo', photo_data, filename='photo.jpg', content_type='image/jpeg')
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(upload_server['upload_url'], data=form, proxy=proxy, timeout=30) as resp:
+                upload_result = await resp.json()
+
+        saved_photo = await self.saveWallPhoto(upload_data=upload_result)
+        if not saved_photo or not saved_photo[0]:
+            return None
+        
+        photo = saved_photo[0]
+        return f"photo{photo['owner_id']}_{photo['id']}"
+
+# --- backend/app\services\vk_api\stories.py ---
+
+from typing import Optional, Dict, Any
+from .base import BaseVKSection
+
+class StoriesAPI(BaseVKSection):
+    async def get(self) -> Optional[Dict[str, Any]]:
+        return await self._make_request("stories.get", params={})
+
+# --- backend/app\services\vk_api\users.py ---
+
+from typing import Optional, Any
+from .base import BaseVKSection
+
+class UsersAPI(BaseVKSection):
+    async def get(self, user_ids: Optional[str] = None, fields: Optional[str] = "photo_200,sex,online,last_seen,is_closed,status,counters,photo_id") -> Optional[Any]:
+        params = {'fields': fields}
+        if user_ids:
+            params['user_ids'] = user_ids
+        response = await self._make_request("users.get", params=params)
+        if response and isinstance(response, list):
+            return response[0] if user_ids is None and len(response) == 1 else response
+        return None
+
+# --- backend/app\services\vk_api\wall.py ---
+
+from typing import Optional, Dict, Any
+from .base import BaseVKSection
+
+class WallAPI(BaseVKSection):
+    async def get(self, owner_id: int, count: int = 5) -> Optional[Dict[str, Any]]:
+        return await self._make_request("wall.get", params={"owner_id": owner_id, "count": count})
+
+    async def post(self, owner_id: int, message: str, attachments: str) -> Optional[Dict[str, Any]]:
+        params = {"owner_id": owner_id, "from_group": 0, "message": message, "attachments": attachments}
+        return await self._make_request("wall.post", params=params)
+
+# --- backend/app\services\vk_api\__init__.py ---
+
+import aiohttp
+import json
+import asyncio
+from typing import Optional, Dict, Any, List
+
+from app.core.config import settings
+
+# Экспортируем исключения для удобного доступа
+from .base import VKAPIError, VKAuthError, VKAccessDeniedError, VKFloodControlError, VKCaptchaError, ERROR_CODE_MAP
+
+# Импортируем все разделы API
+from .account import AccountAPI
+from .friends import FriendsAPI
+from .groups import GroupsAPI
+from .likes import LikesAPI
+from .messages import MessagesAPI
+from .newsfeed import NewsfeedAPI
+from .photos import PhotosAPI
+from .stories import StoriesAPI
+from .users import UsersAPI
+from .wall import WallAPI
+
+
+class VKAPI:
+    """
+    Основной класс-фасад для взаимодействия с VK API.
+    Предоставляет доступ к логическим разделам API через свои атрибуты.
+    Пример: `vk_api.friends.get(...)`
+    """
+    def __init__(self, access_token: str, proxy: Optional[str] = None):
+        self.access_token = access_token
+        self.proxy = proxy
+        self.api_version = settings.VK_API_VERSION
+        self.base_url = "https://api.vk.com/method/"
+        
+        # Инициализация всех разделов
+        self.account = AccountAPI(self._make_request)
+        self.friends = FriendsAPI(self._make_request)
+        self.groups = GroupsAPI(self._make_request)
+        self.likes = LikesAPI(self._make_request)
+        self.messages = MessagesAPI(self._make_request)
+        self.newsfeed = NewsfeedAPI(self._make_request)
+        self.photos = PhotosAPI(self._make_request)
+        self.stories = StoriesAPI(self._make_request)
+        self.users = UsersAPI(self._make_request)
+        self.wall = WallAPI(self._make_request)
+
+    async def _make_request(self, method: str, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        if params is None: params = {}
+        
+        params['access_token'] = self.access_token
+        params['v'] = self.api_version
+
+        async with aiohttp.ClientSession() as session:
+            try:
+                for attempt in range(3):
+                    async with session.post(f"{self.base_url}{method}", data=params, proxy=self.proxy, timeout=20) as response:
+                        data = await response.json()
+                        
+                        if 'error' in data:
+                            error_data = data['error']
+                            error_code = error_data.get('error_code')
+                            error_msg = error_data.get('error_msg', 'Unknown VK error')
+                            
+                            if error_code in [6, 9]: # Rate Limit или Flood Control
+                                wait_time = 1.5 + attempt * 2
+                                await asyncio.sleep(wait_time)
+                                continue
+
+                            ExceptionClass = ERROR_CODE_MAP.get(error_code, VKAPIError)
+                            raise ExceptionClass(error_msg, error_code)
+
+                        return data.get('response')
+                
+                raise VKFloodControlError("Превышено количество попыток после ошибок Flood/Rate Control.", 9)
+
+            except aiohttp.ClientError as e:
+                raise VKAPIError(f"Сетевая ошибка: {e}. Проверьте прокси и подключение к интернету.", 0)
+
+    async def execute(self, calls: List[Dict[str, Any]]) -> Optional[List[Any]]:
+        if not 25 >= len(calls) > 0:
+            raise ValueError("Number of calls for execute method must be between 1 and 25.")
+        code_lines = [f'API.{call["method"]}({json.dumps(call.get("params", {}), ensure_ascii=False)})' for call in calls]
+        code = f"return [{','.join(code_lines)}];"
+        return await self._make_request("execute", params={"code": code})
+
+
+async def is_token_valid(vk_token: str) -> Optional[int]:
+    """Вспомогательная функция для проверки токена при логине."""
+    vk_api = VKAPI(access_token=vk_token)
+    try:
+        user_info = await vk_api.users.get()
+        return user_info.get('id') if user_info else None
+    except VKAPIError:
+        return None
 
 # --- backend/app\tasks\cron.py ---
 
@@ -5800,221 +6222,6 @@ from app.tasks.maintenance import _clear_old_task_history_async
 async def clear_old_task_history_job(ctx):
     await _clear_old_task_history_async()
 
-# --- backend/app\tasks\main_tasks.py ---
-
-# backend/app/tasks/main_tasks.py
-import structlog
-from sqlalchemy import select, update
-from sqlalchemy.orm import selectinload
-
-from app.db.models import User, TaskHistory, ScheduledPost, ScheduledPostStatus, Automation
-from app.db.session import AsyncSessionFactory
-from app.services.event_emitter import RedisEventEmitter
-from app.core.exceptions import UserActionException
-# --- НОВЫЕ ИМПОРТЫ ОШИБОК ---
-from app.services.vk_api import (
-    VKAPI, VKAuthError, VKFloodControlError, VKRateLimitError, 
-    VKAccessDeniedError, VKCaptchaError, VKAPIError
-)
-# ------------------------------
-from app.core.constants import TaskKey
-from app.tasks.service_maps import TASK_CONFIG_MAP
-from app.core.security import decrypt_data
-from app.core.config_loader import AUTOMATIONS_CONFIG
-from app.services.scenario_service import ScenarioExecutionService
-
-log = structlog.get_logger(__name__)
-
-
-async def _execute_task_logic(ctx, task_history_id: int):
-    async with AsyncSessionFactory() as session:
-        stmt = (
-            select(TaskHistory)
-            .where(TaskHistory.id == task_history_id)
-            .options(
-                selectinload(TaskHistory.user).selectinload(User.proxies)
-            )
-        )
-        task_history = (await session.execute(stmt)).scalar_one_or_none()
-
-        if not task_history or not task_history.user:
-            log.error("task.logic.not_found", task_history_id=task_history_id)
-            return
-
-        user_for_task = task_history.user
-        current_task_name = task_history.task_name
-        current_created_at = task_history.created_at
-        task_parameters = task_history.parameters or {}
-        
-        # Отсоединяем, чтобы избежать проблем с состоянием сессии
-        session.expunge(user_for_task)
-
-        redis_pool = ctx['redis_pool']
-        emitter = RedisEventEmitter(redis_pool)
-        emitter.set_context(user_for_task.id, task_history_id)
-        
-        try:
-            task_history.status = "STARTED"
-            await session.commit()
-            await emitter.send_task_status_update(status="STARTED", task_name=current_task_name, created_at=current_created_at)
-
-            task_key_str = next((item.id for item in AUTOMATIONS_CONFIG if item.name == current_task_name), None)
-            if not task_key_str:
-                raise ValueError(f"Не удалось найти ключ задачи для имени '{current_task_name}'")
-
-            ServiceClass, method_name, ParamsModel = TASK_CONFIG_MAP[TaskKey(task_key_str)]
-            params = ParamsModel(**task_parameters)
-
-            service_instance = ServiceClass(db=session, user=user_for_task, emitter=emitter)
-            await getattr(service_instance, method_name)(params)
-
-            task_history.status = "SUCCESS"
-            task_history.result = "Задача успешно выполнена."
-
-        # --- ОБНОВЛЕННЫЙ БЛОК ОБРАБОТКИ ОШИБОК ---
-        except VKAuthError:
-            task_history.status = "FAILURE"
-            task_history.result = "Ошибка авторизации VK. Токен невалиден."
-            log.error("task_runner.auth_error_critical", user_id=user_for_task.id)
-            await emitter.send_system_notification(session, "Критическая ошибка: токен VK недействителен. Все автоматизации остановлены. Пожалуйста, войдите в систему заново.", "error")
-            await session.execute(update(Automation).where(Automation.user_id == user_for_task.id).values(is_active=False))
-        
-        except (VKFloodControlError, VKRateLimitError) as e:
-            task_history.status = "FAILURE"
-            task_history.result = "VK временно ограничил активность вашего аккаунта."
-            log.warn("task_runner.rate_limit", user_id=user_for_task.id, error=str(e))
-            await emitter.send_system_notification(session, "VK временно ограничил вашу активность из-за большого количества действий. Попробуйте запустить задачу позже или снизьте интенсивность в настройках.", "warning")
-
-        except VKCaptchaError as e:
-            task_history.status = "FAILURE"
-            task_history.result = "VK требует ввод капчи. Работа остановлена."
-            log.warn("task_runner.captcha_required", user_id=user_for_task.id, error=str(e))
-            await emitter.send_system_notification(session, "ВКонтакте требует ввод капчи. Автоматизация не может продолжаться. Пожалуйста, зайдите в VK с компьютера и проявите активность, чтобы капча исчезла.", "warning")
-
-        except VKAccessDeniedError as e:
-            task_history.status = "FAILURE"
-            task_history.result = f"Ошибка доступа VK: {e.message}"
-            log.info("task_runner.access_denied", user_id=user_for_task.id, error=str(e))
-            # Системное уведомление здесь не нужно, т.к. это штатная ситуация (например, закрытый профиль)
-            
-        except VKAPIError as e:
-            task_history.status = "FAILURE"
-            task_history.result = f"Ошибка VK API: {e.message}"
-            log.error("task_runner.generic_vk_error", user_id=user_for_task.id, error=str(e))
-            await emitter.send_system_notification(session, f"Произошла непредвиденная ошибка при обращении к API ВКонтакте: '{e.message}'. Если ошибка повторяется, обратитесь в поддержку.", "error")
-
-        except UserActionException as e:
-            task_history.status = "FAILURE"
-            task_history.result = str(e)
-            await emitter.send_system_notification(session, str(e), "warning")
-            
-        except Exception as e:
-            task_history.status = "FAILURE"
-            task_history.result = f"Внутренняя ошибка сервера: {type(e).__name__}"
-            log.exception("task_runner.unhandled_exception", id=task_history_id)
-            await emitter.send_system_notification(session, "Произошла внутренняя ошибка сервера при выполнении задачи. Мы уже работаем над решением.", "error")
-        # --- КОНЕЦ БЛОКА ОБРАБОТКИ ОШИБОК ---
-        
-        finally:
-            final_status = task_history.status
-            final_result = task_history.result
-            
-            await session.merge(task_history)
-            await session.commit()
-            
-            await emitter.send_task_status_update(status=final_status, result=final_result, task_name=current_task_name, created_at=current_created_at)
-
-# ... (все задачи-обертки `like_feed_task`, `add_recommended_friends_task` и т.д. остаются без изменений) ...
-async def like_feed_task(ctx, task_history_id: int, **kwargs):
-    await _execute_task_logic(ctx, task_history_id)
-async def add_recommended_friends_task(ctx, task_history_id: int, **kwargs):
-    await _execute_task_logic(ctx, task_history_id)
-async def accept_friend_requests_task(ctx, task_history_id: int, **kwargs):
-    await _execute_task_logic(ctx, task_history_id)
-async def remove_friends_by_criteria_task(ctx, task_history_id: int, **kwargs):
-    await _execute_task_logic(ctx, task_history_id)
-async def view_stories_task(ctx, task_history_id: int, **kwargs):
-    await _execute_task_logic(ctx, task_history_id)
-async def birthday_congratulation_task(ctx, task_history_id: int, **kwargs):
-    await _execute_task_logic(ctx, task_history_id)
-async def mass_messaging_task(ctx, task_history_id: int, **kwargs):
-    await _execute_task_logic(ctx, task_history_id)
-async def eternal_online_task(ctx, task_history_id: int, **kwargs):
-    await _execute_task_logic(ctx, task_history_id)
-async def leave_groups_by_criteria_task(ctx, task_history_id: int, **kwargs):
-    await _execute_task_logic(ctx, task_history_id)
-async def join_groups_by_criteria_task(ctx, task_history_id: int, **kwargs):
-    await _execute_task_logic(ctx, task_history_id)
-
-
-# --- ОБНОВЛЕННАЯ ЗАДАЧА ДЛЯ ПЛАНИРОВЩИКА ПОСТОВ ---
-async def publish_scheduled_post_task(ctx, post_id: int):
-    async with AsyncSessionFactory() as session:
-        post = await session.get(ScheduledPost, post_id, options=[selectinload(ScheduledPost.user)])
-        if not post or post.status != ScheduledPostStatus.scheduled:
-            return
-
-        user = post.user
-        # --- ИНИЦИАЛИЗАЦИЯ EMITTER'А ДЛЯ УВЕДОМЛЕНИЙ ---
-        redis_pool = ctx.get('redis_pool')
-        emitter = None
-        if redis_pool:
-            emitter = RedisEventEmitter(redis_pool)
-            emitter.set_context(user.id)
-        # ---------------------------------------------
-
-        if not user:
-            post.status = ScheduledPostStatus.failed
-            post.error_message = "Пользователь не найден"
-            await session.commit()
-            return
-
-        vk_token = decrypt_data(user.encrypted_vk_token)
-        if not vk_token:
-            post.status = ScheduledPostStatus.failed
-            post.error_message = "Токен пользователя недействителен"
-            if emitter:
-                await emitter.send_system_notification(session, "Не удалось опубликовать запланированный пост: токен VK недействителен.", "error")
-            await session.commit()
-            return
-
-        vk_api = VKAPI(access_token=vk_token)
-
-        try:
-            result = await vk_api._make_request("wall.post", params={
-                "owner_id": int(post.vk_profile_id),
-                "message": post.post_text or "",
-                "attachments": ",".join(post.attachments or [])
-            })
-            post.status = ScheduledPostStatus.published
-            post.vk_post_id = str(result.get("post_id"))
-            if emitter:
-                await emitter.send_system_notification(session, "Запланированный пост успешно опубликован.", "success")
-
-        except (VKAPIError, Exception) as e:
-            post.status = ScheduledPostStatus.failed
-            # Устанавливаем понятное сообщение об ошибке
-            error_message = str(e.message) if isinstance(e, VKAPIError) else str(e)
-            post.error_message = error_message
-            log.error("post_scheduler.failed", post_id=post.id, user_id=user.id, error=error_message)
-            if emitter:
-                await emitter.send_system_notification(session, f"Не удалось опубликовать запланированный пост. Ошибка: {error_message}", "error")
-
-        await session.commit()
-# --- КОНЕЦ ОБНОВЛЕННОЙ ЗАДАЧИ ---
-
-
-async def run_scenario_from_scheduler_task(ctx, scenario_id: int, user_id: int):
-    log.info("scenario.runner.start", scenario_id=scenario_id, user_id=user_id)
-    try:
-        async with AsyncSessionFactory() as session:
-            executor = ScenarioExecutionService(session, scenario_id, user_id)
-            await executor.run()
-    except Exception as e:
-        log.error("scenario.runner.critical_error", scenario_id=scenario_id, error=str(e), exc_info=True)
-    finally:
-        log.info("scenario.runner.finished", scenario_id=scenario_id)
-
 # --- backend/app\tasks\profile_parser.py ---
 
 # backend/app/tasks/profile_parser.py
@@ -6115,6 +6322,199 @@ TASK_CONFIG_MAP = {
     TaskKey.LEAVE_GROUPS: (GroupManagementService, "leave_groups_by_criteria", ActionSchemas.LeaveGroupsRequest),
     TaskKey.JOIN_GROUPS: (GroupManagementService, "join_groups_by_criteria", ActionSchemas.JoinGroupsRequest),
 }
+
+# --- backend/app\tasks\standard_tasks.py ---
+
+import functools
+import structlog
+from sqlalchemy import select, update
+from sqlalchemy.orm import selectinload
+
+from app.db.models import User, TaskHistory, Automation
+from app.db.session import AsyncSessionFactory
+from app.services.event_emitter import RedisEventEmitter
+from app.core.exceptions import UserActionException
+from app.services.vk_api import VKAPIError, VKAuthError
+from app.core.constants import TaskKey
+from app.tasks.service_maps import TASK_CONFIG_MAP
+
+log = structlog.get_logger(__name__)
+
+def arq_task_runner(func):
+    """
+    Декоратор, который оборачивает основную логику задачи в стандартный
+    обработчик: управление статусами, ошибками, эмиттером и сессией.
+    """
+    @functools.wraps(func)
+    async def wrapper(ctx, task_history_id: int, **kwargs):
+        async with AsyncSessionFactory() as session:
+            stmt = select(TaskHistory).where(TaskHistory.id == task_history_id).options(
+                selectinload(TaskHistory.user).selectinload(User.proxies)
+            )
+            task_history = (await session.execute(stmt)).scalar_one_or_none()
+
+            if not task_history or not task_history.user:
+                log.error("task.runner.not_found", task_history_id=task_history_id)
+                return
+
+            emitter = RedisEventEmitter(ctx['redis_pool'])
+            emitter.set_context(task_history.user.id, task_history.id)
+
+            try:
+                task_history.status = "STARTED"
+                await session.commit()
+                await emitter.send_task_status_update(status="STARTED", task_name=task_history.task_name, created_at=task_history.created_at)
+
+                await func(session, task_history.user, task_history.parameters or {}, emitter)
+
+                task_history.status = "SUCCESS"
+                task_history.result = "Задача успешно выполнена."
+
+            except VKAuthError:
+                task_history.status = "FAILURE"
+                task_history.result = "Ошибка авторизации VK. Токен невалиден."
+                log.error("task_runner.auth_error_critical", user_id=task_history.user.id)
+                await emitter.send_system_notification(session, "Критическая ошибка: токен VK недействителен. Все автоматизации остановлены. Пожалуйста, войдите в систему заново.", "error")
+                await session.execute(update(Automation).where(Automation.user_id == task_history.user.id).values(is_active=False))
+            
+            except UserActionException as e:
+                task_history.status = "FAILURE"
+                task_history.result = str(e)
+                await emitter.send_system_notification(session, str(e), "warning")
+            
+            except VKAPIError as e:
+                task_history.status = "FAILURE"
+                task_history.result = f"Ошибка VK API: {e.message}"
+                log.error("task_runner.generic_vk_error", user_id=task_history.user.id, error=str(e))
+                await emitter.send_system_notification(session, f"Произошла непредвиденная ошибка при обращении к API ВКонтакте: '{e.message}'.", "error")
+
+            except Exception as e:
+                task_history.status = "FAILURE"
+                task_history.result = f"Внутренняя ошибка сервера: {type(e).__name__}"
+                log.exception("task_runner.unhandled_exception", id=task_history_id)
+                await emitter.send_system_notification(session, "Произошла внутренняя ошибка сервера при выполнении задачи.", "error")
+            
+            finally:
+                await session.merge(task_history)
+                await session.commit()
+                await emitter.send_task_status_update(status=task_history.status, result=task_history.result, task_name=task_history.task_name, created_at=task_history.created_at)
+    return wrapper
+
+async def _run_service_method(session, user, params, emitter, task_key: TaskKey):
+    """Находит нужный сервис и метод по ключу и выполняет его."""
+    ServiceClass, method_name, ParamsModel = TASK_CONFIG_MAP[task_key]
+    validated_params = ParamsModel(**params)
+    service_instance = ServiceClass(db=session, user=user, emitter=emitter)
+    await getattr(service_instance, method_name)(validated_params)
+
+@arq_task_runner
+async def like_feed_task(session, user, params, emitter):
+    await _run_service_method(session, user, params, emitter, TaskKey.LIKE_FEED)
+
+@arq_task_runner
+async def add_recommended_friends_task(session, user, params, emitter):
+    await _run_service_method(session, user, params, emitter, TaskKey.ADD_RECOMMENDED)
+
+@arq_task_runner
+async def accept_friend_requests_task(session, user, params, emitter):
+    await _run_service_method(session, user, params, emitter, TaskKey.ACCEPT_FRIENDS)
+
+@arq_task_runner
+async def remove_friends_by_criteria_task(session, user, params, emitter):
+    await _run_service_method(session, user, params, emitter, TaskKey.REMOVE_FRIENDS)
+
+@arq_task_runner
+async def view_stories_task(session, user, params, emitter):
+    await _run_service_method(session, user, params, emitter, TaskKey.VIEW_STORIES)
+
+@arq_task_runner
+async def birthday_congratulation_task(session, user, params, emitter):
+    await _run_service_method(session, user, params, emitter, TaskKey.BIRTHDAY_CONGRATULATION)
+
+@arq_task_runner
+async def mass_messaging_task(session, user, params, emitter):
+    await _run_service_method(session, user, params, emitter, TaskKey.MASS_MESSAGING)
+
+@arq_task_runner
+async def eternal_online_task(session, user, params, emitter):
+    await _run_service_method(session, user, params, emitter, TaskKey.ETERNAL_ONLINE)
+
+@arq_task_runner
+async def leave_groups_by_criteria_task(session, user, params, emitter):
+    await _run_service_method(session, user, params, emitter, TaskKey.LEAVE_GROUPS)
+
+@arq_task_runner
+async def join_groups_by_criteria_task(session, user, params, emitter):
+    await _run_service_method(session, user, params, emitter, TaskKey.JOIN_GROUPS)
+
+# --- backend/app\tasks\system_tasks.py ---
+
+import structlog
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
+
+from app.db.models import ScheduledPost, ScheduledPostStatus
+from app.db.session import AsyncSessionFactory
+from app.services.vk_api import VKAPI, VKAPIError
+from app.core.security import decrypt_data
+from app.services.scenario_service import ScenarioExecutionService
+from app.services.event_emitter import RedisEventEmitter
+
+log = structlog.get_logger(__name__)
+
+async def publish_scheduled_post_task(ctx, post_id: int):
+    async with AsyncSessionFactory() as session:
+        post = await session.get(ScheduledPost, post_id, options=[selectinload(ScheduledPost.user)])
+        if not post or post.status != ScheduledPostStatus.scheduled:
+            return
+
+        user = post.user
+        emitter = RedisEventEmitter(ctx['redis_pool'])
+        emitter.set_context(user.id)
+
+        if not user:
+            post.status = ScheduledPostStatus.failed
+            post.error_message = "Пользователь не найден"
+            await session.commit()
+            return
+
+        vk_token = decrypt_data(user.encrypted_vk_token)
+        if not vk_token:
+            post.status = ScheduledPostStatus.failed
+            post.error_message = "Токен пользователя недействителен"
+            await emitter.send_system_notification(session, "Не удалось опубликовать пост: токен VK недействителен.", "error")
+            await session.commit()
+            return
+
+        vk_api = VKAPI(access_token=vk_token)
+        try:
+            result = await vk_api.wall.post(
+                owner_id=int(post.vk_profile_id),
+                message=post.post_text or "",
+                attachments=",".join(post.attachments or [])
+            )
+            post.status = ScheduledPostStatus.published
+            post.vk_post_id = str(result.get("post_id"))
+            await emitter.send_system_notification(session, "Запланированный пост успешно опубликован.", "success")
+        except (VKAPIError, Exception) as e:
+            error_message = str(e.message) if isinstance(e, VKAPIError) else str(e)
+            post.status = ScheduledPostStatus.failed
+            post.error_message = error_message
+            log.error("post_scheduler.failed", post_id=post.id, user_id=user.id, error=error_message)
+            await emitter.send_system_notification(session, f"Ошибка публикации поста: {error_message}", "error")
+
+        await session.commit()
+
+async def run_scenario_from_scheduler_task(ctx, scenario_id: int, user_id: int):
+    log.info("scenario.runner.start", scenario_id=scenario_id, user_id=user_id)
+    try:
+        async with AsyncSessionFactory() as session:
+            executor = ScenarioExecutionService(session, scenario_id, user_id)
+            await executor.run()
+    except Exception as e:
+        log.error("scenario.runner.critical_error", scenario_id=scenario_id, error=str(e), exc_info=True)
+    finally:
+        log.info("scenario.runner.finished", scenario_id=scenario_id)
 
 # --- backend/app\tasks\__init__.py ---
 

@@ -1,6 +1,8 @@
 # --- backend/app/api/schemas/actions.py ---
-from pydantic import BaseModel, Field
-from typing import Optional, Literal, List, Any
+from pydantic import BaseModel, Field, field_validator, model_validator
+from typing import Optional, Literal, List, Any, Dict
+import re
+
 
 class ActionFilters(BaseModel):
     sex: Optional[Literal[0, 1, 2]] = Field(0, description="0 - любой, 1 - жен, 2 - муж")
@@ -9,15 +11,22 @@ class ActionFilters(BaseModel):
     allow_closed_profiles: bool = False
     status_keyword: Optional[str] = Field(None, max_length=100)
     city: Optional[str] = Field(None, max_length=100)
-    only_with_photo: Optional[bool] = Field(False) # Используется в like_feed
-    remove_banned: Optional[bool] = True # Используется в remove_friends
+    only_with_photo: Optional[bool] = Field(False)
+    remove_banned: Optional[bool] = True
     last_seen_days: Optional[int] = Field(None, ge=1)
     
 class LikeAfterAddConfig(BaseModel):
     enabled: bool = False
     targets: List[Literal['avatar', 'wall']] = ['avatar']
 
-# --- Модели для каждой задачи ---
+# --- НОВАЯ СХЕМА ДЛЯ "УМНОЙ" ОТПРАВКИ ---
+class HumanizedSendingConfig(BaseModel):
+    enabled: bool = Field(False, description="Включить режим 'человечной' отправки (медленно, по одному)")
+    speed: Literal["slow", "normal", "fast"] = Field("normal", description="Скорость набора и отправки")
+    simulate_typing: bool = Field(True, description="Показывать статус 'набирает сообщение'")
+
+
+# --- Обновленные модели для задач ---
 
 class LikeFeedRequest(BaseModel):
     count: int = Field(50, ge=1)
@@ -29,6 +38,9 @@ class AddFriendsRequest(BaseModel):
     like_config: LikeAfterAddConfig = Field(default_factory=LikeAfterAddConfig)
     send_message_on_add: bool = False
     message_text: Optional[str] = Field(None, max_length=500)
+    # ДОБАВЛЕНО: Настройки очеловечивания для приветственного сообщения
+    humanized_sending: HumanizedSendingConfig = Field(default_factory=HumanizedSendingConfig)
+
 
 class AcceptFriendsRequest(BaseModel):
     filters: ActionFilters = Field(default_factory=ActionFilters)
@@ -41,8 +53,11 @@ class MassMessagingRequest(BaseModel):
     count: int = Field(50, ge=1)
     filters: ActionFilters = Field(default_factory=ActionFilters)
     message_text: str = Field(..., min_length=1, max_length=1000)
-    only_new_dialogs: bool = Field(False, description="Отправлять только тем, с кем еще не было переписки.")
-    only_unread: bool = Field(False, description="Отправлять только тем, у кого есть непрочитанные сообщения от вас.")
+    only_new_dialogs: bool = Field(False)
+    only_unread: bool = Field(False)
+    # ДОБАВЛЕНО: Настройки очеловечивания для массовой рассылки
+    humanized_sending: HumanizedSendingConfig = Field(default_factory=HumanizedSendingConfig)
+
 
 class LeaveGroupsRequest(BaseModel):
     count: int = Field(50, ge=1)
@@ -59,11 +74,11 @@ class BirthdayCongratulationRequest(BaseModel):
     message_template_default: str = "С Днем Рождения, {name}!"
     message_template_male: Optional[str] = None
     message_template_female: Optional[str] = None
-    filters: ActionFilters = Field(default_factory=ActionFilters, description="Применить стандартные фильтры к списку именинников.")
-    only_new_dialogs: bool = Field(False, description="Поздравлять только тех, с кем еще не было переписки.")
-    only_unread: bool = Field(False, description="Поздравлять только тех, у кого есть непрочитанные сообщения от вас.")
+    filters: ActionFilters = Field(default_factory=ActionFilters)
+    only_new_dialogs: bool = Field(False)
+    only_unread: bool = Field(False)
+    humanized_sending: HumanizedSendingConfig = Field(default_factory=HumanizedSendingConfig)
 
-# --- Для динамической конфигурации UI ---
 class TaskField(BaseModel):
     name: str
     type: Literal["slider", "switch", "text"]
@@ -76,3 +91,34 @@ class TaskConfigResponse(BaseModel):
     display_name: str
     has_filters: bool
     fields: List[TaskField]
+
+class DaySchedule(BaseModel):
+    """Схема для расписания на один день."""
+    is_active: bool = True
+    start_time: str = Field("09:00", description="Время начала в формате HH:MM")
+    end_time: str = Field("23:00", description="Время окончания в формате HH:MM")
+
+    @field_validator('start_time', 'end_time')
+    @classmethod
+    def validate_time_format(cls, v: str) -> str:
+        if not re.match(r'^(?:[01]\d|2[0-3]):[0-5]\d$', v):
+            raise ValueError('Неверный формат времени. Ожидается HH:MM')
+        return v
+    
+    @model_validator(mode='after')
+    def check_times_logic(self) -> 'DaySchedule':
+        start = self.start_time
+        end = self.end_time
+        if start >= end:
+            raise ValueError('Время начала должно быть раньше времени окончания')
+        return self
+
+class EternalOnlineRequest(BaseModel):
+    """
+    ФИНАЛЬНАЯ ВЕРСИЯ: Отдельная, полноценная модель для задачи "Статус 'Онлайн'".
+    """
+    mode: Literal["schedule", "always"] = "schedule"
+    humanize: bool = True
+    schedule_weekly: Dict[Literal["1", "2", "3", "4", "5", "6", "7"], DaySchedule] = Field(
+        default_factory=dict
+    )
