@@ -95,3 +95,60 @@ async def test_batch_schedule_posts(async_client: AsyncClient, db_session: Async
         await vk_api_client._make_request("wall.delete", params={"post_id": vk_id})
         await asyncio.sleep(1)
     print("[CLEANUP] ✓ Тестовые посты удалены.")
+
+async def test_schedule_post_with_text_and_url_image(async_client: AsyncClient, db_session: AsyncSession, authorized_user_and_headers: tuple, vk_api_client: VKAPI):
+    """
+    Тестирует более сложный случай: планирование поста, у которого есть
+    и текст, и картинка, загружаемая по URL.
+    """
+    print("\n--- Тестирование контента: Пост с текстом и картинкой по URL ---")
+    user, headers = authorized_user_and_headers
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    post_payload = {
+        "posts": [{
+            "post_text": f"🤖 Тестовый пост с текстом и картинкой. {int(now.timestamp())}",
+            # Стабильный URL картинки
+            "image_url": "https://i.ytimg.com/vi/vEYsdh6uiS4/maxresdefault.jpg",
+            "publish_at": (now + datetime.timedelta(seconds=20)).isoformat()
+        }]
+    }
+
+    create_resp = await async_client.post("/api/v1/posts/schedule-batch", headers=headers, json=post_payload)
+    assert create_resp.status_code == 201
+    created_post_id = create_resp.json()[0]['id']
+    print(f"[ACTION] ✓ Запланирован пост с текстом и картинкой (ID: {created_post_id}).")
+
+    # Ждем выполнения отложенной задачи
+    await run_worker_for_duration(30)
+
+    db_session.expire_all()
+    published_post = await db_session.get(ScheduledPost, created_post_id)
+    assert published_post is not None and published_post.status.value == "published"
+    print(f"✓ Пост успешно опубликован! Ссылка: https://vk.com/wall{user.vk_id}_{published_post.vk_post_id}")
+    
+    print("[CLEANUP] Удаление тестового поста...")
+    await vk_api_client._make_request("wall.delete", params={"post_id": published_post.vk_post_id})
+    print("[CLEANUP] ✓ Пост удален.")
+
+
+async def test_schedule_post_with_invalid_image_url(async_client: AsyncClient, headers: dict):
+    """
+    Проверяет, как система отреагирует на попытку запланировать пост
+    с нерабочей ссылкой на изображение. Она не должна падать.
+    """
+    print("\n--- Тестирование контента: Неудачное планирование с битой ссылкой ---")
+    now = datetime.datetime.now(datetime.timezone.utc)
+    post_payload = {
+        "posts": [{
+            "post_text": "Этот пост не должен быть создан",
+            "image_url": "https://example.com/not-an-image.txt",
+            "publish_at": (now + datetime.timedelta(seconds=20)).isoformat()
+        }]
+    }
+    
+    response = await async_client.post("/api/v1/posts/schedule-batch", headers=headers, json=post_payload)
+    # Ожидаем ошибку, так как из всего пакета не удалось создать ни одного поста
+    assert response.status_code == 400
+    assert "Не удалось создать ни одного поста из пакета" in response.text
+    print("✓ Система корректно обработала битую ссылку и не создала пост.")

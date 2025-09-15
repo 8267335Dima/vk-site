@@ -15,7 +15,7 @@ from app.api.endpoints import (
     auth_router, users_router, proxies_router, tasks_router,
     stats_router, automations_router, billing_router, analytics_router,
     scenarios_router, notifications_router, posts_router, teams_router,
-    websockets_router
+    websockets_router, support_router
 )
 
 # Вызываем настройку логирования в самом начале
@@ -79,6 +79,7 @@ app.include_router(stats_router, prefix=f"{api_prefix}/stats", tags=["Statistics
 app.include_router(automations_router, prefix=f"{api_prefix}/automations", tags=["Automations"])
 app.include_router(billing_router, prefix=f"{api_prefix}/billing", tags=["Billing"])
 app.include_router(analytics_router, prefix=f"{api_prefix}/analytics", tags=["Analytics"])
+app.include_router(support_router, prefix=f"{api_prefix}/support", tags=["Support"])
 app.include_router(scenarios_router, prefix=f"{api_prefix}/scenarios", tags=["Scenarios"])
 app.include_router(notifications_router, prefix=f"{api_prefix}/notifications", tags=["Notifications"])
 app.include_router(posts_router, prefix=f"{api_prefix}/posts", tags=["Posts"])

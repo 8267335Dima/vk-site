@@ -9,8 +9,7 @@ from asgi_lifespan import LifespanManager
 from sqlalchemy import select
 from typing import AsyncGenerator
 
-# ИСПРАВЛЕНИЕ ЗДЕСЬ: импортируем 'api' и даем ему псевдоним 'app'
-from app.main import api as app 
+from app.main import app
 from app.db.session import get_db, AsyncSessionFactory
 from app.api.dependencies import limiter
 from app.db.models import User

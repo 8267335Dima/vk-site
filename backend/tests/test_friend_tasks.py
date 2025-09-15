@@ -97,3 +97,45 @@ async def test_task_birthday_congratulation(async_client: AsyncClient, db_sessio
     user, headers = authorized_user_and_headers
     payload = {"message_template_default": "С Днем Рождения, {name}! (Автотест)"}
     await run_and_verify_task(async_client, db_session, headers, "birthday_congratulation", payload, user.id)
+
+
+async def test_add_friends_with_impossible_filters(async_client: AsyncClient, db_session: AsyncSession, authorized_user_and_headers: tuple):
+    """
+    Проверяет, что задача корректно завершается со статусом SUCCESS,
+    даже если по очень строгим фильтрам не найдено ни одного кандидата.
+    """
+    print("\n--- Тестирование задачи: 'Добавить друзей' (с невыполнимыми фильтрами) ---")
+    user, headers = authorized_user_and_headers
+    
+    payload = {
+        "count": 5, 
+        "filters": {
+            "allow_closed_profiles": True,
+            "city": "ГородКоторогоНетВПрироде12345", # Заведомо невыполнимый фильтр
+            "is_online": True
+        }
+    }
+    task_result = await run_and_verify_task(async_client, db_session, headers, "add_recommended", payload, user.id)
+    
+    assert "Рекомендации не найдены" in task_result.result or "После фильтрации осталось: 0" in task_result.result
+    print("✓ Задача корректно отработала ситуацию, когда кандидаты не найдены.")
+
+@pytest.mark.skip(reason="Опасно! Отправляет реальное личное сообщение. Включать для ручной проверки.")
+async def test_add_friend_with_welcome_message(async_client: AsyncClient, db_session: AsyncSession, authorized_user_and_headers: tuple):
+    """
+    Тестирует одну из ключевых функций: отправку приветственного сообщения при добавлении в друзья.
+    """
+    print("\n--- Тестирование сценария: 'Добавить в друзья с приветственным сообщением' ---")
+    user, headers = authorized_user_and_headers
+    
+    payload = {
+        "count": 1,
+        "filters": {"allow_closed_profiles": False}, # Ищем открытые профили, чтобы сообщение точно дошло
+        "send_message_on_add": True,
+        "message_text": "Привет, {name}! Увидел тебя в рекомендациях, решил добавиться. (Это сообщение отправлено авто-тестом)."
+    }
+    
+    task_result = await run_and_verify_task(async_client, db_session, headers, "add_recommended", payload, user.id)
+
+    assert "Отправлена заявка" in task_result.result and "с сообщением" in task_result.result
+    print("✓ В логах задачи есть подтверждение отправки заявки с сообщением.")
