@@ -1,8 +1,9 @@
+# docker-compose.yml (Финальная версия для локальной разработки)
+
 services:
   postgres:
     image: postgres:16-alpine
     container_name: social_pilot_postgres_local_dev
-    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ: Указываем путь к .env в корне ---
     env_file: ./.env
     ports:
       - "5432:5432"
@@ -18,7 +19,6 @@ services:
   redis:
     image: redis:7-alpine
     container_name: social_pilot_redis_local_dev
-    # Redis не использует переменные из .env, но для консистентности можно оставить
     ports:
       - "6379:6379"
     volumes:
@@ -29,6 +29,25 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # Сервис для ARQ Worker, работающий с вашим локальным кодом
+  worker:
+    image: python:3.11-slim
+    container_name: social_pilot_worker_local_dev
+    command: >
+      sh -c "pip install poetry && 
+             poetry config virtualenvs.create false && 
+             poetry install --no-root && 
+             arq --watch . app.worker.WorkerSettings"
+    volumes:
+      - ./backend:/app/backend
+    working_dir: /app/backend
+    env_file:
+      - ./.env
+    restart: always
+    depends_on:
+      redis:
+        condition: service_healthy
 
 volumes:
   postgres_data_dev: {}

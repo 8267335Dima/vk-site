@@ -19,8 +19,6 @@ class Settings(BaseSettings):
     REDIS_PORT: int
 
     VK_HEALTH_CHECK_TOKEN: Optional[str] = None
-    VK_TEST_USER_ID: Optional[str] = None
-    VK_TEST_FRIEND_ID: Optional[str] = None
 
     @property
     def database_url(self) -> str:

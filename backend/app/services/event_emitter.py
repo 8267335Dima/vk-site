@@ -92,3 +92,41 @@ class SystemLogEmitter:
              new_notification = Notification(user_id=self.user_id, message=message, level=level)
              db.add(new_notification)
              # коммит будет выполнен в вызывающей функции
+
+class SystemLogEmitter:
+    """
+    Эмиттер-заглушка для фоновых задач (cron), который выводит логи в structlog,
+    а не отправляет их пользователю через Redis.
+    Он полностью имитирует интерфейс RedisEventEmitter для совместимости.
+    """
+    def __init__(self, task_name: str):
+        # Создаем логгер с именем задачи
+        self.log = structlog.get_logger(task_name)
+        self.user_id = None
+        self.task_history_id = None # Для совместимости интерфейса
+
+    def set_context(self, user_id: int, task_history_id: int | None = None):
+        # Привязываем ID пользователя к логам для удобства фильтрации и отладки
+        self.user_id = user_id
+        self.log = self.log.bind(user_id=user_id)
+
+    async def send_log(self, message: str, status: LogLevel, target_url: str | None = None):
+        # Преобразуем статусы в уровни логирования structlog
+        log_method = getattr(self.log, status, self.log.info)
+        log_method(message, url=target_url, status_from_emitter=status)
+
+    async def send_stats_update(self, stats_dict: Dict[str, Any]):
+        # Обновления статистики для UI не нужны в фоновых задачах, просто игнорируем
+        pass
+
+    async def send_task_status_update(self, *args, **kwargs):
+        # Обновления статуса задачи для UI не нужны, игнорируем
+        pass
+
+    async def send_system_notification(self, db: AsyncSession, message: str, level: LogLevel):
+        # Системные уведомления от фоновых задач также создаем в БД
+        if self.user_id:
+             new_notification = Notification(user_id=self.user_id, message=message, level=level)
+             db.add(new_notification)
+             # Коммит будет выполнен в вызывающей функции (в сервисе)
+             self.log.info("system_notification.created", message=message, level=level)

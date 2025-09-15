@@ -43,6 +43,7 @@ async def get_my_team(
 ):
     manager, team = manager_and_team
     
+    # --- ШАГ 1: Загружаем все необходимые данные из НАШЕЙ БД одним запросом ---
     stmt = (
         select(Team)
         .options(
@@ -59,17 +60,18 @@ async def get_my_team(
         .where(ManagedProfile.manager_user_id == manager.id)
     )).scalars().all()
     
-    all_profiles_map = {mp.profile_user_id: mp.profile for mp in managed_profiles_db}
-    
-    # --- РЕШЕНИЕ ПРОБЛЕМЫ N+1 ---
-    # 1. Собираем все уникальные VK ID, информацию о которых нужно запросить
+    # --- ШАГ 2: Собираем ВСЕ уникальные VK ID, которые нужно обогатить данными из VK ---
     all_vk_ids_to_fetch = set()
+    # Добавляем VK ID всех участников команды
     for member in team_details.members:
         all_vk_ids_to_fetch.add(member.user.vk_id)
-    for profile in all_profiles_map.values():
-        all_vk_ids_to_fetch.add(profile.vk_id)
+    # Добавляем VK ID всех управляемых профилей
+    for mp in managed_profiles_db:
+        all_vk_ids_to_fetch.add(mp.profile.vk_id)
+    # Добавляем VK ID самого менеджера
+    all_vk_ids_to_fetch.add(manager.vk_id)
 
-    # 2. Делаем один-единственный пакетный запрос к VK API
+    # --- ШАГ 3: Делаем ОДИН пакетный запрос к VK API ---
     vk_info_map = {}
     if all_vk_ids_to_fetch:
         vk_api = VKAPI(decrypt_data(manager.encrypted_vk_token))
@@ -78,7 +80,7 @@ async def get_my_team(
         if user_infos:
             vk_info_map = {info['id']: info for info in user_infos}
 
-    # 3. Собираем ответ, используя предзагруженные данные из vk_info_map
+    # --- ШАГ 4: Собираем ответ, используя предзагруженные данные ---
     members_response = []
     for member in team_details.members:
         member_vk_info = vk_info_map.get(member.user.vk_id, {})
@@ -86,7 +88,10 @@ async def get_my_team(
         accesses = []
         member_access_map = {pa.profile_user_id for pa in member.profile_accesses}
         
-        for profile in all_profiles_map.values():
+        # Собираем все профили, к которым может быть доступ
+        all_available_profiles = [mp.profile for mp in managed_profiles_db]
+        
+        for profile in all_available_profiles:
             profile_vk_info = vk_info_map.get(profile.vk_id, {})
             accesses.append(TeamMemberAccess(
                 profile=ProfileInfo(
