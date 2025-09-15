@@ -12,6 +12,7 @@ from app.db.session import AsyncSessionFactory
 from app.db.models import (
     DailyStats, WeeklyStats, MonthlyStats, Automation, TaskHistory, User, Notification, FriendRequestLog, FriendRequestStatus
 )
+from app.services.event_emitter import SystemLogEmitter
 from app.services.vk_api import VKAPI, VKAuthError
 from app.core.security import decrypt_data
 from app.services.analytics_service import AnalyticsService
@@ -196,19 +197,24 @@ async def _update_friend_request_statuses_async():
         await session.commit()
 
 async def _generate_all_heatmaps_async():
-    # ... (логика без изменений)
     async with AsyncSessionFactory() as session:
-        now = datetime.datetime.now(pytz.utc)
+        now = datetime.datetime.utcnow()
         stmt = select(User).where(
             User.plan.in_(['Plus', 'PRO', 'Agency']),
             or_(User.plan_expires_at.is_(None), User.plan_expires_at > now)
         )
         users = (await session.execute(stmt)).scalars().all()
-        if not users: return
+        if not users:
+            log.info("heatmap_generator.no_active_users")
+            return
+
         log.info("heatmap_generator.start", users_count=len(users))
         for user in users:
             try:
-                service = AnalyticsService(db=session, user=user, emitter=None)
+                # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
+                emitter = SystemLogEmitter(task_name="heatmap_generator", user_id=user.id)
+                service = AnalyticsService(db=session, user=user, emitter=emitter)
+                # -------------------------
                 await service.generate_post_activity_heatmap()
             except Exception as e:
                 log.error("heatmap_generator.user_error", user_id=user.id, error=str(e))

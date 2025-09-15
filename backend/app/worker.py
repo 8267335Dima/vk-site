@@ -47,25 +47,30 @@ functions = [
     run_scenario_from_scheduler_task,
 ]
 
+# --- ИЗМЕНЕНИЯ ЗДЕСЬ: Исправлен синтаксис для ARQ cron ---
 cron_jobs = [
     cron(aggregate_daily_stats_job, hour=2, minute=5),
     cron(snapshot_all_users_metrics_job, hour=3),
     cron(clear_old_task_history_job, hour=4),
-    cron(update_friend_request_statuses_job, hour='*/4'), # каждые 4 часа
+    # "Каждые 4 часа" -> {0, 4, 8, 12, 16, 20}
+    cron(update_friend_request_statuses_job, hour={0, 4, 8, 12, 16, 20}, minute=0),
     cron(generate_all_heatmaps_job, hour=5),
-    cron(check_expired_plans_job, minute='*/15'), # каждые 15 минут
-    cron(run_standard_automations_job, minute='*/5'), # каждые 5 минут
-    cron(run_online_automations_job, minute='*/10'), # каждые 10 минут
+    # "Каждые 15 минут" -> {0, 15, 30, 45}
+    cron(check_expired_plans_job, minute={0, 15, 30, 45}),
+    # "Каждые 5 минут" -> {0, 5, 10, ...}
+    cron(run_standard_automations_job, minute=set(range(0, 60, 5))),
+    # "Каждые 10 минут" -> {0, 10, 20, ...}
+    cron(run_online_automations_job, minute={0, 10, 20, 30, 40, 50}),
 ]
+# ----------------------------------------------------
 
-# Улучшение: передаем пул соединений Redis через контекст,
-# чтобы не создавать его в каждой задаче заново.
 async def startup(ctx):
     print("Воркер ARQ запущен и готов к работе.")
     ctx['redis_pool'] = await create_pool(redis_settings)
 
 async def shutdown(ctx):
-    await ctx['redis_pool'].close()
+    if 'redis_pool' in ctx:
+        await ctx['redis_pool'].close()
     print("Воркер ARQ остановлен.")
 
 class WorkerSettings:

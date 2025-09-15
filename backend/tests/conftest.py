@@ -8,7 +8,8 @@ from httpx import AsyncClient, ASGITransport
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from asgi_lifespan import LifespanManager
-from app.celery_app import celery_app
+
+
 from app.db.models import User
 from app.db.session import get_db, AsyncSessionFactory
 from app.main import app
