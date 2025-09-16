@@ -1,3 +1,5 @@
+# backend/app/services/vk_api/users.py
+
 from typing import Optional, Any
 from .base import BaseVKSection
 
@@ -7,6 +9,9 @@ class UsersAPI(BaseVKSection):
         if user_ids:
             params['user_ids'] = user_ids
         response = await self._make_request("users.get", params=params)
+        
         if response and isinstance(response, list):
-            return response[0] if user_ids is None and len(response) == 1 else response
+            return response
+
+            
         return None

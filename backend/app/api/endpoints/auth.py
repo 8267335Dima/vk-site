@@ -62,7 +62,7 @@ async def login_via_vk(
             daily_likes_limit=base_plan_limits["daily_likes_limit"],
             daily_add_friends_limit=base_plan_limits["daily_add_friends_limit"],
             daily_message_limit=base_plan_limits["daily_message_limit"], # <--- ДОБАВЛЕНО
-            daily_posts_limit=base_plan_limits["daily_posts_limit"]     # <--- ДОБАВЛЕНО
+            daily_posts_limit=base_plan_limits["daily_posts_limit"]   
         )
         db.add(user)
 
@@ -73,9 +73,8 @@ async def login_via_vk(
         user.plan_expires_at = None
         user.daily_likes_limit = admin_limits["daily_likes_limit"]
         user.daily_add_friends_limit = admin_limits["daily_add_friends_limit"]
-        user.daily_message_limit = admin_limits["daily_message_limit"], # <--- ДОБАВЛЕНО
-        user.daily_posts_limit = admin_limits["daily_posts_limit"]     # <--- ДОБАВЛЕНО
-
+        user.daily_message_limit = admin_limits["daily_message_limit"]
+        user.daily_posts_limit = admin_limits["daily_posts_limit"]     
 
     await db.flush()
     await db.refresh(user)
@@ -117,10 +116,14 @@ async def switch_profile(
     manager: User = Depends(get_current_manager_user),
     db: AsyncSession = Depends(get_db)
 ) -> EnrichedTokenResponse:
+
     
+    # Загружаем связи "менеджер -> управляемый профиль"
     await db.refresh(manager, attribute_names=["managed_profiles"])
     
+    # Собираем все ID профилей, к которым у менеджера есть прямой доступ
     allowed_profile_ids = {p.profile_user_id for p in manager.managed_profiles}
+    # Менеджер всегда имеет доступ к своему собственному профилю
     allowed_profile_ids.add(manager.id)
 
     if request_data.profile_id not in allowed_profile_ids:

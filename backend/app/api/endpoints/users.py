@@ -55,16 +55,20 @@ async def read_users_me(current_user: User = Depends(get_current_active_profile)
     vk_api = VKAPI(access_token=vk_token)
     
     try:
-        user_info_vk_list = await vk_api.get_user_info(fields="photo_200,status,counters")
-        user_info_vk = user_info_vk_list[0] if user_info_vk_list else {}
+        user_info_vk_list = await vk_api.users.get(fields="photo_200,status,counters")
     except VKAPIError as e:
          raise HTTPException(
              status_code=status.HTTP_424_FAILED_DEPENDENCY, 
              detail=f"Ошибка VK API: {e.message}"
         )
+    finally:
+        await vk_api.close()
 
-    if not user_info_vk:
+    if not user_info_vk_list or not isinstance(user_info_vk_list, list):
         raise HTTPException(status_code=404, detail="Не удалось получить информацию из VK.")
+    
+    user_info_vk = user_info_vk_list[0]
+
 
     is_plan_active = True
     plan_name = current_user.plan
@@ -74,6 +78,7 @@ async def read_users_me(current_user: User = Depends(get_current_active_profile)
 
     features = get_features_for_plan(plan_name)
     
+    # Теперь user_info_vk - это словарь, и распаковка пройдет успешно
     return {
         **user_info_vk,
         "id": current_user.id,
@@ -85,7 +90,6 @@ async def read_users_me(current_user: User = Depends(get_current_active_profile)
         "is_plan_active": is_plan_active,
         "available_features": features,
     }
-
 @router.get("/me/limits", response_model=DailyLimitsResponse)
 async def get_daily_limits(
     current_user: User = Depends(get_current_active_profile),
@@ -113,6 +117,7 @@ async def update_user_delay_profile(
     current_user.delay_profile = request_data.delay_profile
     await db.commit()
     await db.refresh(current_user)
+    # Переиспользуем эндпоинт, чтобы не дублировать логику
     return await read_users_me(current_user)
 
 @router.get("/task-info", response_model=TaskInfoResponse)
@@ -126,19 +131,20 @@ async def get_task_info(
 
     try:
         if task_key == "accept_friends":
-            response = await vk_api.get_incoming_friend_requests()
+            response = await vk_api.friends.getRequests() # Метод VK API для заявок
             count = response.get("count", 0) if response else 0
         
         elif task_key == "remove_friends":
-            user_info_list = await vk_api.get_user_info(user_ids=str(current_user.vk_id), fields="counters")
+            # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+            user_info_list = await vk_api.users.get(user_ids=str(current_user.vk_id), fields="counters")
             if user_info_list:
                 user_info = user_info_list[0]
                 count = user_info.get("counters", {}).get("friends", 0)
-
     except VKAPIError as e:
-        # Логируем ошибку, но не прерываем работу, возвращаем 0
         print(f"Could not fetch task info for {task_key} due to VK API error: {e}")
         count = 0
+    finally:
+        await vk_api.close()
 
     return TaskInfoResponse(count=count)
 
@@ -220,9 +226,13 @@ async def get_managed_profiles(
     vk_info_map = {}
     if all_vk_ids:
         vk_api = VKAPI(decrypt_data(manager.encrypted_vk_token))
-        user_infos = await vk_api.get_user_info(user_ids=",".join(map(str, all_vk_ids)), fields="photo_50")
-        if user_infos:
-            vk_info_map = {info['id']: info for info in user_infos}
+        try:
+            # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+            user_infos = await vk_api.users.get(user_ids=",".join(map(str, all_vk_ids)), fields="photo_50")
+            if user_infos:
+                vk_info_map = {info['id']: info for info in user_infos}
+        finally:
+            await vk_api.close()
 
     profiles_info = []
     for user in all_users_map.values():

@@ -1,4 +1,4 @@
-# --- backend/app/api/endpoints/analytics.py ---
+# backend/app/api/endpoints/analytics.py
 import datetime
 from fastapi import APIRouter, Depends, Query
 from fastapi_cache.decorator import cache
@@ -21,30 +21,36 @@ router = APIRouter()
 
 
 @router.get("/audience", response_model=AudienceAnalyticsResponse)
-@cache(expire=21600) # Кэширование на 6 часов
+@cache(expire=21600)
 async def get_audience_analytics(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    """Возвращает аналитику по аудитории, используя сервисный слой."""
-    # Эмиттер здесь не будет ничего отправлять, он нужен только для инициализации сервиса
     emitter = SystemLogEmitter(task_name="analytics_endpoint") 
     service = AnalyticsService(db=db, user=current_user, emitter=emitter)
-    return await service.get_audience_distribution()
+    # Используем try-finally для гарантированного закрытия сессии
+    try:
+        return await service.get_audience_distribution()
+    finally:
+        if service.vk_api:
+            await service.vk_api.close()
 
 
 @router.get("/profile-summary", response_model=ProfileSummaryResponse)
-@cache(expire=3600) # Кэширование на 1 час
+@cache(expire=3600)
 async def get_profile_summary(current_user: User = Depends(get_current_active_profile)):
-    """Возвращает сводную информацию о профиле (кол-во друзей, фото и т.д.)."""
     vk_token = decrypt_data(current_user.encrypted_vk_token)
     vk_api = VKAPI(access_token=vk_token)
     
-    user_info_list = await vk_api.get_user_info(user_ids=str(current_user.vk_id), fields="counters")
-    user_info = user_info_list[0] if user_info_list else {}
-    
-    counters = user_info.get('counters', {})
-    wall_info = await vk_api.get_wall(owner_id=current_user.vk_id, count=0)
+    try:
+        # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+        user_info_list = await vk_api.users.get(user_ids=str(current_user.vk_id), fields="counters")
+        user_info = user_info_list[0] if user_info_list else {}
+        
+        counters = user_info.get('counters', {})
+        wall_info = await vk_api.wall.get(owner_id=current_user.vk_id, count=0)
+    finally:
+        await vk_api.close()
     
     return ProfileSummaryResponse(
         friends=counters.get('friends', 0),
@@ -60,7 +66,7 @@ async def get_profile_growth_analytics(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    """Возвращает динамику роста профиля за выбранный период."""
+    # ... (код без изменений)
     end_date = datetime.date.today()
     start_date = end_date - datetime.timedelta(days=days - 1)
 
@@ -91,7 +97,7 @@ async def get_friend_request_conversion_stats(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    """Возвращает статистику конверсии отправленных заявок в друзья."""
+
     stmt = (
         select(FriendRequestLog.status, func.count(FriendRequestLog.id))
         .where(FriendRequestLog.user_id == current_user.id)
@@ -117,7 +123,7 @@ async def get_post_activity_heatmap(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    """Возвращает тепловую карту активности друзей."""
+
     stmt = select(PostActivityHeatmap).where(PostActivityHeatmap.user_id == current_user.id)
     result = await db.execute(stmt)
     heatmap_data = result.scalar_one_or_none()

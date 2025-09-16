@@ -6,6 +6,7 @@
 from .auth import router as auth_router
 from .users import router as users_router
 from .proxies import router as proxies_router
+from .stats import router as stats_router
 from .automations import router as automations_router
 from .billing import router as billing_router
 from .analytics import router as analytics_router

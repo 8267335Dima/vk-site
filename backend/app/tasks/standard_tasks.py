@@ -1,7 +1,11 @@
+# backend/app/tasks/standard_tasks.py
+
 import functools
 import structlog
 from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from contextlib import asynccontextmanager
 
 from app.db.models import User, TaskHistory, Automation
 from app.db.session import AsyncSessionFactory
@@ -13,6 +17,21 @@ from app.tasks.service_maps import TASK_CONFIG_MAP
 
 log = structlog.get_logger(__name__)
 
+# --- НАЧАЛО ИЗМЕНЕНИЙ ---
+
+@asynccontextmanager
+async def get_task_session(provided_session: AsyncSession | None = None):
+    """
+    Контекстный менеджер для получения сессии БД.
+    Если сессия передана извне (как в тестах), использует ее.
+    Иначе, создает новую сессию (как в production).
+    """
+    if provided_session:
+        yield provided_session
+    else:
+        async with AsyncSessionFactory() as session:
+            yield session
+
 def arq_task_runner(func):
     """
     Декоратор, который оборачивает основную логику задачи в стандартный
@@ -20,7 +39,10 @@ def arq_task_runner(func):
     """
     @functools.wraps(func)
     async def wrapper(ctx, task_history_id: int, **kwargs):
-        async with AsyncSessionFactory() as session:
+        # Извлекаем тестовую сессию из kwargs, если она есть
+        db_session_for_test = kwargs.pop("db_session_for_test", None)
+
+        async with get_task_session(db_session_for_test) as session:
             stmt = select(TaskHistory).where(TaskHistory.id == task_history_id).options(
                 selectinload(TaskHistory.user).selectinload(User.proxies)
             )
@@ -35,9 +57,11 @@ def arq_task_runner(func):
 
             try:
                 task_history.status = "STARTED"
-                await session.commit()
+                if not db_session_for_test: # В проде коммитим сразу
+                    await session.commit()
                 await emitter.send_task_status_update(status="STARTED", task_name=task_history.task_name, created_at=task_history.created_at)
 
+                # Передаем сессию в основную функцию
                 await func(session, task_history.user, task_history.parameters or {}, emitter)
 
                 task_history.status = "SUCCESS"
@@ -68,8 +92,8 @@ def arq_task_runner(func):
                 await emitter.send_system_notification(session, "Произошла внутренняя ошибка сервера при выполнении задачи.", "error")
             
             finally:
-                await session.merge(task_history)
-                await session.commit()
+                if not db_session_for_test: # В проде коммитим в конце
+                    await session.commit()
                 await emitter.send_task_status_update(status=task_history.status, result=task_history.result, task_name=task_history.task_name, created_at=task_history.created_at)
     return wrapper
 

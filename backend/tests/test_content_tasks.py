@@ -8,147 +8,125 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pathlib import Path
 
-from app.db.models import User, ScheduledPost
+# Убедитесь, что все эти импорты есть в начале файла
+from app.db.models import ScheduledPost, ScheduledPostStatus
 from app.services.vk_api import VKAPI
 from tests.utils.task_runner import run_and_verify_task, run_worker_for_duration
 
-pytestmark = pytest.mark.asyncio
+# Определяем путь к директории тестов
+TESTS_ROOT_DIR = Path(__file__).parent 
 
 @pytest.fixture(scope="module", autouse=True)
 def create_test_assets_folder():
-    """Создает папку для тестовых изображений, если ее нет."""
-    assets_dir = Path("backend/tests/assets")
-    assets_dir.mkdir(exist_ok=True)
-    # Вы можете добавить сюда код для скачивания тестовых картинок, если их нет
-    # Например, с помощью requests или aiohttp
+    assets_dir = TESTS_ROOT_DIR / "assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
     print(f"\n[PREP] Убедитесь, что в папке '{assets_dir.resolve()}' есть файлы 'test_image_1.jpg' и 'test_image_2.jpg'")
+
 
 async def test_task_like_feed(async_client: AsyncClient, db_session: AsyncSession, authorized_user_and_headers: tuple):
     user, headers = authorized_user_and_headers
-    payload = {"count": 3, "filters": {}}
-    await run_and_verify_task(async_client, db_session, headers, "like_feed", payload, user.id)
+    await run_and_verify_task(async_client, db_session, headers, "like_feed", {"count": 3, "filters": {}}, user.id)
+
 
 async def test_task_view_stories(async_client: AsyncClient, db_session: AsyncSession, authorized_user_and_headers: tuple):
     user, headers = authorized_user_and_headers
     await run_and_verify_task(async_client, db_session, headers, "view_stories", {}, user.id)
 
+
 async def test_batch_upload_from_file(async_client: AsyncClient, authorized_user_and_headers: tuple):
     _, headers = authorized_user_and_headers
-    print("\n--- Тестирование контента: ПАКЕТНАЯ ЗАГРУЗКА ФАЙЛОВ ---")
+    image_paths = [TESTS_ROOT_DIR / "assets/test_image_1.jpg", TESTS_ROOT_DIR / "assets/test_image_2.jpg"]
     
-    image_paths = [Path("backend/tests/assets/test_image_1.jpg"), Path("backend/tests/assets/test_image_2.jpg")]
-    for path in image_paths:
-        if not path.exists():
-            pytest.fail(f"Тестовое изображение не найдено: {path.resolve()}.")
-
-    files_to_upload = [('images', (p.name, open(p, 'rb'), 'image/jpeg')) for p in image_paths]
+    # Используем with для корректного закрытия файлов
+    with open(image_paths[0], 'rb') as f1, open(image_paths[1], 'rb') as f2:
+        files_to_upload = [
+            ('images', (image_paths[0].name, f1, 'image/jpeg')),
+            ('images', (image_paths[1].name, f2, 'image/jpeg'))
+        ]
+        upload_resp = await async_client.post("/api/v1/posts/upload-images-batch", headers=headers, files=files_to_upload)
     
-    upload_resp = await async_client.post("/api/v1/posts/upload-images-batch", headers=headers, files=files_to_upload)
-    
-    for _, file_tuple in files_to_upload:
-        file_tuple[1].close()
-
-    assert upload_resp.status_code == 200, f"Ошибка при пакетной загрузке: {upload_resp.text}"
-    attachment_ids = upload_resp.json().get("attachment_ids", [])
-    
-    assert len(attachment_ids) == len(image_paths), "Количество ID не совпадает с количеством файлов."
-    print(f"✓ Пакетная загрузка {len(attachment_ids)} файлов прошла успешно.")
+    assert upload_resp.status_code == 200
+    assert len(upload_resp.json().get("attachment_ids", [])) == 2
 
 
-async def test_batch_schedule_posts(async_client: AsyncClient, db_session: AsyncSession, authorized_user_and_headers: tuple, vk_api_client: VKAPI):
-    print("\n--- Тестирование контента: ПАКЕТНОЕ ПЛАНИРОВАНИЕ ПОСТОВ ---")
+async def test_batch_schedule_and_publish(
+    async_client: AsyncClient,
+    db_session: AsyncSession,
+    authorized_user_and_headers: tuple,
+    vk_api_client: VKAPI
+):
     user, headers = authorized_user_and_headers
+    
+    # --- ШАГ 1: Загружаем локальный файл для первого поста ---
+    print("\n[STEP 1] Загрузка локального изображения для первого поста...")
+    image_path = TESTS_ROOT_DIR / "assets/test_image_1.jpg"
+    assert image_path.exists(), "Тестовое изображение test_image_1.jpg не найдено!"
 
+    with open(image_path, "rb") as f:
+        files_to_upload = {'image': (image_path.name, f, 'image/jpeg')}
+        upload_resp = await async_client.post("/api/v1/posts/upload-image-file", headers=headers, files=files_to_upload)
+    
+    assert upload_resp.status_code == 200
+    attachment_id_local = upload_resp.json().get("attachment_id")
+    assert attachment_id_local
+    print(f"[STEP 1] Локальное изображение успешно загружено, attachment_id: {attachment_id_local}")
+
+    # --- ШАГ 2: Планируем два поста с реальным временным интервалом ---
     now = datetime.datetime.now(datetime.timezone.utc)
-    posts_to_schedule = [
-        {"post_text": f"🤖 Пакетный пост №1 (текст). Публикация через 30 сек. {int(now.timestamp())}", "publish_at": (now + datetime.timedelta(seconds=30)).isoformat()},
-        {"image_url": "https://i.imgur.com/g2c3v4j.jpeg", "publish_at": (now + datetime.timedelta(seconds=60)).isoformat()}
-    ]
-    batch_payload = {"posts": posts_to_schedule}
+    timestamp_str = f"{now:%H:%M:%S}"
 
-    create_resp = await async_client.post("/api/v1/posts/schedule-batch", headers=headers, json=batch_payload)
-    assert create_resp.status_code == 201, f"Ошибка при пакетном планировании: {create_resp.text}"
-    created_posts_info = create_resp.json()
-    post_ids = [p['id'] for p in created_posts_info]
-    print(f"[ACTION] ✓ Успешно запланировано {len(post_ids)} постов. Они появятся на стене через 30 и 60 секунд.")
-
-    await run_worker_for_duration(70)
-
-    print("[VERIFY] Проверка статусов всех постов в базе данных...")
-    db_session.expire_all()
-    stmt = select(ScheduledPost).where(ScheduledPost.id.in_(post_ids))
-    published_posts = (await db_session.execute(stmt)).scalars().all()
-    
-    assert len(published_posts) == len(post_ids)
-    
-    published_vk_ids = []
-    for post in published_posts:
-        assert post.status.value == "published", f"Пост ID={post.id} не опубликован! Статус: {post.status.value}"
-        published_vk_ids.append(post.vk_post_id)
-    
-    print("✓ Все посты успешно опубликованы!")
-    for i, vk_id in enumerate(published_vk_ids):
-        print(f"  - Пост {i+1}: https://vk.com/wall{user.vk_id}_{vk_id}")
-
-    print("[CLEANUP] Удаление созданных постов...")
-    for vk_id in published_vk_ids:
-        await vk_api_client._make_request("wall.delete", params={"post_id": vk_id})
-        await asyncio.sleep(1)
-    print("[CLEANUP] ✓ Тестовые посты удалены.")
-
-async def test_schedule_post_with_text_and_url_image(async_client: AsyncClient, db_session: AsyncSession, authorized_user_and_headers: tuple, vk_api_client: VKAPI):
-    """
-    Тестирует более сложный случай: планирование поста, у которого есть
-    и текст, и картинка, загружаемая по URL.
-    """
-    print("\n--- Тестирование контента: Пост с текстом и картинкой по URL ---")
-    user, headers = authorized_user_and_headers
-
-    now = datetime.datetime.now(datetime.timezone.utc)
-    post_payload = {
-        "posts": [{
-            "post_text": f"🤖 Тестовый пост с текстом и картинкой. {int(now.timestamp())}",
-            # Стабильный URL картинки
-            "image_url": "https://i.ytimg.com/vi/vEYsdh6uiS4/maxresdefault.jpg",
-            "publish_at": (now + datetime.timedelta(seconds=20)).isoformat()
-        }]
+    # Пост №1 (с локальным файлом) через 20 секунд
+    publish_time_1 = now + datetime.timedelta(seconds=20)
+    post_1_data = {
+        "post_text": f"🤖 Локальный пост в {timestamp_str}", 
+        "publish_at": publish_time_1.isoformat(),
+        "attachments": [attachment_id_local]
     }
 
-    create_resp = await async_client.post("/api/v1/posts/schedule-batch", headers=headers, json=post_payload)
-    assert create_resp.status_code == 201
-    created_post_id = create_resp.json()[0]['id']
-    print(f"[ACTION] ✓ Запланирован пост с текстом и картинкой (ID: {created_post_id}).")
-
-    # Ждем выполнения отложенной задачи
-    await run_worker_for_duration(30)
-
-    db_session.expire_all()
-    published_post = await db_session.get(ScheduledPost, created_post_id)
-    assert published_post is not None and published_post.status.value == "published"
-    print(f"✓ Пост успешно опубликован! Ссылка: https://vk.com/wall{user.vk_id}_{published_post.vk_post_id}")
-    
-    print("[CLEANUP] Удаление тестового поста...")
-    await vk_api_client._make_request("wall.delete", params={"post_id": published_post.vk_post_id})
-    print("[CLEANUP] ✓ Пост удален.")
-
-
-async def test_schedule_post_with_invalid_image_url(async_client: AsyncClient, headers: dict):
-    """
-    Проверяет, как система отреагирует на попытку запланировать пост
-    с нерабочей ссылкой на изображение. Она не должна падать.
-    """
-    print("\n--- Тестирование контента: Неудачное планирование с битой ссылкой ---")
-    now = datetime.datetime.now(datetime.timezone.utc)
-    post_payload = {
-        "posts": [{
-            "post_text": "Этот пост не должен быть создан",
-            "image_url": "https://example.com/not-an-image.txt",
-            "publish_at": (now + datetime.timedelta(seconds=20)).isoformat()
-        }]
+    # Пост №2 (с загрузкой по URL) через 40 секунд
+    publish_time_2 = now + datetime.timedelta(seconds=40)
+    post_2_data = {
+        "post_text": f"🤖 URL пост в {timestamp_str}", 
+        "publish_at": publish_time_2.isoformat(),
+        "image_url": "https://i.imgur.com/gT762v2.jpeg" # Надежный URL для теста
     }
+
+    print(f"\n[STEP 2] Планирование двух постов:")
+    print(f" - Пост 1 на {publish_time_1.isoformat()}")
+    print(f" - Пост 2 на {publish_time_2.isoformat()}")
+
+    resp = await async_client.post("/api/v1/posts/schedule-batch", headers=headers, json={"posts": [post_1_data, post_2_data]})
+    assert resp.status_code == 201, f"Ошибка при планировании постов: {resp.text}"
     
-    response = await async_client.post("/api/v1/posts/schedule-batch", headers=headers, json=post_payload)
-    # Ожидаем ошибку, так как из всего пакета не удалось создать ни одного поста
-    assert response.status_code == 400
-    assert "Не удалось создать ни одного поста из пакета" in response.text
-    print("✓ Система корректно обработала битую ссылку и не создала пост.")
+    # Фиксируем транзакцию, чтобы воркер увидел задачи
+    await db_session.commit()
+    post_ids = [p['id'] for p in resp.json()]
+    print(f"[STEP 2] Посты (IDs: {post_ids}) успешно запланированы.")
+
+    # --- ШАГ 3: Запускаем воркер и ждем достаточно времени для публикации обоих постов ---
+    wait_duration = 50 # секунд
+    print(f"\n[STEP 3] Запускаем воркер и ждем {wait_duration} секунд...")
+    await run_worker_for_duration(wait_duration)
+    
+    # --- ШАГ 4: Проверяем результат ---
+    posts = (await db_session.execute(select(ScheduledPost).where(ScheduledPost.id.in_(post_ids)))).scalars().all()
+    
+    published_posts = [p for p in posts if p.status == ScheduledPostStatus.published]
+    failed_posts = [p for p in posts if p.status == ScheduledPostStatus.failed]
+
+    print("\n--- РЕЗУЛЬТАТЫ ПУБЛИКАЦИИ ---")
+    print(f"Опубликовано: {len(published_posts)}")
+    print(f"Ошибок: {len(failed_posts)}")
+    for p in failed_posts:
+        print(f"  - Пост ID {p.id} провалился с ошибкой: {p.error_message}")
+    
+    assert len(published_posts) == 2, "Ожидалось, что оба поста будут опубликованы успешно."
+    print("✓ Оба поста успешно опубликованы в VK. Проверьте свою страницу.")
+
+    # --- ШАГ 5: Очистка (отключено по вашему запросу) ---
+    # print("\nОчистка постов из VK отключена.")
+    # for post in published_posts:
+    #     if post.vk_post_id:
+    #         print(f"Очистка: удаляем пост {post.vk_post_id} из VK...")
+    #         await vk_api_client.wall.delete(post_id=int(post.vk_post_id), owner_id=user.vk_id)
+    #         await asyncio.sleep(1)

@@ -7,7 +7,10 @@ from redis.asyncio import Redis
 from sqlalchemy import select, or_
 from sqlalchemy.orm import selectinload
 
+# --- ИСПРАВЛЕНИЕ: Добавляем недостающий импорт ---
 from app.core.config import settings
+# -----------------------------------------------
+
 from app.db.session import AsyncSessionFactory
 from app.db.models import Automation, TaskHistory, User
 from app.core.config_loader import AUTOMATIONS_CONFIG
@@ -84,10 +87,10 @@ async def _run_daily_automations_async(automation_group: str):
 
             for automation in automations:
                 if automation.automation_type == 'eternal_online':
-                    settings = automation.settings or {}
-                    if settings.get('mode', 'schedule') == 'schedule':
+                    automation_settings = automation.settings or {} # Используем другую переменную, чтобы не конфликтовать с глобальным `settings`
+                    if automation_settings.get('mode', 'schedule') == 'schedule':
                         day_key = str(now_moscow.isoweekday())
-                        day_schedule = settings.get('schedule_weekly', {}).get(day_key)
+                        day_schedule = automation_settings.get('schedule_weekly', {}).get(day_key)
 
                         if not day_schedule or not day_schedule.get('is_active'):
                             continue
@@ -98,7 +101,7 @@ async def _run_daily_automations_async(automation_group: str):
                             
                             if not (start <= now_moscow.time() <= end):
                                 continue
-                            if settings.get('humanize', True) and random.random() < CronSettings.HUMANIZE_ONLINE_SKIP_CHANCE:
+                            if automation_settings.get('humanize', True) and random.random() < CronSettings.HUMANIZE_ONLINE_SKIP_CHANCE:
                                 log.info("eternal_online.humanizer_skip", user_id=automation.user_id)
                                 continue
                         except (ValueError, TypeError):

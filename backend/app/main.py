@@ -5,6 +5,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from redis.asyncio import Redis as AsyncRedis
+# --- ИЗМЕНЕНИЕ: Импортируем необходимое для ARQ ---
+from arq.connections import create_pool, ArqRedis
+from app.arq_config import redis_settings
+# --------------------------------------------------
 
 from app.core.config import settings
 from app.core.logging import configure_logging
@@ -27,7 +31,14 @@ async def run_redis_listener(redis_client):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # --- НАЧАЛО ИЗМЕНЕНИЙ ---
     # Код, который выполнится при старте приложения
+    
+    # Пул для постановки задач в очередь ARQ из API
+    arq_pool = await create_pool(redis_settings)
+    app.state.arq_pool = arq_pool
+    
+    # Клиент для WebSocket
     redis_client = AsyncRedis.from_url(
         f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/1", 
         decode_responses=True
@@ -46,6 +57,10 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass # Ожидаемое исключение при отмене
     await redis_client.close()
+    
+    # Закрываем пул ARQ
+    await arq_pool.close()
+    # --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
 
 # --- ВАЖНО: Вот тот самый объект 'app', который мы пытаемся импортировать ---

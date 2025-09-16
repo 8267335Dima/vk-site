@@ -5,7 +5,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from app.db.models import Proxy
 
-pytestmark = pytest.mark.asyncio
 
 # Пример РАБОЧЕГО прокси. Замените на свой для теста.
 # Если нет рабочего, тест проверки пропустится.

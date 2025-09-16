@@ -1,13 +1,13 @@
 # backend/app/api/dependencies.py
 from typing import Annotated, Dict, Any
+from arq import ArqRedis
 from fastapi import Depends, HTTPException, Request, status, Query
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from pydantic import ValidationError
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_ 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload, aliased
-from arq.connections import ArqRedis
+from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.db.models import User, ManagedProfile, TeamMember, TeamProfileAccess
@@ -47,7 +47,7 @@ async def _get_payload_from_string(token: str) -> Dict[str, Any]:
         return payload
     except (JWTError, ValidationError):
         raise credentials_exception
-
+    
 async def get_current_manager_user(
     payload: Dict[str, Any] = Depends(get_token_payload),
     db: AsyncSession = Depends(get_db)
@@ -62,40 +62,34 @@ async def get_current_manager_user(
         raise credentials_exception
     return manager
 
+# --- ИСПРАВЛЕННАЯ ЛОГИКА ---
 async def get_current_active_profile(
     payload: Dict[str, Any] = Depends(get_token_payload),
     db: AsyncSession = Depends(get_db)
 ) -> User:
-    logged_in_user_id = int(payload.get("sub"))
-    active_profile_id = int(payload.get("profile_id") or logged_in_user_id)
-    
-    tm_alias = aliased(TeamMember)
-    stmt = (
-        select(User)
-        .outerjoin(ManagedProfile, and_(
-            ManagedProfile.manager_user_id == logged_in_user_id,
-            ManagedProfile.profile_user_id == User.id
-        ))
-        .outerjoin(tm_alias, tm_alias.user_id == logged_in_user_id)
-        .outerjoin(TeamProfileAccess, and_(
-            TeamProfileAccess.team_member_id == tm_alias.id,
-            TeamProfileAccess.profile_user_id == User.id
-        ))
-        .where(
-            User.id == active_profile_id,
-            (User.id == logged_in_user_id) |
-            (ManagedProfile.id != None) |
-            (TeamProfileAccess.id != None)
-        )
-    )
-    
-    result = await db.execute(stmt)
-    profile = result.scalar_one_or_none()
+    """
+    Определяет активный профиль на основе JWT токена.
+    Эта функция ДОВЕРЯЕТ содержимому токена, так как эндпоинт /switch-profile
+    уже проверил права доступа перед его выдачей.
+    """
+    manager_id_str = payload.get("sub")
+    active_profile_id_str = payload.get("profile_id")
 
-    if profile:
-        return profile
+    if not manager_id_str:
+        raise credentials_exception
+
+    # Если 'profile_id' в токене нет, значит, пользователь работает со своим профилем.
+    target_user_id = int(active_profile_id_str or manager_id_str)
+
+    # Просто загружаем нужный профиль из БД.
+    # Повторная проверка связи ManagedProfile здесь не нужна.
+    active_profile = await db.get(User, target_user_id)
     
-    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступ к этому профилю запрещен.")
+    if not active_profile:
+        raise HTTPException(status_code=404, detail="Активный профиль не найден.")
+        
+    return active_profile
+# --- КОНЕЦ ИСПРАВЛЕНИЯ ---
 
 
 async def get_current_user_from_ws(token: str = Query(...)) -> User:

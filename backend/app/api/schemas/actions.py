@@ -79,18 +79,6 @@ class BirthdayCongratulationRequest(BaseModel):
     only_unread: bool = Field(False)
     humanized_sending: HumanizedSendingConfig = Field(default_factory=HumanizedSendingConfig)
 
-class TaskField(BaseModel):
-    name: str
-    type: Literal["slider", "switch", "text"]
-    label: str
-    default_value: Any
-    max_value: Optional[int] = None
-    tooltip: Optional[str] = None
-
-class TaskConfigResponse(BaseModel):
-    display_name: str
-    has_filters: bool
-    fields: List[TaskField]
 
 class DaySchedule(BaseModel):
     """Схема для расписания на один день."""

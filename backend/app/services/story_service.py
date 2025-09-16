@@ -8,11 +8,11 @@ class StoryService(BaseVKService):
         return await self._execute_logic(self._view_stories_logic)
 
     async def _view_stories_logic(self):
-        await self.humanizer.imitate_page_view()
+        await self.humanizer.read_and_scroll()
         await self.emitter.send_log("Начинаем просмотр историй...", "info")
         stats = await self._get_today_stats()
 
-        response = await self.vk_api.get_stories()
+        response = await self.vk_api.stories.get()
         if not response or not response.get('items'):
             await self.emitter.send_log("Новых историй не найдено.", "info")
             return

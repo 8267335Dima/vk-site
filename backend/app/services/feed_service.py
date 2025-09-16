@@ -16,8 +16,8 @@ class FeedService(BaseVKService):
         
         newsfeed_filter = "photo" if params.filters.only_with_photo else "post"
 
-        await self.humanizer.imitate_page_view()
-        response = await self.vk_api.get_newsfeed(count=params.count * 2, filters=newsfeed_filter)
+        await self.humanizer.read_and_scroll()
+        response = await self.vk_api.newsfeed.get(count=params.count * 2, filters=newsfeed_filter)
 
         if not response or not response.get('items'):
             await self.emitter.send_log("Посты в ленте не найдены.", "warning")
@@ -29,7 +29,7 @@ class FeedService(BaseVKService):
         filtered_author_ids = set(author_ids)
         if author_ids:
             author_profiles = await self._get_user_profiles(list(set(author_ids)))
-            filtered_authors = apply_filters_to_profiles(author_profiles, params.filters)
+            filtered_authors = await apply_filters_to_profiles(author_profiles, params.filters)
             filtered_author_ids = {a.get('id') for a in filtered_authors}
 
         processed_count = 0
@@ -49,8 +49,8 @@ class FeedService(BaseVKService):
             if owner_id > 0 and owner_id not in filtered_author_ids:
                 continue
 
-            await self.humanizer.imitate_simple_action()
-            result = await self.vk_api.add_like(item_type, owner_id, item_id)
+            await self.humanizer.think(action_type='like')
+            result = await self.vk_api.likes.add(item_type, owner_id, item_id)
             
             if result and 'likes' in result:
                 processed_count += 1
@@ -70,7 +70,7 @@ class FeedService(BaseVKService):
         for i in range(0, len(user_ids), 1000):
             chunk = user_ids[i:i + 1000]
             ids_str = ",".join(map(str, chunk))
-            profiles = await self.vk_api.get_user_info(user_ids=ids_str)
+            profiles = await self.vk_api.users.get(user_ids=ids_str)
             if profiles:
                 all_profiles.extend(profiles)
         return all_profiles

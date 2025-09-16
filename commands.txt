@@ -37,28 +37,20 @@ arq --watch . app.worker.WorkerSettings
 cd backend && alembic revision --autogenerate -m "add timezone" && alembic upgrade head
 
 
-тесты: cd backend && pytest -sv tests/test_filters.py
+тесты: 
 
-# Запустить тесты аутентификации и переключения профилей
-pytest backend/tests/test_auth.py -v -s
+cd backend && poetry run pytest -v -s tests/test_auth.py — Проверка логина и переключения профилей.
+cd backend && poetry run pytest -v -s tests/test_user_endpoints.py — Проверка эндпоинтов профиля, лимитов, скорости и пресетов.
+cd backend && poetry run pytest -v -s tests/test_content_tasks.py — Тесты лайков, сторис и пакетного планирования постов.
 
-# Запустить тесты задач, связанных с контентом (лайки, сторис, посты)
-pytest backend/tests/test_content_tasks.py -v -s
-
-# Запустить детальную диагностику всех фильтров по реальным данным
-pytest backend/tests/test_filter_diagnostics.py -v -s
-
-# Запустить тесты задач, связанных с друзьями (добавление, удаление, прием заявок)
-pytest backend/tests/test_friend_tasks.py -v -s
-
-# Запустить тесты задач, связанных с группами (вступление, выход)
-pytest backend/tests/test_group_tasks.py -v -s
-
-# Запустить тесты задач рассылки сообщений и поздравлений
-pytest backend/tests/test_messaging_tasks.py -v -s
-
-# Запустить тесты жизненного цикла сценариев
-pytest backend/tests/test_scenarios.py -v -s
-
-# Запустить все тесты сразу
-pytest backend/tests/ -v -s
+cd backend && poetry run pytest -v -s tests/test_friend_tasks.py — Тесты добавления, удаления друзей и отправки сообщений при добавлении.
+cd backend && poetry run pytest -v -s tests/test_group_tasks.py — Тесты вступления в группы и выхода из них.
+cd backend && poetry run pytest -v -s tests/test_messaging_tasks.py — Тесты массовой рассылки, включая режим "человечной" отправки.
+cd backend && poetry run pytest -v -s tests/test_proxy_endpoints.py — Тесты добавления, проверки и удаления прокси.
+cd backend && poetry run pytest -v -s tests/test_scenarios.py — Тесты полного жизненного цикла сложных сценариев.
+cd backend && poetry run pytest -v -s tests/test_task_management.py — (Новое) Тесты отмены, повтора задач и истории.
+cd backend && poetry run pytest -v -s tests/test_team_features.py — (Новое) Тесты создания команд и проверки прав доступа.
+cd backend && poetry run pytest -v -s tests/test_permissions_and_edge_cases.py — (Новое) Тесты ограничений по тарифам и обработки ошибок.
+cd backend && poetry run pytest -v -s tests/test_robustness_and_billing.py — Тесты на устойчивость к ошибкам, лимитам и логики биллинга.
+cd backend && poetry run pytest -v -s tests/test_complex_scenarios.py — Тесты сложных взаимодействий между разными частями системы.
+cd backend && poetry run pytest -v -s tests/test_filter_diagnostics.py — Диагностика работы фильтров на ваших реальных данных.

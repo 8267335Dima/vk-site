@@ -4,7 +4,9 @@ import asyncio
 import aiohttp
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Body
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import List, Optional
+# --- ИЗМЕНЕНИЕ: Добавляем импорт AsyncGenerator ---
+from typing import List, Optional, AsyncGenerator
+# -----------------------------------------------
 from arq.connections import ArqRedis
 
 from app.db.session import get_db
@@ -13,18 +15,25 @@ from app.api.dependencies import get_current_active_profile, get_arq_pool
 from app.api.schemas.posts import PostCreate, PostRead, UploadedImagesResponse, PostBatchCreate, UploadedImageResponse
 from app.services.vk_api import VKAPI
 from app.core.security import decrypt_data
-from app.repositories.stats import StatsRepository # <--- ДОБАВЛЕН ИМПОРТ
+from app.repositories.stats import StatsRepository
 import structlog
 
 log = structlog.get_logger(__name__)
 router = APIRouter()
 
-async def get_vk_api(current_user: User = Depends(get_current_active_profile)) -> VKAPI:
+# --- ИЗМЕНЕНИЕ: Корректная аннотация типа для асинхронного генератора ---
+async def get_vk_api(current_user: User = Depends(get_current_active_profile)) -> AsyncGenerator[VKAPI, None]:
+# ----------------------------------------------------------------------
     """Зависимость для получения готового VK API клиента."""
     vk_token = decrypt_data(current_user.encrypted_vk_token)
     if not vk_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Невалидный токен VK.")
-    return VKAPI(access_token=vk_token)
+    
+    vk_api_client = VKAPI(access_token=vk_token)
+    try:
+        yield vk_api_client
+    finally:
+        await vk_api_client.close()
 
 @router.post("/upload-image-file", response_model=UploadedImageResponse, summary="Загрузить изображение с диска")
 async def upload_image_file(
@@ -34,7 +43,8 @@ async def upload_image_file(
     """Принимает файл, загружает в VK и возвращает attachment_id."""
     try:
         image_bytes = await image.read()
-        attachment_id = await vk_api.upload_photo_for_wall(image_bytes)
+        # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
+        attachment_id = await vk_api.photos.upload_for_wall(image_bytes)
         return UploadedImageResponse(attachment_id=attachment_id)
     except Exception as e:
         log.error("post.upload_image_file.failed", error=str(e))
@@ -67,7 +77,8 @@ async def upload_images_batch(
     async def upload_one(image: UploadFile):
         try:
             image_bytes = await image.read()
-            return await vk_api.upload_photo_for_wall(image_bytes)
+            # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
+            return await vk_api.photos.upload_for_wall(image_bytes)
         except Exception as e:
             log.error("batch_upload.single_file_error", filename=image.filename, error=str(e))
             return None
@@ -93,7 +104,6 @@ async def schedule_batch_posts(
     """Принимает список постов и планирует их все одним запросом, проверяя лимиты."""
     created_posts_db = []
     
-    # --- НАЧАЛО БЛОКА ПРОВЕРКИ ЛИМИТОВ ---
     stats_repo = StatsRepository(db)
     today_stats = await stats_repo.get_or_create_today_stats(current_user.id)
     
@@ -107,14 +117,14 @@ async def schedule_batch_posts(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Достигнут дневной лимит на создание постов. Осталось: {remaining if remaining > 0 else 0}"
         )
-    # --- КОНЕЦ БЛОКА ПРОВЕРКИ ЛИМИТОВ ---
     
     for post_data in batch_data.posts:
         final_attachments = post_data.attachments or []
         if post_data.image_url:
             try:
                 image_bytes = await _download_image_from_url(str(post_data.image_url))
-                attachment_id = await vk_api.upload_photo_for_wall(image_bytes)
+                # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
+                attachment_id = await vk_api.photos.upload_for_wall(image_bytes)
                 final_attachments.append(attachment_id)
             except HTTPException as e:
                 log.warn("schedule_batch.image_download_failed", url=post_data.image_url, detail=e.detail)
@@ -133,12 +143,10 @@ async def schedule_batch_posts(
     if not created_posts_db:
         raise HTTPException(status_code=400, detail="Не удалось создать ни одного поста из пакета (возможно, из-за ошибок загрузки изображений).")
 
-    # --- УВЕЛИЧИВАЕМ СЧЕТЧИК ПОСЛЕ УСПЕШНОГО ДОБАВЛЕНИЯ В СЕССИЮ ---
     today_stats.posts_created_count += len(created_posts_db)
     
-    await db.flush() # Получаем ID для всех созданных постов
+    await db.flush()
 
-    # Ставим все задачи в очередь ARQ
     for post in created_posts_db:
         job = await arq_pool.enqueue_job(
             'publish_scheduled_post_task',

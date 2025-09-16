@@ -58,7 +58,7 @@ class OutgoingRequestService(BaseVKService):
             if not await redis_lock_client.set(lock_key, "1", ex=3600, nx=True):
                 continue
 
-            await self.humanizer.imitate_page_view()
+            await self.humanizer.read_and_scroll()
             
             message = params.message_text.replace("{name}", profile.get("first_name", "")) if params.message_text and params.send_message_on_add else None
             result = await self.vk_api.add_friend(user_id, message) 

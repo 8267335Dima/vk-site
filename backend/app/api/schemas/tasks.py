@@ -1,7 +1,7 @@
 # backend/app/api/schemas/tasks.py
 import datetime
 from pydantic import BaseModel, ConfigDict
-from typing import List, Optional, Dict, Any
+from typing import List, Literal, Optional, Dict, Any
 
 # --- Схема для ответа после запуска любой задачи ---
 class ActionResponse(BaseModel):
@@ -32,3 +32,16 @@ class PaginatedTasksResponse(BaseModel):
 
 class PreviewResponse(BaseModel):
     found_count: int
+
+class TaskField(BaseModel):
+    name: str
+    type: Literal["slider", "switch", "text"]
+    label: str
+    default_value: Any
+    max_value: Optional[int] = None
+    tooltip: Optional[str] = None
+
+class TaskConfigResponse(BaseModel):
+    display_name: str
+    has_filters: bool
+    fields: List[TaskField]

@@ -5,7 +5,6 @@ from app.api.schemas.actions import ActionFilters
 from app.services.vk_api import VKAPI
 from app.services.vk_user_filter import apply_filters_to_profiles
 
-pytestmark = pytest.mark.asyncio
 
 @pytest.fixture(scope="module")
 async def real_friends_data(vk_api_client: VKAPI) -> List[Dict[Any, Any]]:

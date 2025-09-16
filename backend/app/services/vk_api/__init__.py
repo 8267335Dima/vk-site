@@ -115,8 +115,12 @@ async def is_token_valid(vk_token: str) -> Optional[int]:
     """Вспомогательная функция для проверки токена при логине."""
     vk_api = VKAPI(access_token=vk_token)
     try:
-        user_info = await vk_api.users.get()
-        return user_info.get('id') if user_info else None
+        user_info_list = await vk_api.users.get()
+        if user_info_list and isinstance(user_info_list, list) and len(user_info_list) > 0:
+            user_info = user_info_list[0]
+            return user_info.get('id') if user_info else None
+        return None
+        # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
     except VKAPIError:
         return None
     finally:

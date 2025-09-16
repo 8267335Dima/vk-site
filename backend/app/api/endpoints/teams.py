@@ -75,10 +75,14 @@ async def get_my_team(
     vk_info_map = {}
     if all_vk_ids_to_fetch:
         vk_api = VKAPI(decrypt_data(manager.encrypted_vk_token))
-        vk_ids_str = ",".join(map(str, all_vk_ids_to_fetch))
-        user_infos = await vk_api.get_user_info(user_ids=vk_ids_str, fields="photo_50")
-        if user_infos:
-            vk_info_map = {info['id']: info for info in user_infos}
+        try:
+            vk_ids_str = ",".join(map(str, all_vk_ids_to_fetch))
+            # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+            user_infos = await vk_api.users.get(user_ids=vk_ids_str, fields="photo_50")
+            if user_infos:
+                vk_info_map = {info['id']: info for info in user_infos}
+        finally:
+            await vk_api.close()
 
     # --- ШАГ 4: Собираем ответ, используя предзагруженные данные ---
     members_response = []
