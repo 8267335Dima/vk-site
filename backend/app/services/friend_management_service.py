@@ -6,17 +6,21 @@ from app.api.schemas.actions import RemoveFriendsRequest
 
 class FriendManagementService(BaseVKService):
 
-    # --- НОВЫЙ МЕТОД ДЛЯ ПОИСКА ЦЕЛЕЙ ---
     async def get_remove_friends_targets(self, params: RemoveFriendsRequest) -> List[Dict[str, Any]]:
         """
         ПОИСК ЦЕЛЕЙ: Получает список друзей и фильтрует их по заданным критериям
         (забаненные, неактивные и т.д.).
         """
         await self.emitter.send_log("Получение полного списка друзей для анализа...", "info")
-        all_friends = await self.vk_api.get_user_friends(self.user.vk_id, fields="sex,online,last_seen,is_closed,deactivated")
-        if not all_friends:
+        
+        # --- НАЧАЛО ИЗМЕНЕНИЯ ---
+        response = await self.vk_api.get_user_friends(self.user.vk_id, fields="sex,online,last_seen,is_closed,deactivated")
+        if not response or not response.get('items'):
             await self.emitter.send_log("Не удалось получить список друзей.", "warning")
             return []
+        
+        all_friends = response.get('items', [])
+        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
         # Сначала отбираем забаненных/удаленных, если включена опция
         banned_friends = []
@@ -62,7 +66,7 @@ class FriendManagementService(BaseVKService):
             
             calls = [{"method": "friends.delete", "params": {"user_id": friend.get('id')}} for friend in batch]
             
-            await self.humanizer.imitate_simple_action()
+            await self.humanizer.think(action_type='like')
             results = await self.vk_api.execute(calls)
             
             if results is None:

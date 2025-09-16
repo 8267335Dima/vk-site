@@ -113,7 +113,7 @@ class MessageService(BaseVKService):
                 final_message = params.message_text.replace("{name}", friend.get('first_name', ''))
 
                 # Здесь можно оставить минимальную задержку из старого хуманайзера
-                await self.humanizer.imitate_simple_action()
+                await self.humanizer.think(action_type='like')
 
                 try:
                     if await self.vk_api.send_message(friend_id, final_message):

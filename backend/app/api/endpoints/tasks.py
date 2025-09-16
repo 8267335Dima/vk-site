@@ -1,66 +1,32 @@
-# --- backend/app/api/endpoints/tasks.py ---
-# ОТВЕТСТВЕННОСТЬ: Запуск, предпросмотр и конфигурация новых задач.
+# backend/app/api/endpoints/tasks.py
 
+# ОТВЕТСТВЕННОСТЬ: Запуск, предпросмотр и конфигурация новых задач.
 from fastapi import APIRouter, Depends, Body, HTTPException, status
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Optional, Union
+from typing import Optional
 from pydantic import BaseModel
 from arq.connections import ArqRedis
 
 from app.db.models import User, TaskHistory
 from app.api.dependencies import get_current_active_profile, get_arq_pool
 from app.db.session import get_db
-from app.api.schemas.actions import *
+from app.repositories.stats import StatsRepository
 from app.api.schemas.tasks import ActionResponse, PreviewResponse, TaskConfigResponse, TaskField
 from app.core.plans import get_plan_config, is_feature_available_for_plan
 from app.core.config_loader import AUTOMATIONS_CONFIG
 from app.core.constants import TaskKey
 from app.services.vk_api import VKAPIError
 
-# Импортируем сервисы, необходимые для предпросмотра
-from app.services.message_service import MessageService
-from app.services.friend_management_service import FriendManagementService
-from app.services.group_management_service import GroupManagementService
-from app.services.incoming_request_service import IncomingRequestService
-from app.services.outgoing_request_service import OutgoingRequestService
-from app.services.automation_service import AutomationService
+# --- НАЧАЛО ИЗМЕНЕНИЯ: Импортируем карты из нового централизованного модуля ---
+from app.tasks.task_maps import AnyTaskRequest, TASK_FUNC_MAP, PREVIEW_SERVICE_MAP
+# --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
 router = APIRouter()
 
-# --- Определения типов и карты ---
-
-AnyTaskRequest = Union[
-    AcceptFriendsRequest, LikeFeedRequest, AddFriendsRequest, EmptyRequest,
-    RemoveFriendsRequest, MassMessagingRequest, JoinGroupsRequest, LeaveGroupsRequest,
-    BirthdayCongratulationRequest, EternalOnlineRequest
-]
-
-TASK_FUNC_MAP = {
-    TaskKey.ACCEPT_FRIENDS: "accept_friend_requests_task",
-    TaskKey.LIKE_FEED: "like_feed_task",
-    TaskKey.ADD_RECOMMENDED: "add_recommended_friends_task",
-    TaskKey.VIEW_STORIES: "view_stories_task",
-    TaskKey.REMOVE_FRIENDS: "remove_friends_by_criteria_task",
-    TaskKey.MASS_MESSAGING: "mass_messaging_task",
-    TaskKey.JOIN_GROUPS: "join_groups_by_criteria_task",
-    TaskKey.LEAVE_GROUPS: "leave_groups_by_criteria_task",
-    TaskKey.BIRTHDAY_CONGRATULATION: "birthday_congratulation_task",
-    TaskKey.ETERNAL_ONLINE: "eternal_online_task",
-}
-
-PREVIEW_SERVICE_MAP = {
-    TaskKey.ADD_RECOMMENDED: (OutgoingRequestService, "get_add_recommended_targets", AddFriendsRequest),
-    TaskKey.ACCEPT_FRIENDS: (IncomingRequestService, "get_accept_friends_targets", AcceptFriendsRequest),
-    TaskKey.REMOVE_FRIENDS: (FriendManagementService, "get_remove_friends_targets", RemoveFriendsRequest),
-    TaskKey.MASS_MESSAGING: (MessageService, "get_mass_messaging_targets", MassMessagingRequest),
-    TaskKey.LEAVE_GROUPS: (GroupManagementService, "get_leave_groups_targets", LeaveGroupsRequest),
-    TaskKey.JOIN_GROUPS: (GroupManagementService, "get_join_groups_targets", JoinGroupsRequest),
-    TaskKey.BIRTHDAY_CONGRATULATION: (AutomationService, "get_birthday_congratulation_targets", BirthdayCongratulationRequest),
-}
+# --- Определения типов и карты были отсюда удалены ---
 
 # --- Вспомогательная функция ---
-
 async def _enqueue_task(
     user: User, db: AsyncSession, arq_pool: ArqRedis, task_key: str, request_data: BaseModel, original_task_name: Optional[str] = None
 ) -> ActionResponse:
@@ -115,28 +81,46 @@ async def _enqueue_task(
     )
 
 # --- Эндпоинты ---
-
 @router.get("/{task_key}/config", response_model=TaskConfigResponse, summary="Получить конфигурацию UI для задачи")
-async def get_task_config(task_key: TaskKey, current_user: User = Depends(get_current_active_profile)):
+async def get_task_config(
+    task_key: TaskKey,
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
     task_config = next((item for item in AUTOMATIONS_CONFIG if item.id == task_key.value), None)
     if not task_config:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Конфигурация для задачи не найдена.")
 
-    user_limits = get_plan_config(current_user.plan).get("limits", {})
+    stats_repo = StatsRepository(db)
+    today_stats = await stats_repo.get_or_create_today_stats(current_user.id)
+    
     fields = []
 
     if task_config.has_count_slider:
-        max_val_map = {
-            TaskKey.ADD_RECOMMENDED: user_limits.get("daily_add_friends_limit", 40),
-            TaskKey.LIKE_FEED: user_limits.get("daily_likes_limit", 1000),
+        limit_map = {
+            TaskKey.ADD_RECOMMENDED: ("daily_add_friends_limit", "friends_added_count"),
+            TaskKey.LIKE_FEED: ("daily_likes_limit", "likes_count"),
+            TaskKey.REMOVE_FRIENDS: ("daily_leave_groups_limit", "friends_removed_count"),
+            TaskKey.MASS_MESSAGING: ("daily_message_limit", "messages_sent_count"),
+            TaskKey.JOIN_GROUPS: ("daily_join_groups_limit", "groups_joined_count"),
+            TaskKey.LEAVE_GROUPS: ("daily_leave_groups_limit", "groups_left_count"),
         }
-        max_val = max_val_map.get(task_key, 1000)
+        
+        limit_key, stat_key = limit_map.get(task_key, (None, None))
+        
+        if limit_key and stat_key:
+            total_limit = getattr(current_user, limit_key, 100)
+            used_today = getattr(today_stats, stat_key, 0)
+            remaining_limit = total_limit - used_today
+            max_val = max(0, remaining_limit)
+        else:
+            max_val = 1000
 
         fields.append(TaskField(
             name="count",
             type="slider",
             label=task_config.modal_count_label or "Количество",
-            default_value=task_config.default_count or 20,
+            default_value=min(task_config.default_count or 20, max_val),
             max_value=max_val
         ))
     return TaskConfigResponse(display_name=task_config.name, has_filters=task_config.has_filters, fields=fields)

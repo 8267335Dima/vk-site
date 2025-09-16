@@ -19,19 +19,23 @@ from app.db.base import Base
 from app.db.models import User
 from app.db.session import get_db
 from app.services.vk_api import VKAPI
-
+from redis.asyncio import Redis as AsyncRedis
+from app.core.plans import get_limits_for_plan
 
 @pytest.fixture(scope="function")
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
     """
-    Для КАЖДОГО теста:
-    1. Создает новый движок, подключенный к тестовой БД.
-    2. Создает все таблицы с нуля.
-    3. Предоставляет сессию в транзакции.
-    4. После теста откатывает транзакцию, удаляет все таблицы и закрывает соединение.
-    Это обеспечивает 100% изоляцию тестов.
+    Создает чистую базу данных и сессию для каждого тестового случая.
+    Также очищает Redis DB #2, используемую для блокировок.
     """
-    engine = create_async_engine(settings.database_url)
+    redis_lock_client = AsyncRedis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/2")
+    await redis_lock_client.flushdb()
+    await redis_lock_client.close()
+    
+    engine = create_async_engine(
+        settings.database_url, 
+        connect_args={"statement_cache_size": 0}
+    )
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
@@ -49,7 +53,8 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
 @pytest.fixture(scope="function")
 async def async_client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     """
-    Предоставляет тестовый HTTP-клиент для каждого теста.
+    Предоставляет тестовый HTTP-клиент для каждого теста,
+    подменяя зависимость базы данных на тестовую сессию.
     """
     async def _override_get_db() -> AsyncGenerator[AsyncSession, None]:
         yield db_session
@@ -66,7 +71,8 @@ async def async_client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, 
 @pytest.fixture(scope="function")
 async def authorized_user_and_headers(async_client: AsyncClient, db_session: AsyncSession) -> tuple[User, dict]:
     """
-    Авторизует пользователя для каждого теста.
+    Авторизует пользователя и ГАРАНТИРОВАННО устанавливает ему
+    полные лимиты PRO тарифа для корректной работы тестов.
     """
     test_token = settings.VK_HEALTH_CHECK_TOKEN
     assert test_token, "Переменная VK_HEALTH_CHECK_TOKEN должна быть в .env"
@@ -82,23 +88,30 @@ async def authorized_user_and_headers(async_client: AsyncClient, db_session: Asy
     user = await db_session.get(User, user_id)
     assert user is not None
 
-    if user.plan != PlanName.PRO:
-        user.plan = PlanName.PRO
-        await db_session.commit()
-        await db_session.refresh(user)
+    user.plan = PlanName.PRO
+    pro_limits = get_limits_for_plan(PlanName.PRO)
+    for key, value in pro_limits.items():
+        setattr(user, key, value)
+    
+    user.daily_join_groups_limit = 100
+    user.daily_leave_groups_limit = 100
+
+    await db_session.commit()
+    await db_session.refresh(user)
 
     return user, headers
 
 @pytest.fixture(scope="function")
 async def vk_api_client(authorized_user_and_headers: tuple[User, dict]) -> AsyncGenerator[VKAPI, None]:
     """
-    Предоставляет клиент для VK API.
+    Предоставляет настроенный и готовый к работе клиент для VK API.
     """
     user, _ = authorized_user_and_headers
     token = decrypt_data(user.encrypted_vk_token)
     assert token, "Не удалось расшифровать токен VK"
 
     api_client = VKAPI(access_token=token)
+    # Добавляем ID пользователя в клиент для удобства в тестах
     setattr(api_client, "user_id", user.vk_id)
 
     yield api_client

@@ -1,139 +1,129 @@
 # backend/app/core/configs/plans.yml
-# Единый источник правды о всех тарифных планах в системе.
-# Содержит отображаемую информацию, цены, возможности и числовые лимиты.
-
-Expired:
-  display_name: Истекший
-  description: "Срок действия вашего тарифа истек. Функциональность ограничена."
-  features:
-    - "Ограниченные дневные лимиты"
-    - "История задач за 7 дней"
-    - "Доступ к панели управления"
-  limits:
-    daily_likes_limit: 50
-    daily_add_friends_limit: 5
-    daily_message_limit: 10 # <-- ОБНОВЛЕНО
-    daily_posts_limit: 2 # <-- ОБНОВЛЕНО
-    max_concurrent_tasks: 1
-  available_features: []
 
 Базовый:
-  display_name: Базовый
-  base_price: 0
-  description: "Бесплатный 14-дневный доступ ко всем возможностям тарифа Plus."
-  features:
-    - "Все возможности тарифа Plus"
-    - "Полный доступ на 14 дней"
-    - "Поддержка по email"
+  display_name: "Базовый"
+  description: "Начальный тариф для ознакомления с базовыми возможностями."
   limits:
-    daily_likes_limit: 1000
-    daily_add_friends_limit: 40
-    daily_message_limit: 100 # <-- ОБНОВЛЕНО
-    daily_posts_limit: 30 # <-- ОБНОВЛЕНО
-    max_concurrent_tasks: 3
-  available_features: # Указываем явно фичи тарифа Plus, чтобы не дать случайно доступ к PRO/Agency
-    - "like_feed"
-    - "add_recommended"
-    - "accept_friends"
-    - "remove_friends"
-    - "view_stories"
-    - "mass_messaging"
-    - "leave_groups"
-    - "join_groups"
-    - "birthday_congratulation"
-    - "eternal_online"
-    - "automations_center"
-    - "post_scheduler"
-
-Plus:
-  display_name: Plus
-  base_price: 699
-  is_popular: true
-  description: "Идеальный старт для автоматизации рутинных задач и органического роста."
-  periods:
-    - months: 3
-      discount_percent: 5
-    - months: 6
-      discount_percent: 15
-    - months: 12
-      discount_percent: 30
-  features:
-    - "1 аккаунт ВКонтакте"
-    - "Все стандартные задачи"
-    - "Базовая аналитика"
-    - "Стандартные лимиты"
-    - "Автоматизация по расписанию"
-  limits:
-    daily_likes_limit: 1000
-    daily_add_friends_limit: 40
-    daily_message_limit: 100 # <-- ОБНОВЛЕНО
-    daily_posts_limit: 30 # <-- ОБНОВЛЕНО
-    max_concurrent_tasks: 3
+    daily_likes_limit: 50
+    daily_add_friends_limit: 20
+    daily_message_limit: 20
+    daily_posts_limit: 5
+    daily_join_groups_limit: 20 # <--- ДОБАВЛЕНО
+    daily_leave_groups_limit: 20 # <--- ДОБАВЛЕНО
+    max_concurrent_tasks: 1
   available_features:
     - "like_feed"
     - "add_recommended"
     - "accept_friends"
-    - "remove_friends"
     - "view_stories"
+    - "remove_friends"
     - "mass_messaging"
     - "leave_groups"
     - "join_groups"
-    - "birthday_congratulation"
     - "eternal_online"
+
+Plus:
+  display_name: "Plus"
+  description: "Расширенные возможности и увеличенные лимиты для активного продвижения."
+  base_price: 399
+  is_popular: true
+  features:
+    - "Все возможности Базового тарифа"
+    - "Доступ к Центру автоматизаций"
+    - "Планировщик постов"
+    - "Аналитика роста профиля"
+  periods:
+    - months: 3
+      discount_percent: 10
+    - months: 6
+      discount_percent: 15
+    - months: 12
+      discount_percent: 25
+  limits:
+    daily_likes_limit: 1000
+    daily_add_friends_limit: 40
+    daily_message_limit: 50
+    daily_posts_limit: 20
+    daily_join_groups_limit: 50 # <--- ДОБАВЛЕНО
+    daily_leave_groups_limit: 100 # <--- ДОБАВЛЕНО
+    max_concurrent_tasks: 2
+  available_features:
+    - "like_feed"
+    - "add_recommended"
+    - "accept_friends"
+    - "view_stories"
+    - "remove_friends"
+    - "mass_messaging"
+    - "leave_groups"
+    - "join_groups"
+    - "eternal_online"
+    - "birthday_congratulation"
     - "automations_center"
     - "post_scheduler"
+    - "profile_growth_analytics"
 
 PRO:
-  display_name: PRO
-  base_price: 1499
-  description: "Для продвинутых пользователей, которым нужны сценарии, прокси и глубокая аналитика."
+  display_name: "PRO"
+  description: "Максимальные лимиты и все функции для профессионалов и SMM-специалистов."
+  base_price: 799
+  features:
+    - "Все возможности тарифа Plus"
+    - "Продвинутые сценарии"
+    - "Управление прокси"
+    - "Быстрый/медленный режим работы"
   periods:
     - months: 3
-      discount_percent: 5
+      discount_percent: 10
     - months: 6
-      discount_percent: 15
+      discount_percent: 20
     - months: 12
       discount_percent: 30
-  features:
-    - "Все возможности Plus"
-    - "Продвинутые сценарии"
-    - "Управление прокси-серверами"
-    - "Аналитика конверсии заявок"
-    - "Тепловая карта активности"
-    - "Гибкая настройка скорости"
-    - "Повышенные лимиты"
   limits:
-    daily_likes_limit: 2500 # <-- ОБНОВЛЕНО
-    daily_add_friends_limit: 70 # <-- ОБНОВЛЕНО
-    daily_message_limit: 300 # <-- ОБНОВЛЕНО
-    daily_posts_limit: 100 # <-- ОБНОВЛЕНО
+    daily_likes_limit: 5000
+    daily_add_friends_limit: 80
+    daily_message_limit: 100
+    daily_posts_limit: 50
+    daily_join_groups_limit: 100 # <--- ДОБАВЛЕНО
+    daily_leave_groups_limit: 200 # <--- ДОБАВЛЕНО
     max_concurrent_tasks: 5
-  available_features: "*" # Даем доступ ко всем существующим и будущим функциям
+  available_features: "*"
 
 Agency:
-  display_name: Agency
-  base_price: 2999
-  description: "Для SMM-агентств и специалистов, ведущих несколько проектов одновременно."
+  display_name: "Agency"
+  description: "Для агентств и команд. Управление несколькими аккаунтами."
+  base_price: 1499
+  features:
+    - "Все возможности PRO-тарифа"
+    - "Командный доступ"
+    - "Управление до 5 профилей"
   periods:
     - months: 3
-      discount_percent: 5
-    - months: 6
       discount_percent: 15
+    - months: 6
+      discount_percent: 25
     - months: 12
-      discount_percent: 30
-  features:
-    - "Все возможности PRO"
-    - "До 5 аккаунтов ВКонтакте"
-    - "(+499 ₽/мес. за доп. аккаунт)"
-    - "Командный доступ"
-    - "Максимальные лимиты"
-    - "Приоритетная поддержка"
+      discount_percent: 35
   limits:
-    daily_likes_limit: 5000 # <-- ОБНОВЛЕНО
-    daily_add_friends_limit: 100 # <-- ОБНОВЛЕНО
-    daily_message_limit: 1000 # <-- ОБНОВЛЕНО
-    daily_posts_limit: 250 # <-- ОБНОВЛЕНО
+    daily_likes_limit: 10000
+    daily_add_friends_limit: 100
+    daily_message_limit: 200
+    daily_posts_limit: 100
+    daily_join_groups_limit: 150 # <--- ДОБАВЛЕНО
+    daily_leave_groups_limit: 300 # <--- ДОБАВЛЕНО
     max_concurrent_tasks: 10
     max_profiles: 5
     max_team_members: 5
   available_features: "*"
+
+Expired:
+  display_name: "Expired"
+  description: "Срок действия вашего тарифа истек."
+  limits:
+    daily_likes_limit: 0
+    daily_add_friends_limit: 0
+    daily_message_limit: 0
+    daily_posts_limit: 0
+    daily_join_groups_limit: 0 # <--- ДОБАВЛЕНО
+    daily_leave_groups_limit: 0 # <--- ДОБАВЛЕНО
+    max_concurrent_tasks: 1
+  available_features: []

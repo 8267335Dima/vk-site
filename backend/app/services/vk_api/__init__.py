@@ -109,6 +109,43 @@ class VKAPI:
         code_lines = [f'API.{call["method"]}({json.dumps(call.get("params", {}), ensure_ascii=False)})' for call in calls]
         code = f"return [{','.join(code_lines)}];"
         return await self._make_request("execute", params={"code": code})
+    
+    async def get_user_friends(self, user_id: int, fields: str = "sex,online,last_seen,is_closed,deactivated") -> Optional[Dict[str, Any]]:
+        """
+        Удобный метод-обертка для получения списка друзей пользователя.
+        ВОЗВРАЩАЕТ ПОЛНЫЙ СЛОВАРЬ ОТВЕТА VK API.
+        """
+        return await self.friends.get(user_id=user_id, fields=fields)
+
+    async def get_recommended_friends(self, count: int = 200) -> Optional[Dict[str, Any]]:
+        """
+        Удобный метод-обертка для получения рекомендованных друзей.
+        """
+        return await self.friends.getSuggestions(count=count)
+    
+    async def add_friend(self, user_id: int, text: Optional[str] = None) -> Optional[int]:
+        """
+        Удобный метод-обертка для отправки заявки в друзья.
+        """
+        return await self.friends.add(user_id=user_id, text=text)
+    
+    async def add_like(self, item_type: str, owner_id: int, item_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Удобный метод-обертка для простановки лайка.
+        """
+        return await self.likes.add(item_type=item_type, owner_id=owner_id, item_id=item_id)
+
+    async def get_incoming_friend_requests(self, extended: int = 0, count: int = 1000) -> Optional[Dict[str, Any]]:
+        """
+        Удобный метод-обертка для получения входящих заявок в друзья.
+        """
+        return await self.friends.getRequests(extended=extended, count=count)
+    
+    async def get_wall(self, owner_id: int, count: int = 5) -> Optional[Dict[str, Any]]:
+            """
+            Удобный метод-обертка для получения постов со стены.
+            """
+            return await self.wall.get(owner_id=owner_id, count=count)
 
 
 async def is_token_valid(vk_token: str) -> Optional[int]:

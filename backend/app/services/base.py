@@ -63,18 +63,17 @@ class BaseVKService:
         await self._initialize_vk_api()
         
         try:
+            # ИЗМЕНЕНИЕ: Сохраняем и возвращаем результат
             result = await logic_func(*args, **kwargs)
             await self.db.commit()
             return result
         except Exception as e:
             await self.db.rollback()
-            # УЛУЧШЕНИЕ: Добавляем больше деталей в лог ошибки
             await self.emitter.send_log(
                 f"Произошла критическая ошибка: {type(e).__name__} - {e}. Все изменения отменены.", 
                 status="error"
             )
             raise
         finally:
-            # УЛУЧШЕНИЕ: Гарантируем закрытие сессии VK API после выполнения
             if self.vk_api:
                 await self.vk_api.close()

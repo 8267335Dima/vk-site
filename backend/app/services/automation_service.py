@@ -104,7 +104,7 @@ class AutomationService(BaseVKService):
             else:
                 message = template.replace("{name}", friend.get("first_name", ""))
                 url = f"https://vk.com/id{friend_id}"
-                await self.humanizer.imitate_simple_action()
+                await self.humanizer.think(action_type='message')
                 if await self.vk_api.send_message(friend_id, message):
                     insert_stmt = insert(SentCongratulation).values(user_id=self.user.id, friend_vk_id=friend_id, year=current_year).on_conflict_do_nothing()
                     await self.db.execute(insert_stmt)

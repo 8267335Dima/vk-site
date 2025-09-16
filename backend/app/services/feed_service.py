@@ -20,10 +20,12 @@ class FeedService(BaseVKService):
         response = await self.vk_api.newsfeed.get(count=params.count * 2, filters=newsfeed_filter)
 
         if not response or not response.get('items'):
-            await self.emitter.send_log("Посты в ленте не найдены.", "warning")
+            await self.emitter.send_log("Посты в ленте не найдены. Задача завершена.", "warning")
             return
 
         posts = [p for p in response.get('items', []) if p.get('type') in ['post', 'photo']]
+        await self.emitter.send_log(f"Найдено постов в ленте: {len(posts)}. Применяем фильтры...", "info")
+        
         author_ids = [abs(p['source_id']) for p in posts if p.get('source_id', 0) > 0]
         
         filtered_author_ids = set(author_ids)
@@ -49,16 +51,17 @@ class FeedService(BaseVKService):
             if owner_id > 0 and owner_id not in filtered_author_ids:
                 continue
 
+            url_prefix = "wall" if item_type == "post" else "photo"
+            url = f"https://vk.com/{url_prefix}{owner_id}_{item_id}"
+
             await self.humanizer.think(action_type='like')
             result = await self.vk_api.likes.add(item_type, owner_id, item_id)
             
             if result and 'likes' in result:
                 processed_count += 1
                 await self._increment_stat(stats, 'likes_count')
-                if processed_count % 10 == 0:
-                    await self.emitter.send_log(f"Поставлено лайков: {processed_count}/{params.count}", "info")
+                await self.emitter.send_log(f"Поставлен лайк ({processed_count}/{params.count})", "success", target_url=url)
             else:
-                url = f"https://vk.com/wall{owner_id}_{item_id}"
                 await self.emitter.send_log(f"Не удалось поставить лайк. Ответ VK: {result}", "error", target_url=url)
 
         await self.emitter.send_log(f"Задача завершена. Поставлено лайков: {processed_count}.", "success")

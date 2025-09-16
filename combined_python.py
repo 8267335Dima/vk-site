@@ -721,22 +721,32 @@ async def login_via_vk(
     user = result.scalar_one_or_none()
 
     encrypted_token = encrypt_data(vk_token)
-    
     base_plan_limits = get_limits_for_plan(PlanName.BASE)
 
     if user:
         user.encrypted_vk_token = encrypted_token
     else:
-        user = User(
-            vk_id=vk_id,
-            encrypted_vk_token=encrypted_token,
-            plan=PlanName.BASE,
-            plan_expires_at=datetime.now(UTC) + timedelta(days=14),
-            daily_likes_limit=base_plan_limits["daily_likes_limit"],
-            daily_add_friends_limit=base_plan_limits["daily_add_friends_limit"],
-            daily_message_limit=base_plan_limits["daily_message_limit"], # <--- ДОБАВЛЕНО
-            daily_posts_limit=base_plan_limits["daily_posts_limit"]   
-        )
+        # --- НАЧАЛО ИЗМЕНЕНИЯ ---
+        user_data = {
+            "vk_id": vk_id,
+            "encrypted_vk_token": encrypted_token,
+            "plan": PlanName.BASE,
+            "plan_expires_at": datetime.now(UTC) + timedelta(days=14),
+        }
+        
+        # Получаем все имена колонок из модели User
+        user_model_columns = {c.name for c in User.__table__.columns}
+        
+        # Фильтруем лимиты, оставляя только те, что есть в модели
+        valid_limits_for_db = {
+            key: value
+            for key, value in base_plan_limits.items()
+            if key in user_model_columns
+        }
+        user_data.update(valid_limits_for_db)
+        
+        user = User(**user_data)
+        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
         db.add(user)
 
     if str(vk_id) == settings.ADMIN_VK_ID:
@@ -744,10 +754,12 @@ async def login_via_vk(
         user.is_admin = True
         user.plan = PlanName.PRO
         user.plan_expires_at = None
-        user.daily_likes_limit = admin_limits["daily_likes_limit"]
-        user.daily_add_friends_limit = admin_limits["daily_add_friends_limit"]
-        user.daily_message_limit = admin_limits["daily_message_limit"]
-        user.daily_posts_limit = admin_limits["daily_posts_limit"]     
+        
+        # Здесь используем тот же безопасный подход
+        user_model_columns = {c.name for c in User.__table__.columns}
+        for key, value in admin_limits.items():
+            if key in user_model_columns:
+                setattr(user, key, value)
 
     await db.flush()
     await db.refresh(user)
@@ -1082,14 +1094,11 @@ async def payment_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         user.plan_expires_at = start_date + datetime.timedelta(days=30 * payment.months)
         
         new_limits = get_limits_for_plan(user.plan)
-        user.daily_likes_limit = new_limits.get("daily_likes_limit", 0)
-        user.daily_add_friends_limit = new_limits.get("daily_add_friends_limit", 0)
-        user.daily_message_limit = new_limits.get("daily_message_limit", 0) # <--- ДОБАВЛЕНО
-        user.daily_posts_limit = new_limits.get("daily_posts_limit", 0)   # <--- ДОБАВЛЕНО
+        for key, value in new_limits.items():
+            setattr(user, key, value)
 
         payment.status = "succeeded"
         
-        # FastAPI автоматически вызовет db.commit() после успешного выхода из этой функции
         log.info("webhook.success", user_id=user.id, plan=user.plan, expires_at=user.plan_expires_at)
         
     return {"status": "ok"}
@@ -1157,15 +1166,17 @@ import asyncio
 import aiohttp
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Body
 from sqlalchemy.ext.asyncio import AsyncSession
-# --- ИЗМЕНЕНИЕ: Добавляем импорт AsyncGenerator ---
 from typing import List, Optional, AsyncGenerator
-# -----------------------------------------------
 from arq.connections import ArqRedis
 
 from app.db.session import get_db
 from app.db.models import User, ScheduledPost
 from app.api.dependencies import get_current_active_profile, get_arq_pool
-from app.api.schemas.posts import PostCreate, PostRead, UploadedImagesResponse, PostBatchCreate, UploadedImageResponse
+# --- ИЗМЕНЕНИЕ: Добавляем новую схему ---
+from app.api.schemas.posts import (
+    PostCreate, PostRead, UploadedImagesResponse, PostBatchCreate, 
+    UploadedImageResponse, UploadImageFromUrlRequest, UploadImagesFromUrlsRequest
+)
 from app.services.vk_api import VKAPI
 from app.core.security import decrypt_data
 from app.repositories.stats import StatsRepository
@@ -1174,10 +1185,7 @@ import structlog
 log = structlog.get_logger(__name__)
 router = APIRouter()
 
-# --- ИЗМЕНЕНИЕ: Корректная аннотация типа для асинхронного генератора ---
 async def get_vk_api(current_user: User = Depends(get_current_active_profile)) -> AsyncGenerator[VKAPI, None]:
-# ----------------------------------------------------------------------
-    """Зависимость для получения готового VK API клиента."""
     vk_token = decrypt_data(current_user.encrypted_vk_token)
     if not vk_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Невалидный токен VK.")
@@ -1188,49 +1196,91 @@ async def get_vk_api(current_user: User = Depends(get_current_active_profile)) -
     finally:
         await vk_api_client.close()
 
+async def _download_image_from_url(url: str) -> bytes:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        "Referer": "https://www.pixiv.net/"
+    }
+    try:
+        async with aiohttp.ClientSession(headers=headers) as session:
+            async with session.get(url, timeout=20) as response:
+                response.raise_for_status()
+                return await response.read()
+    except aiohttp.ClientError as e:
+        log.error("image_download.failed", url=url, status_code=getattr(e, 'status', None), message=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Не удалось скачать изображение по URL: {e}")
+    except Exception as e:
+        log.error("image_download.unknown_error", url=url, error=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Внутренняя ошибка при скачивании изображения: {e}")
+
+# --- НОВЫЙ ЭНДПОИНТ ДЛЯ ПАКЕТНОЙ ЗАГРУЗКИ ПО URL ---
+@router.post("/upload-images-from-urls-batch", response_model=UploadedImagesResponse, summary="Загрузить несколько изображений по URL")
+async def upload_images_from_urls_batch(
+    request_data: UploadImagesFromUrlsRequest,
+    vk_api: VKAPI = Depends(get_vk_api)
+):
+    """Принимает список URL, параллельно скачивает и загружает их в VK."""
+
+    async def upload_one_url(url: str):
+        try:
+            image_bytes = await _download_image_from_url(url)
+            return await vk_api.photos.upload_for_wall(image_bytes)
+        except Exception as e:
+            log.warn("batch_url_upload.single_url_error", url=url, error=str(e))
+            return None
+
+    tasks = [upload_one_url(str(url)) for url in request_data.image_urls]
+    results = await asyncio.gather(*tasks)
+    
+    successful_attachments = [res for res in results if res is not None]
+    
+    if not successful_attachments:
+        raise HTTPException(status_code=500, detail="Не удалось загрузить ни одно из изображений по указанным URL.")
+        
+    return UploadedImagesResponse(attachment_ids=successful_attachments)
+# --- КОНЕЦ НОВОГО ЭНДПОИНТА ---
+
+@router.post("/upload-image-from-url", response_model=UploadedImageResponse, summary="Загрузить изображение по URL")
+async def upload_image_from_url(
+    request_data: UploadImageFromUrlRequest,
+    vk_api: VKAPI = Depends(get_vk_api)
+):
+    try:
+        image_bytes = await _download_image_from_url(str(request_data.image_url))
+        attachment_id = await vk_api.photos.upload_for_wall(image_bytes)
+        return UploadedImageResponse(attachment_id=attachment_id)
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        log.error("post.upload_image_url.failed", error=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Не удалось обработать и загрузить изображение.")
+
+
 @router.post("/upload-image-file", response_model=UploadedImageResponse, summary="Загрузить изображение с диска")
 async def upload_image_file(
     vk_api: VKAPI = Depends(get_vk_api),
     image: UploadFile = File(...)
 ):
-    """Принимает файл, загружает в VK и возвращает attachment_id."""
     try:
         image_bytes = await image.read()
-        # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
         attachment_id = await vk_api.photos.upload_for_wall(image_bytes)
         return UploadedImageResponse(attachment_id=attachment_id)
     except Exception as e:
         log.error("post.upload_image_file.failed", error=str(e))
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Не удалось загрузить изображение.")
 
-async def _download_image_from_url(url: str) -> bytes:
-    """Скачивает изображение по URL и возвращает его в виде байтов."""
-    if not any(url.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif']):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="URL должен вести на изображение (jpg, png, gif).")
-    
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=15) as response:
-                response.raise_for_status()
-                return await response.read()
-    except aiohttp.ClientError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Не удалось скачать изображение по URL: {e}")
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Внутренняя ошибка при скачивании изображения: {e}")
 
 @router.post("/upload-images-batch", response_model=UploadedImagesResponse, summary="Загрузить несколько изображений с диска")
 async def upload_images_batch(
     vk_api: VKAPI = Depends(get_vk_api),
     images: List[UploadFile] = File(...)
 ):
-    """Принимает список файлов, параллельно загружает их в VK и возвращает список attachment_id."""
     if len(images) > 10:
         raise HTTPException(status_code=400, detail="Можно загрузить не более 10 изображений за раз.")
 
     async def upload_one(image: UploadFile):
         try:
             image_bytes = await image.read()
-            # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
             return await vk_api.photos.upload_for_wall(image_bytes)
         except Exception as e:
             log.error("batch_upload.single_file_error", filename=image.filename, error=str(e))
@@ -1250,11 +1300,9 @@ async def upload_images_batch(
 async def schedule_batch_posts(
     batch_data: PostBatchCreate,
     current_user: User = Depends(get_current_active_profile),
-    vk_api: VKAPI = Depends(get_vk_api),
     db: AsyncSession = Depends(get_db),
     arq_pool: ArqRedis = Depends(get_arq_pool)
 ):
-    """Принимает список постов и планирует их все одним запросом, проверяя лимиты."""
     created_posts_db = []
     
     stats_repo = StatsRepository(db)
@@ -1272,29 +1320,18 @@ async def schedule_batch_posts(
         )
     
     for post_data in batch_data.posts:
-        final_attachments = post_data.attachments or []
-        if post_data.image_url:
-            try:
-                image_bytes = await _download_image_from_url(str(post_data.image_url))
-                # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
-                attachment_id = await vk_api.photos.upload_for_wall(image_bytes)
-                final_attachments.append(attachment_id)
-            except HTTPException as e:
-                log.warn("schedule_batch.image_download_failed", url=post_data.image_url, detail=e.detail)
-                continue
-
         new_post = ScheduledPost(
             user_id=current_user.id,
             vk_profile_id=current_user.vk_id,
             post_text=post_data.post_text,
-            attachments=final_attachments,
+            attachments=post_data.attachments or [],
             publish_at=post_data.publish_at
         )
         db.add(new_post)
         created_posts_db.append(new_post)
 
     if not created_posts_db:
-        raise HTTPException(status_code=400, detail="Не удалось создать ни одного поста из пакета (возможно, из-за ошибок загрузки изображений).")
+        raise HTTPException(status_code=400, detail="Не удалось создать ни одного поста из пакета.")
 
     today_stats.posts_created_count += len(created_posts_db)
     
@@ -1314,6 +1351,7 @@ async def schedule_batch_posts(
         await db.refresh(post)
 
     return created_posts_db
+
 
 # --- backend/app\api\endpoints\proxies.py ---
 
@@ -1980,69 +2018,35 @@ async def reply_to_ticket(
 
 # --- backend/app\api\endpoints\tasks.py ---
 
-# --- backend/app/api/endpoints/tasks.py ---
-# ОТВЕТСТВЕННОСТЬ: Запуск, предпросмотр и конфигурация новых задач.
+# backend/app/api/endpoints/tasks.py
 
+# ОТВЕТСТВЕННОСТЬ: Запуск, предпросмотр и конфигурация новых задач.
 from fastapi import APIRouter, Depends, Body, HTTPException, status
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Optional, Union
+from typing import Optional
 from pydantic import BaseModel
 from arq.connections import ArqRedis
 
 from app.db.models import User, TaskHistory
 from app.api.dependencies import get_current_active_profile, get_arq_pool
 from app.db.session import get_db
-from app.api.schemas.actions import *
+from app.repositories.stats import StatsRepository
 from app.api.schemas.tasks import ActionResponse, PreviewResponse, TaskConfigResponse, TaskField
 from app.core.plans import get_plan_config, is_feature_available_for_plan
 from app.core.config_loader import AUTOMATIONS_CONFIG
 from app.core.constants import TaskKey
 from app.services.vk_api import VKAPIError
 
-# Импортируем сервисы, необходимые для предпросмотра
-from app.services.message_service import MessageService
-from app.services.friend_management_service import FriendManagementService
-from app.services.group_management_service import GroupManagementService
-from app.services.incoming_request_service import IncomingRequestService
-from app.services.outgoing_request_service import OutgoingRequestService
-from app.services.automation_service import AutomationService
+# --- НАЧАЛО ИЗМЕНЕНИЯ: Импортируем карты из нового централизованного модуля ---
+from app.tasks.task_maps import AnyTaskRequest, TASK_FUNC_MAP, PREVIEW_SERVICE_MAP
+# --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
 router = APIRouter()
 
-# --- Определения типов и карты ---
-
-AnyTaskRequest = Union[
-    AcceptFriendsRequest, LikeFeedRequest, AddFriendsRequest, EmptyRequest,
-    RemoveFriendsRequest, MassMessagingRequest, JoinGroupsRequest, LeaveGroupsRequest,
-    BirthdayCongratulationRequest, EternalOnlineRequest
-]
-
-TASK_FUNC_MAP = {
-    TaskKey.ACCEPT_FRIENDS: "accept_friend_requests_task",
-    TaskKey.LIKE_FEED: "like_feed_task",
-    TaskKey.ADD_RECOMMENDED: "add_recommended_friends_task",
-    TaskKey.VIEW_STORIES: "view_stories_task",
-    TaskKey.REMOVE_FRIENDS: "remove_friends_by_criteria_task",
-    TaskKey.MASS_MESSAGING: "mass_messaging_task",
-    TaskKey.JOIN_GROUPS: "join_groups_by_criteria_task",
-    TaskKey.LEAVE_GROUPS: "leave_groups_by_criteria_task",
-    TaskKey.BIRTHDAY_CONGRATULATION: "birthday_congratulation_task",
-    TaskKey.ETERNAL_ONLINE: "eternal_online_task",
-}
-
-PREVIEW_SERVICE_MAP = {
-    TaskKey.ADD_RECOMMENDED: (OutgoingRequestService, "get_add_recommended_targets", AddFriendsRequest),
-    TaskKey.ACCEPT_FRIENDS: (IncomingRequestService, "get_accept_friends_targets", AcceptFriendsRequest),
-    TaskKey.REMOVE_FRIENDS: (FriendManagementService, "get_remove_friends_targets", RemoveFriendsRequest),
-    TaskKey.MASS_MESSAGING: (MessageService, "get_mass_messaging_targets", MassMessagingRequest),
-    TaskKey.LEAVE_GROUPS: (GroupManagementService, "get_leave_groups_targets", LeaveGroupsRequest),
-    TaskKey.JOIN_GROUPS: (GroupManagementService, "get_join_groups_targets", JoinGroupsRequest),
-    TaskKey.BIRTHDAY_CONGRATULATION: (AutomationService, "get_birthday_congratulation_targets", BirthdayCongratulationRequest),
-}
+# --- Определения типов и карты были отсюда удалены ---
 
 # --- Вспомогательная функция ---
-
 async def _enqueue_task(
     user: User, db: AsyncSession, arq_pool: ArqRedis, task_key: str, request_data: BaseModel, original_task_name: Optional[str] = None
 ) -> ActionResponse:
@@ -2097,28 +2101,46 @@ async def _enqueue_task(
     )
 
 # --- Эндпоинты ---
-
 @router.get("/{task_key}/config", response_model=TaskConfigResponse, summary="Получить конфигурацию UI для задачи")
-async def get_task_config(task_key: TaskKey, current_user: User = Depends(get_current_active_profile)):
+async def get_task_config(
+    task_key: TaskKey,
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
     task_config = next((item for item in AUTOMATIONS_CONFIG if item.id == task_key.value), None)
     if not task_config:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Конфигурация для задачи не найдена.")
 
-    user_limits = get_plan_config(current_user.plan).get("limits", {})
+    stats_repo = StatsRepository(db)
+    today_stats = await stats_repo.get_or_create_today_stats(current_user.id)
+    
     fields = []
 
     if task_config.has_count_slider:
-        max_val_map = {
-            TaskKey.ADD_RECOMMENDED: user_limits.get("daily_add_friends_limit", 40),
-            TaskKey.LIKE_FEED: user_limits.get("daily_likes_limit", 1000),
+        limit_map = {
+            TaskKey.ADD_RECOMMENDED: ("daily_add_friends_limit", "friends_added_count"),
+            TaskKey.LIKE_FEED: ("daily_likes_limit", "likes_count"),
+            TaskKey.REMOVE_FRIENDS: ("daily_leave_groups_limit", "friends_removed_count"),
+            TaskKey.MASS_MESSAGING: ("daily_message_limit", "messages_sent_count"),
+            TaskKey.JOIN_GROUPS: ("daily_join_groups_limit", "groups_joined_count"),
+            TaskKey.LEAVE_GROUPS: ("daily_leave_groups_limit", "groups_left_count"),
         }
-        max_val = max_val_map.get(task_key, 1000)
+        
+        limit_key, stat_key = limit_map.get(task_key, (None, None))
+        
+        if limit_key and stat_key:
+            total_limit = getattr(current_user, limit_key, 100)
+            used_today = getattr(today_stats, stat_key, 0)
+            remaining_limit = total_limit - used_today
+            max_val = max(0, remaining_limit)
+        else:
+            max_val = 1000
 
         fields.append(TaskField(
             name="count",
             type="slider",
             label=task_config.modal_count_label or "Количество",
-            default_value=task_config.default_count or 20,
+            default_value=min(task_config.default_count or 20, max_val),
             max_value=max_val
         ))
     return TaskConfigResponse(display_name=task_config.name, has_filters=task_config.has_filters, fields=fields)
@@ -2168,9 +2190,9 @@ async def preview_task_audience(
 
 # --- backend/app\api\endpoints\task_history.py ---
 
-# --- backend/app/api/endpoints/task_history.py ---
-# ОТВЕТСТВЕННОСТЬ: Просмотр истории задач и управление ими (отмена, повтор).
+# backend/app/api/endpoints/task_history.py
 
+# ОТВЕТСТВЕННОСТЬ: Просмотр истории задач и управление ими (отмена, повтор).
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -2185,8 +2207,8 @@ from app.api.schemas.tasks import ActionResponse, PaginatedTasksResponse
 from app.core.config_loader import AUTOMATIONS_CONFIG
 from app.core.constants import TaskKey
 
-# --- ИЗМЕНЕНИЕ: Импортируем общую логику и карты из соседнего модуля ---
-from .tasks import _enqueue_task, AnyTaskRequest, PREVIEW_SERVICE_MAP
+from .tasks import _enqueue_task
+from app.tasks.task_maps import AnyTaskRequest, PREVIEW_SERVICE_MAP
 
 router = APIRouter()
 
@@ -2257,7 +2279,6 @@ async def retry_task(
     
     validated_data = RequestModel(**(task.parameters or {}))
     
-    # --- ИЗМЕНЕНИЕ: Вызываем импортированную функцию ---
     return await _enqueue_task(
         current_user, db, arq_pool, task_key_str, validated_data, original_task_name=task.task_name
     )
@@ -3024,12 +3045,15 @@ from datetime import datetime
 from typing import List, Optional
 
 class PostBase(BaseModel):
-    post_text: Optional[str] = None
+    post_text: Optional[str] = Field(None, max_length=4000)
     publish_at: datetime
 
 class PostCreate(PostBase):
-    attachments: Optional[List[str]] = Field(default_factory=list, description="Список готовых attachment ID (photo_id, etc.)")
-    image_url: Optional[HttpUrl] = Field(None, description="URL изображения для автоматической загрузки и прикрепления.")
+    attachments: Optional[List[str]] = Field(
+        default_factory=list, 
+        description="Список готовых attachment ID (photo_id, etc.). Не более 10.",
+        max_items=10 
+    )
 
 class PostRead(PostBase):
     id: int
@@ -3043,12 +3067,17 @@ class PostRead(PostBase):
 class UploadedImageResponse(BaseModel): 
     attachment_id: str
 
+class UploadImageFromUrlRequest(BaseModel):
+    image_url: HttpUrl
+
 class UploadedImagesResponse(BaseModel):
-    """Ответ для пакетной загрузки изображений."""
     attachment_ids: List[str]
 
+# --- НОВАЯ СХЕМА ДЛЯ ПАКЕТНОЙ ЗАГРУЗКИ ПО URL ---
+class UploadImagesFromUrlsRequest(BaseModel):
+    image_urls: List[HttpUrl] = Field(..., description="Список URL изображений для загрузки. Не более 10.", max_items=10)
+
 class PostBatchCreate(BaseModel):
-    """Схема для пакетного создания постов."""
     posts: List[PostCreate]
 
 # --- backend/app\api\schemas\proxies.py ---
@@ -3739,8 +3768,10 @@ class PlanPeriod(BaseModel):
 class PlanLimits(BaseModel):
     daily_likes_limit: int = Field(..., ge=0)
     daily_add_friends_limit: int = Field(..., ge=0)
-    daily_message_limit: int = Field(..., ge=0)  # <--- ДОБАВЛЕНО
-    daily_posts_limit: int = Field(..., ge=0)    # <--- ДОБАВЛЕНО
+    daily_message_limit: int = Field(..., ge=0) 
+    daily_posts_limit: int = Field(..., ge=0)   
+    daily_join_groups_limit: int = Field(..., ge=0)
+    daily_leave_groups_limit: int = Field(..., ge=0)
     max_concurrent_tasks: int = Field(..., ge=1)
     max_profiles: Optional[int] = Field(None, ge=1)
     max_team_members: Optional[int] = Field(None, ge=1)
@@ -3849,6 +3880,8 @@ class DailyStats(Base):
     friends_removed_count = Column(Integer, default=0, nullable=False)
     messages_sent_count = Column(Integer, default=0, nullable=False)
     posts_created_count = Column(Integer, nullable=False, server_default=text('0'))
+    groups_joined_count = Column(Integer, nullable=False, server_default=text('0'))
+    groups_left_count = Column(Integer, nullable=False, server_default=text('0'))
     user = relationship("User", back_populates="daily_stats")
     __table_args__ = (
         UniqueConstraint('user_id', 'date', name='_user_date_uc'),
@@ -4157,6 +4190,8 @@ class User(Base):
     daily_add_friends_limit = Column(Integer, nullable=False, server_default=text('0'))
     daily_message_limit = Column(Integer, nullable=False, server_default=text('0'))
     daily_posts_limit = Column(Integer, nullable=False, server_default=text('0'))
+    daily_join_groups_limit = Column(Integer, nullable=False, server_default=text('0'))
+    daily_leave_groups_limit = Column(Integer, nullable=False, server_default=text('0'))
     delay_profile = Column(Enum(DelayProfile), nullable=False, server_default=DelayProfile.normal.name)
 
     # Связи остаются такими же
@@ -4560,7 +4595,7 @@ class AutomationService(BaseVKService):
             else:
                 message = template.replace("{name}", friend.get("first_name", ""))
                 url = f"https://vk.com/id{friend_id}"
-                await self.humanizer.imitate_simple_action()
+                await self.humanizer.think(action_type='message')
                 if await self.vk_api.send_message(friend_id, message):
                     insert_stmt = insert(SentCongratulation).values(user_id=self.user.id, friend_vk_id=friend_id, year=current_year).on_conflict_do_nothing()
                     await self.db.execute(insert_stmt)
@@ -4650,19 +4685,18 @@ class BaseVKService:
         await self._initialize_vk_api()
         
         try:
+            # ИЗМЕНЕНИЕ: Сохраняем и возвращаем результат
             result = await logic_func(*args, **kwargs)
             await self.db.commit()
             return result
         except Exception as e:
             await self.db.rollback()
-            # УЛУЧШЕНИЕ: Добавляем больше деталей в лог ошибки
             await self.emitter.send_log(
                 f"Произошла критическая ошибка: {type(e).__name__} - {e}. Все изменения отменены.", 
                 status="error"
             )
             raise
         finally:
-            # УЛУЧШЕНИЕ: Гарантируем закрытие сессии VK API после выполнения
             if self.vk_api:
                 await self.vk_api.close()
 
@@ -4802,10 +4836,12 @@ class FeedService(BaseVKService):
         response = await self.vk_api.newsfeed.get(count=params.count * 2, filters=newsfeed_filter)
 
         if not response or not response.get('items'):
-            await self.emitter.send_log("Посты в ленте не найдены.", "warning")
+            await self.emitter.send_log("Посты в ленте не найдены. Задача завершена.", "warning")
             return
 
         posts = [p for p in response.get('items', []) if p.get('type') in ['post', 'photo']]
+        await self.emitter.send_log(f"Найдено постов в ленте: {len(posts)}. Применяем фильтры...", "info")
+        
         author_ids = [abs(p['source_id']) for p in posts if p.get('source_id', 0) > 0]
         
         filtered_author_ids = set(author_ids)
@@ -4831,16 +4867,17 @@ class FeedService(BaseVKService):
             if owner_id > 0 and owner_id not in filtered_author_ids:
                 continue
 
+            url_prefix = "wall" if item_type == "post" else "photo"
+            url = f"https://vk.com/{url_prefix}{owner_id}_{item_id}"
+
             await self.humanizer.think(action_type='like')
             result = await self.vk_api.likes.add(item_type, owner_id, item_id)
             
             if result and 'likes' in result:
                 processed_count += 1
                 await self._increment_stat(stats, 'likes_count')
-                if processed_count % 10 == 0:
-                    await self.emitter.send_log(f"Поставлено лайков: {processed_count}/{params.count}", "info")
+                await self.emitter.send_log(f"Поставлен лайк ({processed_count}/{params.count})", "success", target_url=url)
             else:
-                url = f"https://vk.com/wall{owner_id}_{item_id}"
                 await self.emitter.send_log(f"Не удалось поставить лайк. Ответ VK: {result}", "error", target_url=url)
 
         await self.emitter.send_log(f"Задача завершена. Поставлено лайков: {processed_count}.", "success")
@@ -4867,17 +4904,21 @@ from app.api.schemas.actions import RemoveFriendsRequest
 
 class FriendManagementService(BaseVKService):
 
-    # --- НОВЫЙ МЕТОД ДЛЯ ПОИСКА ЦЕЛЕЙ ---
     async def get_remove_friends_targets(self, params: RemoveFriendsRequest) -> List[Dict[str, Any]]:
         """
         ПОИСК ЦЕЛЕЙ: Получает список друзей и фильтрует их по заданным критериям
         (забаненные, неактивные и т.д.).
         """
         await self.emitter.send_log("Получение полного списка друзей для анализа...", "info")
-        all_friends = await self.vk_api.get_user_friends(self.user.vk_id, fields="sex,online,last_seen,is_closed,deactivated")
-        if not all_friends:
+        
+        # --- НАЧАЛО ИЗМЕНЕНИЯ ---
+        response = await self.vk_api.get_user_friends(self.user.vk_id, fields="sex,online,last_seen,is_closed,deactivated")
+        if not response or not response.get('items'):
             await self.emitter.send_log("Не удалось получить список друзей.", "warning")
             return []
+        
+        all_friends = response.get('items', [])
+        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
         # Сначала отбираем забаненных/удаленных, если включена опция
         banned_friends = []
@@ -4923,7 +4964,7 @@ class FriendManagementService(BaseVKService):
             
             calls = [{"method": "friends.delete", "params": {"user_id": friend.get('id')}} for friend in batch]
             
-            await self.humanizer.imitate_simple_action()
+            await self.humanizer.think(action_type='like')
             results = await self.vk_api.execute(calls)
             
             if results is None:
@@ -4948,41 +4989,47 @@ class FriendManagementService(BaseVKService):
 
 # --- backend/app\services\group_management_service.py ---
 
-# --- backend/app/services/group_management_service.py ---
+# backend/app/services/group_management_service.py
+
 from typing import List, Dict, Any
 from app.services.base import BaseVKService
 from app.api.schemas.actions import LeaveGroupsRequest, JoinGroupsRequest
+from app.core.exceptions import UserLimitReachedError
 
 class GroupManagementService(BaseVKService):
 
-    # --- НОВЫЙ МЕТОД ДЛЯ ПОИСКА ЦЕЛЕЙ НА ВЫХОД ---
     async def get_leave_groups_targets(self, params: LeaveGroupsRequest) -> List[Dict[str, Any]]:
         """
         ПОИСК ЦЕЛЕЙ: Получает список сообществ пользователя и фильтрует их по ключевому слову.
         """
-        response = await self.vk_api.get_groups(user_id=self.user.vk_id)
+        response = await self.vk_api.groups.get(user_id=self.user.vk_id, extended=1)
         if not response or not response.get('items'):
             await self.emitter.send_log("Не удалось получить список сообществ или вы не состоите в группах.", "warning")
             return []
         
-        # Исключаем мероприятия из списка
         all_groups = [g for g in response['items'] if g.get('type') != 'event']
         
         keyword = (params.filters.status_keyword or "").lower().strip()
         if not keyword:
-            # Если нет ключевого слова, возвращаем все группы (задача сама ограничит количество)
             return all_groups
 
-        groups_to_leave = [group for group in all_groups if keyword in group.get('name', '').lower()]
+        groups_to_leave = [
+            group for group in all_groups 
+            if keyword in group.get('name', '').lower() or keyword in group.get('activity', '').lower()
+        ]
+
         await self.emitter.send_log(f"Найдено {len(groups_to_leave)} сообществ по ключевому слову '{keyword}'.", "info")
         
         return groups_to_leave
 
     async def leave_groups_by_criteria(self, params: LeaveGroupsRequest):
+        """Публичный метод-обертка для запуска логики выхода из групп."""
         return await self._execute_logic(self._leave_groups_logic, params)
 
     async def _leave_groups_logic(self, params: LeaveGroupsRequest):
+        """Приватный метод, содержащий основную логику выхода из групп."""
         await self.emitter.send_log(f"Запуск задачи: отписаться от {params.count} сообществ.", "info")
+        stats = await self._get_today_stats()
 
         targets = await self.get_leave_groups_targets(params)
         
@@ -4994,38 +5041,39 @@ class GroupManagementService(BaseVKService):
         
         processed_count = 0
         for group in targets_to_process:
+            if stats.groups_left_count >= self.user.daily_leave_groups_limit:
+                await self.emitter.send_log(f"Достигнут дневной лимит на выход из групп ({self.user.daily_leave_groups_limit}). Задача остановлена.", "warning")
+                break 
+
             group_id, group_name = group['id'], group['name']
-            url = f"https://vk.com/public{group_id}"
+            url = f"https://vk.com/club{group_id}"
             
-            await self.humanizer.imitate_simple_action()
-            result = await self.vk_api.leave_group(group_id)
+            await self.humanizer.think(action_type='like')
+            result = await self.vk_api.groups.leave(group_id)
 
             if result == 1:
                 processed_count += 1
+                await self._increment_stat(stats, 'groups_left_count')
                 await self.emitter.send_log(f"Вы успешно покинули сообщество: {group_name}", "success", target_url=url)
             else:
                 await self.emitter.send_log(f"Не удалось покинуть сообщество {group_name}. Ответ VK: {result}", "error", target_url=url)
 
         await self.emitter.send_log(f"Задача завершена. Покинуто сообществ: {processed_count}.", "success")
 
-    # --- НОВЫЙ МЕТОД ДЛЯ ПОИСКА ЦЕЛЕЙ НА ВСТУПЛЕНИЕ ---
     async def get_join_groups_targets(self, params: JoinGroupsRequest) -> List[Dict[str, Any]]:
-        """
-        ПОИСК ЦЕЛЕЙ: Ищет сообщества по ключевому слову и отфильтровывает те,
-        в которых пользователь уже состоит или которые являются закрытыми.
-        """
         keyword = (params.filters.status_keyword or "").strip()
         if not keyword:
             await self.emitter.send_log("Не указано ключевое слово для поиска групп.", "error")
             return []
 
-        search_response = await self.vk_api.search_groups(query=keyword, count=params.count * 2)
+        search_response = await self.vk_api.groups.search(query=keyword, count=params.count * 2)
         if not search_response or not search_response.get('items'):
             await self.emitter.send_log("Не найдено сообществ по вашему запросу.", "warning")
             return []
 
-        user_groups_response = await self.vk_api.get_groups(user_id=self.user.vk_id, extended=0)
-        user_group_ids = set(user_groups_response.get('items', []) if user_groups_response else [])
+        # --- ИСПРАВЛЕНИЕ: Проверяем, не состоит ли пользователь уже в найденных группах ---
+        user_groups_response = await self.vk_api.groups.get(user_id=self.user.vk_id, extended=0)
+        user_group_ids = set(user_groups_response.get('items', [])) if user_groups_response else set()
 
         groups_to_join = [
             g for g in search_response['items'] 
@@ -5040,6 +5088,7 @@ class GroupManagementService(BaseVKService):
     async def _join_groups_logic(self, params: JoinGroupsRequest):
         keyword = (params.filters.status_keyword or "").strip()
         await self.emitter.send_log(f"Запуск задачи: вступить в {params.count} сообществ по запросу '{keyword}'.", "info")
+        stats = await self._get_today_stats()
 
         targets = await self.get_join_groups_targets(params)
 
@@ -5051,14 +5100,19 @@ class GroupManagementService(BaseVKService):
         
         processed_count = 0
         for group in targets_to_process:
-            group_id, group_name = group['id'], group['name']
-            url = f"https://vk.com/public{group_id}"
+            if stats.groups_joined_count >= self.user.daily_join_groups_limit:
+                await self.emitter.send_log(f"Достигнут дневной лимит на вступление в группы ({self.user.daily_join_groups_limit}). Задача остановлена.", "warning")
+                break 
 
-            await self.humanizer.imitate_simple_action()
-            result = await self.vk_api.join_group(group_id)
+            group_id, group_name = group['id'], group['name']
+            url = f"https://vk.com/club{group_id}"
+
+            await self.humanizer.think(action_type='like')
+            result = await self.vk_api.groups.join(group_id)
 
             if result == 1:
                 processed_count += 1
+                await self._increment_stat(stats, 'groups_joined_count')
                 await self.emitter.send_log(f"Успешное вступление в сообщество: {group_name}", "success", target_url=url)
             else:
                 await self.emitter.send_log(f"Не удалось вступить в сообщество {group_name}. Ответ VK: {result}", "error", target_url=url)
@@ -5429,7 +5483,7 @@ class MessageService(BaseVKService):
                 final_message = params.message_text.replace("{name}", friend.get('first_name', ''))
 
                 # Здесь можно оставить минимальную задержку из старого хуманайзера
-                await self.humanizer.imitate_simple_action()
+                await self.humanizer.think(action_type='like')
 
                 try:
                     if await self.vk_api.send_message(friend_id, final_message):
@@ -5443,7 +5497,7 @@ class MessageService(BaseVKService):
 
 # --- backend/app\services\outgoing_request_service.py ---
 
-# --- backend/app/services/outgoing_request_service.py ---
+# backend/app/services/outgoing_request_service.py
 from typing import Dict, Any, List
 from app.services.base import BaseVKService
 from app.db.models import DailyStats, FriendRequestLog
@@ -5453,8 +5507,6 @@ from app.core.config import settings
 from redis.asyncio import Redis as AsyncRedis
 from app.services.vk_user_filter import apply_filters_to_profiles
 from app.api.schemas.actions import AddFriendsRequest, LikeAfterAddConfig
-
-redis_lock_client = AsyncRedis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/2", decode_responses=True)
 
 class OutgoingRequestService(BaseVKService):
 
@@ -5481,78 +5533,100 @@ class OutgoingRequestService(BaseVKService):
         await self.emitter.send_log(f"Начинаем добавление до {params.count} друзей из рекомендаций...", "info")
         stats = await self._get_today_stats()
 
-        # ШАГ 1: Получаем цели с помощью нового метода
         targets = await self.get_add_recommended_targets(params)
         
         await self.emitter.send_log(f"После фильтрации осталось: {len(targets)}. Начинаем отправку заявок.", "info")
 
         if not targets:
             await self.emitter.send_log("Подходящих пользователей для добавления не найдено.", "success")
-            return
+            return "Подходящих пользователей для добавления не найдено."
 
-        processed_count = 0
-        for profile in targets:
-            if processed_count >= params.count: break
-            if stats.friends_added_count >= self.user.daily_add_friends_limit:
-                raise UserLimitReachedError(f"Достигнут дневной лимит на отправку заявок ({self.user.daily_add_friends_limit}).")
-            
-            user_id = profile.get('id')
-            if not user_id: continue
-            
-            lock_key = f"lock:add_friend:{self.user.id}:{user_id}"
-            if not await redis_lock_client.set(lock_key, "1", ex=3600, nx=True):
-                continue
-
-            await self.humanizer.read_and_scroll()
-            
-            message = params.message_text.replace("{name}", profile.get("first_name", "")) if params.message_text and params.send_message_on_add else None
-            result = await self.vk_api.add_friend(user_id, message) 
-            
-            name = f"{profile.get('first_name', '')} {profile.get('last_name', '')}"
-            url = f"https://vk.com/id{user_id}"
-            
-            if result in [1, 2, 4]:
-                processed_count += 1
-                await self._increment_stat(stats, 'friends_added_count')
+        final_results = []
+        redis_lock_client = AsyncRedis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/2", decode_responses=True)
+        try:
+            processed_count = 0
+            for profile in targets:
+                if processed_count >= params.count: break
+                if stats.friends_added_count >= self.user.daily_add_friends_limit:
+                    raise UserLimitReachedError(f"Достигнут дневной лимит на отправку заявок ({self.user.daily_add_friends_limit}).")
                 
-                log_stmt = insert(FriendRequestLog).values(user_id=self.user.id, target_vk_id=user_id).on_conflict_do_nothing()
-                await self.db.execute(log_stmt)
-
-                log_msg = f"Отправлена заявка пользователю {name}"
-                if message:
-                    log_msg += " с сообщением."
-                await self.emitter.send_log(log_msg, "success", target_url=url)
+                user_id = profile.get('id')
+                if not user_id: continue
                 
-                if params.like_config.enabled and not profile.get('is_closed', True):
-                    await self._like_user_content(user_id, profile, params.like_config, stats)
-            else:
-                await self.emitter.send_log(f"Не удалось отправить заявку {name}. Ответ VK: {result}", "error", target_url=url)
-                await redis_lock_client.delete(lock_key)
+                lock_key = f"lock:add_friend:{self.user.id}:{user_id}"
+                if not await redis_lock_client.set(lock_key, "1", ex=3600, nx=True):
+                    continue
 
-        await self.emitter.send_log(f"Завершено. Отправлено заявок: {processed_count}.", "success")
+                await self.humanizer.read_and_scroll()
+                
+                message = params.message_text.replace("{name}", profile.get("first_name", "")) if params.message_text and params.send_message_on_add else None
+                result = await self.vk_api.add_friend(user_id, message) 
+                
+                name = f"{profile.get('first_name', '')} {profile.get('last_name', '')}"
+                url = f"https://vk.com/id{user_id}"
+                
+                if result in [1, 2, 4]:
+                    processed_count += 1
+                    await self._increment_stat(stats, 'friends_added_count')
+                    
+                    log_stmt = insert(FriendRequestLog).values(user_id=self.user.id, target_vk_id=user_id).on_conflict_do_nothing()
+                    await self.db.execute(log_stmt)
 
-    async def _like_user_content(self, user_id: int, profile: Dict[str, Any], config: LikeAfterAddConfig, stats: DailyStats):
+                    log_msg = f"Отправлена заявка пользователю {name}"
+                    if message:
+                        log_msg += " с сообщением."
+                    await self.emitter.send_log(log_msg, "success", target_url=url)
+                    final_results.append(log_msg)
+                    
+                    # --- ИЗМЕНЕНИЕ ЗДЕСЬ: Улучшенная логика проверки и логирования ---
+                    if params.like_config.enabled:
+                        if not profile.get('is_closed', True):
+                            like_results = await self._like_user_content(user_id, profile, params.like_config, stats)
+                            final_results.extend(like_results)
+                        else:
+                            await self.emitter.send_log(f"Профиль {name} закрыт, пропуск лайкинга.", "info", target_url=url)
+                else:
+                    await self.emitter.send_log(f"Не удалось отправить заявку {name}. Ответ VK: {result}", "error", target_url=url)
+                    await redis_lock_client.delete(lock_key)
+            
+            summary_message = f"Завершено. Отправлено заявок: {processed_count}."
+            await self.emitter.send_log(summary_message, "success")
+            final_results.append(summary_message)
+            
+            return " ".join(final_results)
+
+        finally:
+            await redis_lock_client.close()
+
+    async def _like_user_content(self, user_id: int, profile: Dict[str, Any], config: LikeAfterAddConfig, stats: DailyStats) -> list[str]:
+        like_results = []
         if stats.likes_count >= self.user.daily_likes_limit:
             await self.emitter.send_log("Достигнут дневной лимит лайков, пропуск лайкинга после добавления.", "warning")
-            return
+            return like_results
 
         if 'avatar' in config.targets and profile.get('photo_id'):
             photo_id_parts = profile.get('photo_id', '').split('_')
             if len(photo_id_parts) == 2:
                 photo_id = int(photo_id_parts[1])
-                await self.humanizer.imitate_simple_action()
+                await self.humanizer.think(action_type='like')
                 if await self.vk_api.add_like('photo', user_id, photo_id):
                     await self._increment_stat(stats, 'likes_count')
-                    await self.emitter.send_log(f"Поставлен лайк на аватар.", "success", target_url=f"https://vk.com/photo{user_id}_{photo_id}")
+                    log_msg = f"Поставлен лайк на аватар."
+                    await self.emitter.send_log(log_msg, "success", target_url=f"https://vk.com/photo{user_id}_{photo_id}")
+                    like_results.append(log_msg)
 
         if 'wall' in config.targets:
             wall = await self.vk_api.get_wall(owner_id=user_id, count=1)
             if wall and wall.get('items') and stats.likes_count < self.user.daily_likes_limit:
                 post = wall['items'][0]
-                await self.humanizer.imitate_simple_action()
+                await self.humanizer.think(action_type='like')
                 if await self.vk_api.add_like('post', user_id, post.get('id')):
                     await self._increment_stat(stats, 'likes_count')
-                    await self.emitter.send_log(f"Поставлен лайк на пост на стене.", "success", target_url=f"https://vk.com/wall{user_id}_{post.get('id')}")
+                    log_msg = f"Поставлен лайк на пост на стене."
+                    await self.emitter.send_log(log_msg, "success", target_url=f"https://vk.com/wall{user_id}_{post.get('id')}")
+                    like_results.append(log_msg)
+        
+        return like_results
 
 # --- backend/app\services\profile_analytics_service.py ---
 
@@ -5850,11 +5924,6 @@ async def apply_filters_to_profiles(
             continue
         # В остальных случаях (когда задача на удаление и флаг `remove_banned` активен),
         # "собачки" будут проходить дальше и обрабатываться логикой задачи.
-
-        # Фильтр по закрытому профилю
-        # `is_closed` может отсутствовать, по умолчанию считаем профиль закрытым
-        if not filters.allow_closed_profiles and profile.get('is_closed', True):
-            continue
         
         # Фильтр по полу (0 - любой пол)
         if filters.sex and profile.get('sex') != filters.sex: 
@@ -6088,17 +6157,16 @@ class NewsfeedAPI(BaseVKSection):
 
 # --- backend/app/services/vk_api/photos.py ---
 
+import json # <--- ДОБАВЛЕН ИМПОРТ
 from typing import Optional, Dict, Any
 from .base import BaseVKSection
 import aiohttp
 
-# Импортируем VKAPI для type hinting и избежания циклического импорта
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from . import VKAPI
 
 class PhotosAPI(BaseVKSection):
-    # УЛУЧШЕНИЕ: Принимаем родительский объект VKAPI для доступа к общей сессии
     def __init__(self, request_method: callable, vk_api_client: 'VKAPI'):
         super().__init__(request_method)
         self._vk_api_client = vk_api_client
@@ -6111,6 +6179,8 @@ class PhotosAPI(BaseVKSection):
         return await self._make_request('photos.getWallUploadServer')
 
     async def saveWallPhoto(self, upload_data: dict) -> Optional[Dict[str, Any]]:
+        if 'photo' in upload_data and not isinstance(upload_data['photo'], str):
+            upload_data['photo'] = json.dumps(upload_data['photo'], ensure_ascii=False)
         return await self._make_request('photos.saveWallPhoto', params=upload_data)
         
     async def upload_for_wall(self, photo_data: bytes) -> Optional[str]:
@@ -6121,16 +6191,20 @@ class PhotosAPI(BaseVKSection):
         form = aiohttp.FormData()
         form.add_field('photo', photo_data, filename='photo.jpg', content_type='image/jpeg')
         
-        # УЛУЧШЕНИЕ: Используем общую сессию из родительского VKAPI клиента
         session = await self._vk_api_client._get_session()
-        # Таймаут для загрузки файла может быть больше, поэтому устанавливаем его явно
         timeout = aiohttp.ClientTimeout(total=45)
-        async with session.post(upload_server['upload_url'], data=form, proxy=self._vk_api_client.proxy, timeout=timeout) as resp:
-            # Добавлена проверка статуса ответа
-            resp.raise_for_status()
-            upload_result = await resp.json()
+        
+        # Оборачиваем в try-except для лучшего логгирования ошибки
+        try:
+            async with session.post(upload_server['upload_url'], data=form, proxy=self._vk_api_client.proxy, timeout=timeout) as resp:
+                resp.raise_for_status()
+                # VK может вернуть text/plain, поэтому явно указываем content_type=None
+                upload_result = await resp.json(content_type=None)
+        except Exception as e:
+            # Если ошибка на этом этапе, мы будем знать точно, где она
+            print(f"ОШИБКА при загрузке на сервер VK: {e}")
+            raise
 
-        # Проверяем, что в ответе есть необходимые поля
         if not all(k in upload_result for k in ['server', 'photo', 'hash']):
              return None
 
@@ -6304,6 +6378,43 @@ class VKAPI:
         code_lines = [f'API.{call["method"]}({json.dumps(call.get("params", {}), ensure_ascii=False)})' for call in calls]
         code = f"return [{','.join(code_lines)}];"
         return await self._make_request("execute", params={"code": code})
+    
+    async def get_user_friends(self, user_id: int, fields: str = "sex,online,last_seen,is_closed,deactivated") -> Optional[Dict[str, Any]]:
+        """
+        Удобный метод-обертка для получения списка друзей пользователя.
+        ВОЗВРАЩАЕТ ПОЛНЫЙ СЛОВАРЬ ОТВЕТА VK API.
+        """
+        return await self.friends.get(user_id=user_id, fields=fields)
+
+    async def get_recommended_friends(self, count: int = 200) -> Optional[Dict[str, Any]]:
+        """
+        Удобный метод-обертка для получения рекомендованных друзей.
+        """
+        return await self.friends.getSuggestions(count=count)
+    
+    async def add_friend(self, user_id: int, text: Optional[str] = None) -> Optional[int]:
+        """
+        Удобный метод-обертка для отправки заявки в друзья.
+        """
+        return await self.friends.add(user_id=user_id, text=text)
+    
+    async def add_like(self, item_type: str, owner_id: int, item_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Удобный метод-обертка для простановки лайка.
+        """
+        return await self.likes.add(item_type=item_type, owner_id=owner_id, item_id=item_id)
+
+    async def get_incoming_friend_requests(self, extended: int = 0, count: int = 1000) -> Optional[Dict[str, Any]]:
+        """
+        Удобный метод-обертка для получения входящих заявок в друзья.
+        """
+        return await self.friends.getRequests(extended=extended, count=count)
+    
+    async def get_wall(self, owner_id: int, count: int = 5) -> Optional[Dict[str, Any]]:
+            """
+            Удобный метод-обертка для получения постов со стены.
+            """
+            return await self.wall.get(owner_id=owner_id, count=count)
 
 
 async def is_token_valid(vk_token: str) -> Optional[int]:
@@ -6526,8 +6637,6 @@ from app.tasks.service_maps import TASK_CONFIG_MAP
 
 log = structlog.get_logger(__name__)
 
-# --- НАЧАЛО ИЗМЕНЕНИЙ ---
-
 @asynccontextmanager
 async def get_task_session(provided_session: AsyncSession | None = None):
     """
@@ -6542,14 +6651,10 @@ async def get_task_session(provided_session: AsyncSession | None = None):
             yield session
 
 def arq_task_runner(func):
-    """
-    Декоратор, который оборачивает основную логику задачи в стандартный
-    обработчик: управление статусами, ошибками, эмиттером и сессией.
-    """
     @functools.wraps(func)
     async def wrapper(ctx, task_history_id: int, **kwargs):
-        # Извлекаем тестовую сессию из kwargs, если она есть
         db_session_for_test = kwargs.pop("db_session_for_test", None)
+        emitter_for_test = kwargs.pop("emitter_for_test", None)
 
         async with get_task_session(db_session_for_test) as session:
             stmt = select(TaskHistory).where(TaskHistory.id == task_history_id).options(
@@ -6561,20 +6666,19 @@ def arq_task_runner(func):
                 log.error("task.runner.not_found", task_history_id=task_history_id)
                 return
 
-            emitter = RedisEventEmitter(ctx['redis_pool'])
+            emitter = emitter_for_test or RedisEventEmitter(ctx['redis_pool'])
             emitter.set_context(task_history.user.id, task_history.id)
 
             try:
                 task_history.status = "STARTED"
-                if not db_session_for_test: # В проде коммитим сразу
+                if not db_session_for_test:
                     await session.commit()
                 await emitter.send_task_status_update(status="STARTED", task_name=task_history.task_name, created_at=task_history.created_at)
 
-                # Передаем сессию в основную функцию
-                await func(session, task_history.user, task_history.parameters or {}, emitter)
+                summary_result = await func(session, task_history.user, task_history.parameters or {}, emitter)
 
                 task_history.status = "SUCCESS"
-                task_history.result = "Задача успешно выполнена."
+                task_history.result = summary_result if isinstance(summary_result, str) else "Задача успешно выполнена."
 
             except VKAuthError:
                 task_history.status = "FAILURE"
@@ -6601,7 +6705,7 @@ def arq_task_runner(func):
                 await emitter.send_system_notification(session, "Произошла внутренняя ошибка сервера при выполнении задачи.", "error")
             
             finally:
-                if not db_session_for_test: # В проде коммитим в конце
+                if not db_session_for_test:
                     await session.commit()
                 await emitter.send_task_status_update(status=task_history.status, result=task_history.result, task_name=task_history.task_name, created_at=task_history.created_at)
     return wrapper
@@ -6611,47 +6715,47 @@ async def _run_service_method(session, user, params, emitter, task_key: TaskKey)
     ServiceClass, method_name, ParamsModel = TASK_CONFIG_MAP[task_key]
     validated_params = ParamsModel(**params)
     service_instance = ServiceClass(db=session, user=user, emitter=emitter)
-    await getattr(service_instance, method_name)(validated_params)
+    return await getattr(service_instance, method_name)(validated_params)
 
 @arq_task_runner
 async def like_feed_task(session, user, params, emitter):
-    await _run_service_method(session, user, params, emitter, TaskKey.LIKE_FEED)
+    return await _run_service_method(session, user, params, emitter, TaskKey.LIKE_FEED)
 
 @arq_task_runner
 async def add_recommended_friends_task(session, user, params, emitter):
-    await _run_service_method(session, user, params, emitter, TaskKey.ADD_RECOMMENDED)
+    return await _run_service_method(session, user, params, emitter, TaskKey.ADD_RECOMMENDED)
 
 @arq_task_runner
 async def accept_friend_requests_task(session, user, params, emitter):
-    await _run_service_method(session, user, params, emitter, TaskKey.ACCEPT_FRIENDS)
+    return await _run_service_method(session, user, params, emitter, TaskKey.ACCEPT_FRIENDS)
 
 @arq_task_runner
 async def remove_friends_by_criteria_task(session, user, params, emitter):
-    await _run_service_method(session, user, params, emitter, TaskKey.REMOVE_FRIENDS)
+    return await _run_service_method(session, user, params, emitter, TaskKey.REMOVE_FRIENDS)
 
 @arq_task_runner
 async def view_stories_task(session, user, params, emitter):
-    await _run_service_method(session, user, params, emitter, TaskKey.VIEW_STORIES)
+    return await _run_service_method(session, user, params, emitter, TaskKey.VIEW_STORIES)
 
 @arq_task_runner
 async def birthday_congratulation_task(session, user, params, emitter):
-    await _run_service_method(session, user, params, emitter, TaskKey.BIRTHDAY_CONGRATULATION)
+    return await _run_service_method(session, user, params, emitter, TaskKey.BIRTHDAY_CONGRATULATION)
 
 @arq_task_runner
 async def mass_messaging_task(session, user, params, emitter):
-    await _run_service_method(session, user, params, emitter, TaskKey.MASS_MESSAGING)
+    return await _run_service_method(session, user, params, emitter, TaskKey.MASS_MESSAGING)
 
 @arq_task_runner
 async def eternal_online_task(session, user, params, emitter):
-    await _run_service_method(session, user, params, emitter, TaskKey.ETERNAL_ONLINE)
+    return await _run_service_method(session, user, params, emitter, TaskKey.ETERNAL_ONLINE)
 
 @arq_task_runner
 async def leave_groups_by_criteria_task(session, user, params, emitter):
-    await _run_service_method(session, user, params, emitter, TaskKey.LEAVE_GROUPS)
+    return await _run_service_method(session, user, params, emitter, TaskKey.LEAVE_GROUPS)
 
 @arq_task_runner
 async def join_groups_by_criteria_task(session, user, params, emitter):
-    await _run_service_method(session, user, params, emitter, TaskKey.JOIN_GROUPS)
+    return await _run_service_method(session, user, params, emitter, TaskKey.JOIN_GROUPS)
 
 # --- backend/app\tasks\system_tasks.py ---
 
@@ -6765,6 +6869,68 @@ async def run_scenario_from_scheduler_task(ctx, scenario_id: int, user_id: int, 
         log.error("scenario.runner.critical_error", scenario_id=scenario_id, error=str(e), exc_info=True)
     finally:
         log.info("scenario.runner.finished", scenario_id=scenario_id)
+
+# --- backend/app\tasks\task_maps.py ---
+
+# backend/app/tasks/task_maps.py
+
+"""
+Централизованный модуль для хранения карт и определений, связанных с задачами.
+Это помогает избежать циклических зависимостей и упрощает добавление новых задач.
+"""
+from typing import Union
+
+# --- Сервисы, используемые для выполнения задач ---
+from app.services.feed_service import FeedService
+from app.services.incoming_request_service import IncomingRequestService
+from app.services.outgoing_request_service import OutgoingRequestService
+from app.services.friend_management_service import FriendManagementService
+from app.services.story_service import StoryService
+from app.services.automation_service import AutomationService
+from app.services.message_service import MessageService
+from app.services.group_management_service import GroupManagementService
+
+# --- Схемы данных (параметры) для каждой задачи ---
+from app.api.schemas.actions import (
+    AcceptFriendsRequest, LikeFeedRequest, AddFriendsRequest, EmptyRequest,
+    RemoveFriendsRequest, MassMessagingRequest, JoinGroupsRequest, LeaveGroupsRequest,
+    BirthdayCongratulationRequest, EternalOnlineRequest
+)
+
+# --- Ключи задач ---
+from app.core.constants import TaskKey
+
+# 1. Объединенный тип для всех возможных моделей с параметрами задач
+AnyTaskRequest = Union[
+    AcceptFriendsRequest, LikeFeedRequest, AddFriendsRequest, EmptyRequest,
+    RemoveFriendsRequest, MassMessagingRequest, JoinGroupsRequest, LeaveGroupsRequest,
+    BirthdayCongratulationRequest, EternalOnlineRequest
+]
+
+# 2. Карта, связывающая ключ задачи с именем функции-исполнителя в ARQ
+TASK_FUNC_MAP = {
+    TaskKey.ACCEPT_FRIENDS: "accept_friend_requests_task",
+    TaskKey.LIKE_FEED: "like_feed_task",
+    TaskKey.ADD_RECOMMENDED: "add_recommended_friends_task",
+    TaskKey.VIEW_STORIES: "view_stories_task",
+    TaskKey.REMOVE_FRIENDS: "remove_friends_by_criteria_task",
+    TaskKey.MASS_MESSAGING: "mass_messaging_task",
+    TaskKey.JOIN_GROUPS: "join_groups_by_criteria_task",
+    TaskKey.LEAVE_GROUPS: "leave_groups_by_criteria_task",
+    TaskKey.BIRTHDAY_CONGRATULATION: "birthday_congratulation_task",
+    TaskKey.ETERNAL_ONLINE: "eternal_online_task",
+}
+
+# 3. Карта для функции предпросмотра, связывающая ключ задачи с сервисным методом
+PREVIEW_SERVICE_MAP = {
+    TaskKey.ADD_RECOMMENDED: (OutgoingRequestService, "get_add_recommended_targets", AddFriendsRequest),
+    TaskKey.ACCEPT_FRIENDS: (IncomingRequestService, "get_accept_friends_targets", AcceptFriendsRequest),
+    TaskKey.REMOVE_FRIENDS: (FriendManagementService, "get_remove_friends_targets", RemoveFriendsRequest),
+    TaskKey.MASS_MESSAGING: (MessageService, "get_mass_messaging_targets", MassMessagingRequest),
+    TaskKey.LEAVE_GROUPS: (GroupManagementService, "get_leave_groups_targets", LeaveGroupsRequest),
+    TaskKey.JOIN_GROUPS: (GroupManagementService, "get_join_groups_targets", JoinGroupsRequest),
+    TaskKey.BIRTHDAY_CONGRATULATION: (AutomationService, "get_birthday_congratulation_targets", BirthdayCongratulationRequest),
+}
 
 # --- backend/app\tasks\__init__.py ---
 

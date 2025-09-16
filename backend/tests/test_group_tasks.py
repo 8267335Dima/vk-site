@@ -1,49 +1,83 @@
 # backend/tests/test_group_tasks.py
 import pytest
+import pytest_asyncio
 import asyncio
+import re
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.models import User
 from app.services.vk_api import VKAPI
 from tests.utils.task_runner import run_and_verify_task
 
+# --- Константы для выполнения задач ---
+KEYWORD_JOIN = "Аниме"
+KEYWORD_LEAVE = "anime"
+ACTION_COUNT = 2
 
-GROUP_KEYWORD_JOIN = "python"
-GROUP_KEYWORD_LEAVE = "memes"
 
-@pytest.fixture(scope="module", autouse=True)
-async def prepare_group_environment(vk_api_client: VKAPI):
-    print(f"\n[PREP] Подготовка среды для тестов групп...")
-    groups = await vk_api_client.search_groups(query=GROUP_KEYWORD_LEAVE, count=3)
-    if groups and groups.get('items'):
-        for group in groups['items']:
-            await vk_api_client.join_group(group['id'])
-    
-    yield
-    
-    print(f"\n[CLEANUP] Очистка после тестов групп...")
-    joined_groups = await vk_api_client.search_groups(query=GROUP_KEYWORD_JOIN, count=5)
-    if joined_groups and joined_groups.get('items'):
-        for group in joined_groups['items']:
-            await vk_api_client.leave_group(group['id'])
+def get_completed_count_from_logs(logs: list[str]) -> int:
+    """Извлекает число из финального лога задачи."""
+    log_text = "".join(logs)
+    match = re.search(r":\s*(\d+)\.", log_text)
+    return int(match.group(1)) if match else 0
 
-async def test_join_groups(async_client: AsyncClient, db_session: AsyncSession, authorized_user_and_headers: tuple, vk_api_client: VKAPI):
+@pytest.mark.asyncio
+async def test_join_groups_by_keyword(async_client: AsyncClient, db_session: AsyncSession, authorized_user_and_headers: tuple[User, dict], vk_api_client: VKAPI):
+    """
+    Тестирует вступление в группы по ключевому слову 'Аниме'.
+    """
     user, headers = authorized_user_and_headers
-    initial_data = await vk_api_client.get_groups(user.vk_id, extended=0)
+    
+    initial_data = await vk_api_client.groups.get(user_id=user.vk_id, extended=0)
     initial_count = initial_data['count'] if initial_data else 0
-    
-    await run_and_verify_task(async_client, db_session, headers, "join_groups", {"count": 2, "filters": {"status_keyword": GROUP_KEYWORD_JOIN}}, user.id)
-    
-    await asyncio.sleep(5)
-    final_data = await vk_api_client.get_groups(user.vk_id, extended=0)
-    assert final_data['count'] >= initial_count + 2
+    print(f"\n[INIT] Исходное количество групп: {initial_count}")
 
-async def test_leave_groups(async_client: AsyncClient, db_session: AsyncSession, authorized_user_and_headers: tuple, vk_api_client: VKAPI):
+    task_history = await run_and_verify_task(
+        async_client, db_session, headers, "join_groups", 
+        {"count": ACTION_COUNT, "filters": {"status_keyword": KEYWORD_JOIN}}, user
+    )
+    
+    assert task_history.status == "SUCCESS"
+    
+    actually_joined_count = get_completed_count_from_logs(task_history.emitter.logs)
+    print(f"[VERIFY-JOIN] Из логов извлечено: реально вступлено в {actually_joined_count} групп.")
+    assert actually_joined_count > 0, f"Не удалось вступить ни в одну группу по слову '{KEYWORD_JOIN}'. Убедитесь, что вы еще не состоите в популярных открытых группах по этой теме."
+
+    await asyncio.sleep(4)
+    final_data = await vk_api_client.groups.get(user_id=user.vk_id, extended=0)
+    final_count = final_data['count'] if final_data else 0
+    
+    assert final_count == initial_count + actually_joined_count, \
+        f"Ожидалось {initial_count + actually_joined_count} групп, а по факту {final_count}"
+
+
+@pytest.mark.asyncio
+async def test_leave_groups_by_keyword(async_client: AsyncClient, db_session: AsyncSession, authorized_user_and_headers: tuple[User, dict], vk_api_client: VKAPI):
+    """
+    Тестирует выход из групп по ключевому слову 'anime'.
+    Этот тест предполагает, что пользователь УЖЕ состоит в нужных группах.
+    """
     user, headers = authorized_user_and_headers
-    initial_data = await vk_api_client.get_groups(user.vk_id, extended=0)
+    
+    initial_data = await vk_api_client.groups.get(user_id=user.vk_id, extended=0)
     initial_count = initial_data['count'] if initial_data else 0
+    print(f"\n[INIT] Количество групп перед выходом: {initial_count}")
     
-    await run_and_verify_task(async_client, db_session, headers, "leave_groups", {"count": 3, "filters": {"status_keyword": GROUP_KEYWORD_LEAVE}}, user.id)
+    task_history = await run_and_verify_task(
+        async_client, db_session, headers, "leave_groups", 
+        {"count": ACTION_COUNT, "filters": {"status_keyword": KEYWORD_LEAVE}}, user
+    )
     
-    await asyncio.sleep(5)
-    final_data = await vk_api_client.get_groups(user.vk_id, extended=0)
-    assert final_data['count'] <= initial_count - 3
+    assert task_history.status == "SUCCESS"
+    
+    actually_left_count = get_completed_count_from_logs(task_history.emitter.logs)
+    print(f"[VERIFY-LEAVE] Из логов извлечено: реально покинуто {actually_left_count} групп.")
+    assert actually_left_count > 0, "Не удалось выйти ни из одной группы. Убедитесь, что аккаунт состоит в группах по ключевому слову 'anime'."
+
+    await asyncio.sleep(4)
+    final_data = await vk_api_client.groups.get(user_id=user.vk_id, extended=0)
+    final_count = final_data['count'] if final_data else 0
+
+    assert final_count == initial_count - actually_left_count, \
+        f"Ожидалось {initial_count - actually_left_count} групп, а по факту {final_count}"

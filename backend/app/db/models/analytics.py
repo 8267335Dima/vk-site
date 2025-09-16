@@ -19,6 +19,8 @@ class DailyStats(Base):
     friends_removed_count = Column(Integer, default=0, nullable=False)
     messages_sent_count = Column(Integer, default=0, nullable=False)
     posts_created_count = Column(Integer, nullable=False, server_default=text('0'))
+    groups_joined_count = Column(Integer, nullable=False, server_default=text('0'))
+    groups_left_count = Column(Integer, nullable=False, server_default=text('0'))
     user = relationship("User", back_populates="daily_stats")
     __table_args__ = (
         UniqueConstraint('user_id', 'date', name='_user_date_uc'),

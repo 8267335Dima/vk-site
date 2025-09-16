@@ -31,11 +31,6 @@ async def apply_filters_to_profiles(
             continue
         # В остальных случаях (когда задача на удаление и флаг `remove_banned` активен),
         # "собачки" будут проходить дальше и обрабатываться логикой задачи.
-
-        # Фильтр по закрытому профилю
-        # `is_closed` может отсутствовать, по умолчанию считаем профиль закрытым
-        if not filters.allow_closed_profiles and profile.get('is_closed', True):
-            continue
         
         # Фильтр по полу (0 - любой пол)
         if filters.sex and profile.get('sex') != filters.sex: 

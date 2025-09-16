@@ -20,8 +20,10 @@ class PlanPeriod(BaseModel):
 class PlanLimits(BaseModel):
     daily_likes_limit: int = Field(..., ge=0)
     daily_add_friends_limit: int = Field(..., ge=0)
-    daily_message_limit: int = Field(..., ge=0)  # <--- ДОБАВЛЕНО
-    daily_posts_limit: int = Field(..., ge=0)    # <--- ДОБАВЛЕНО
+    daily_message_limit: int = Field(..., ge=0) 
+    daily_posts_limit: int = Field(..., ge=0)   
+    daily_join_groups_limit: int = Field(..., ge=0)
+    daily_leave_groups_limit: int = Field(..., ge=0)
     max_concurrent_tasks: int = Field(..., ge=1)
     max_profiles: Optional[int] = Field(None, ge=1)
     max_team_members: Optional[int] = Field(None, ge=1)

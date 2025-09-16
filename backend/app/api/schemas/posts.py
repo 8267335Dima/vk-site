@@ -4,12 +4,15 @@ from datetime import datetime
 from typing import List, Optional
 
 class PostBase(BaseModel):
-    post_text: Optional[str] = None
+    post_text: Optional[str] = Field(None, max_length=4000)
     publish_at: datetime
 
 class PostCreate(PostBase):
-    attachments: Optional[List[str]] = Field(default_factory=list, description="Список готовых attachment ID (photo_id, etc.)")
-    image_url: Optional[HttpUrl] = Field(None, description="URL изображения для автоматической загрузки и прикрепления.")
+    attachments: Optional[List[str]] = Field(
+        default_factory=list, 
+        description="Список готовых attachment ID (photo_id, etc.). Не более 10.",
+        max_items=10 
+    )
 
 class PostRead(PostBase):
     id: int
@@ -23,10 +26,15 @@ class PostRead(PostBase):
 class UploadedImageResponse(BaseModel): 
     attachment_id: str
 
+class UploadImageFromUrlRequest(BaseModel):
+    image_url: HttpUrl
+
 class UploadedImagesResponse(BaseModel):
-    """Ответ для пакетной загрузки изображений."""
     attachment_ids: List[str]
 
+# --- НОВАЯ СХЕМА ДЛЯ ПАКЕТНОЙ ЗАГРУЗКИ ПО URL ---
+class UploadImagesFromUrlsRequest(BaseModel):
+    image_urls: List[HttpUrl] = Field(..., description="Список URL изображений для загрузки. Не более 10.", max_items=10)
+
 class PostBatchCreate(BaseModel):
-    """Схема для пакетного создания постов."""
     posts: List[PostCreate]

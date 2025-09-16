@@ -48,22 +48,32 @@ async def login_via_vk(
     user = result.scalar_one_or_none()
 
     encrypted_token = encrypt_data(vk_token)
-    
     base_plan_limits = get_limits_for_plan(PlanName.BASE)
 
     if user:
         user.encrypted_vk_token = encrypted_token
     else:
-        user = User(
-            vk_id=vk_id,
-            encrypted_vk_token=encrypted_token,
-            plan=PlanName.BASE,
-            plan_expires_at=datetime.now(UTC) + timedelta(days=14),
-            daily_likes_limit=base_plan_limits["daily_likes_limit"],
-            daily_add_friends_limit=base_plan_limits["daily_add_friends_limit"],
-            daily_message_limit=base_plan_limits["daily_message_limit"], # <--- ДОБАВЛЕНО
-            daily_posts_limit=base_plan_limits["daily_posts_limit"]   
-        )
+        # --- НАЧАЛО ИЗМЕНЕНИЯ ---
+        user_data = {
+            "vk_id": vk_id,
+            "encrypted_vk_token": encrypted_token,
+            "plan": PlanName.BASE,
+            "plan_expires_at": datetime.now(UTC) + timedelta(days=14),
+        }
+        
+        # Получаем все имена колонок из модели User
+        user_model_columns = {c.name for c in User.__table__.columns}
+        
+        # Фильтруем лимиты, оставляя только те, что есть в модели
+        valid_limits_for_db = {
+            key: value
+            for key, value in base_plan_limits.items()
+            if key in user_model_columns
+        }
+        user_data.update(valid_limits_for_db)
+        
+        user = User(**user_data)
+        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
         db.add(user)
 
     if str(vk_id) == settings.ADMIN_VK_ID:
@@ -71,10 +81,12 @@ async def login_via_vk(
         user.is_admin = True
         user.plan = PlanName.PRO
         user.plan_expires_at = None
-        user.daily_likes_limit = admin_limits["daily_likes_limit"]
-        user.daily_add_friends_limit = admin_limits["daily_add_friends_limit"]
-        user.daily_message_limit = admin_limits["daily_message_limit"]
-        user.daily_posts_limit = admin_limits["daily_posts_limit"]     
+        
+        # Здесь используем тот же безопасный подход
+        user_model_columns = {c.name for c in User.__table__.columns}
+        for key, value in admin_limits.items():
+            if key in user_model_columns:
+                setattr(user, key, value)
 
     await db.flush()
     await db.refresh(user)

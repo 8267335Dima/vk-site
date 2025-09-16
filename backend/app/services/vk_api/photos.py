@@ -1,16 +1,15 @@
 # --- backend/app/services/vk_api/photos.py ---
 
+import json # <--- ДОБАВЛЕН ИМПОРТ
 from typing import Optional, Dict, Any
 from .base import BaseVKSection
 import aiohttp
 
-# Импортируем VKAPI для type hinting и избежания циклического импорта
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from . import VKAPI
 
 class PhotosAPI(BaseVKSection):
-    # УЛУЧШЕНИЕ: Принимаем родительский объект VKAPI для доступа к общей сессии
     def __init__(self, request_method: callable, vk_api_client: 'VKAPI'):
         super().__init__(request_method)
         self._vk_api_client = vk_api_client
@@ -23,6 +22,8 @@ class PhotosAPI(BaseVKSection):
         return await self._make_request('photos.getWallUploadServer')
 
     async def saveWallPhoto(self, upload_data: dict) -> Optional[Dict[str, Any]]:
+        if 'photo' in upload_data and not isinstance(upload_data['photo'], str):
+            upload_data['photo'] = json.dumps(upload_data['photo'], ensure_ascii=False)
         return await self._make_request('photos.saveWallPhoto', params=upload_data)
         
     async def upload_for_wall(self, photo_data: bytes) -> Optional[str]:
@@ -33,16 +34,20 @@ class PhotosAPI(BaseVKSection):
         form = aiohttp.FormData()
         form.add_field('photo', photo_data, filename='photo.jpg', content_type='image/jpeg')
         
-        # УЛУЧШЕНИЕ: Используем общую сессию из родительского VKAPI клиента
         session = await self._vk_api_client._get_session()
-        # Таймаут для загрузки файла может быть больше, поэтому устанавливаем его явно
         timeout = aiohttp.ClientTimeout(total=45)
-        async with session.post(upload_server['upload_url'], data=form, proxy=self._vk_api_client.proxy, timeout=timeout) as resp:
-            # Добавлена проверка статуса ответа
-            resp.raise_for_status()
-            upload_result = await resp.json()
+        
+        # Оборачиваем в try-except для лучшего логгирования ошибки
+        try:
+            async with session.post(upload_server['upload_url'], data=form, proxy=self._vk_api_client.proxy, timeout=timeout) as resp:
+                resp.raise_for_status()
+                # VK может вернуть text/plain, поэтому явно указываем content_type=None
+                upload_result = await resp.json(content_type=None)
+        except Exception as e:
+            # Если ошибка на этом этапе, мы будем знать точно, где она
+            print(f"ОШИБКА при загрузке на сервер VK: {e}")
+            raise
 
-        # Проверяем, что в ответе есть необходимые поля
         if not all(k in upload_result for k in ['server', 'photo', 'hash']):
              return None
 

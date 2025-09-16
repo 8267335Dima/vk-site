@@ -1,6 +1,6 @@
-# --- backend/app/api/endpoints/task_history.py ---
-# ОТВЕТСТВЕННОСТЬ: Просмотр истории задач и управление ими (отмена, повтор).
+# backend/app/api/endpoints/task_history.py
 
+# ОТВЕТСТВЕННОСТЬ: Просмотр истории задач и управление ими (отмена, повтор).
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,8 +15,8 @@ from app.api.schemas.tasks import ActionResponse, PaginatedTasksResponse
 from app.core.config_loader import AUTOMATIONS_CONFIG
 from app.core.constants import TaskKey
 
-# --- ИЗМЕНЕНИЕ: Импортируем общую логику и карты из соседнего модуля ---
-from .tasks import _enqueue_task, AnyTaskRequest, PREVIEW_SERVICE_MAP
+from .tasks import _enqueue_task
+from app.tasks.task_maps import AnyTaskRequest, PREVIEW_SERVICE_MAP
 
 router = APIRouter()
 
@@ -87,7 +87,6 @@ async def retry_task(
     
     validated_data = RequestModel(**(task.parameters or {}))
     
-    # --- ИЗМЕНЕНИЕ: Вызываем импортированную функцию ---
     return await _enqueue_task(
         current_user, db, arq_pool, task_key_str, validated_data, original_task_name=task.task_name
     )

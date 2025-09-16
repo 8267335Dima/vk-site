@@ -152,14 +152,11 @@ async def payment_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         user.plan_expires_at = start_date + datetime.timedelta(days=30 * payment.months)
         
         new_limits = get_limits_for_plan(user.plan)
-        user.daily_likes_limit = new_limits.get("daily_likes_limit", 0)
-        user.daily_add_friends_limit = new_limits.get("daily_add_friends_limit", 0)
-        user.daily_message_limit = new_limits.get("daily_message_limit", 0) # <--- ДОБАВЛЕНО
-        user.daily_posts_limit = new_limits.get("daily_posts_limit", 0)   # <--- ДОБАВЛЕНО
+        for key, value in new_limits.items():
+            setattr(user, key, value)
 
         payment.status = "succeeded"
         
-        # FastAPI автоматически вызовет db.commit() после успешного выхода из этой функции
         log.info("webhook.success", user_id=user.id, plan=user.plan, expires_at=user.plan_expires_at)
         
     return {"status": "ok"}
