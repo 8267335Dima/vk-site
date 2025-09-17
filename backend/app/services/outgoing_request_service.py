@@ -112,7 +112,7 @@ class OutgoingRequestService(BaseVKService):
             return " ".join(final_results)
 
         finally:
-            await redis_lock_client.close()
+            await redis_lock_client.aclose()
 
     async def _like_user_content(self, user_id: int, profile: Dict[str, Any], config: LikeAfterAddConfig, stats: DailyStats) -> list[str]:
         # ... (код без изменений)
