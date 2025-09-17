@@ -1,6 +1,7 @@
-# --- backend/app/api/schemas/analytics.py ---
+# --- START OF FILE backend/app/api/schemas/analytics.py ---
+
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Dict, Any
 from datetime import date
 
 class AudienceStatItem(BaseModel):
@@ -16,16 +17,33 @@ class AudienceAnalyticsResponse(BaseModel):
     age_distribution: List[AudienceStatItem]
     sex_distribution: List[SexDistributionResponse]
 
+class ProfileSummaryData(BaseModel):
+    friends: int = 0
+    followers: int = 0
+    photos: int = 0
+    wall_posts: int = 0
+    recent_post_likes: int = 0
+    recent_photo_likes: int = 0
+    total_post_likes: int = 0
+    total_photo_likes: int = 0
+
 class ProfileSummaryResponse(BaseModel):
-    friends: int
-    followers: int
-    photos: int
-    wall_posts: int
+    current_stats: ProfileSummaryData
+    growth_daily: Dict[str, int]
+    growth_weekly: Dict[str, int]
+
 
 class ProfileGrowthItem(BaseModel):
     date: date
-    total_likes_on_content: int
     friends_count: int
+    followers_count: int
+    photos_count: int
+    wall_posts_count: int
+    recent_post_likes: int
+    recent_photo_likes: int
+    total_post_likes: int
+    total_photo_likes: int
+
 
 class ProfileGrowthResponse(BaseModel):
     data: List[ProfileGrowthItem]

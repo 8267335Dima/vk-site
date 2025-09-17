@@ -14,7 +14,7 @@ from app.services.vk_api import VKAPI, VKAPIError
 from app.core.security import decrypt_data
 from app.repositories.stats import StatsRepository
 from app.core.plans import get_features_for_plan, is_feature_available_for_plan
-from app.api.schemas.users import TaskInfoResponse, FilterPresetCreate, FilterPresetRead, ManagedProfileRead
+from app.api.schemas.users import TaskInfoResponse, FilterPresetCreate, FilterPresetRead, ManagedProfileRead, AnalyticsSettingsRead, AnalyticsSettingsUpdate
 from app.core.constants import PlanName, FeatureKey
 
 router = APIRouter()
@@ -119,6 +119,22 @@ async def update_user_delay_profile(
     await db.refresh(current_user)
     # Переиспользуем эндпоинт, чтобы не дублировать логику
     return await read_users_me(current_user)
+
+@router.put("/me/analytics-settings", response_model=AnalyticsSettingsRead)
+async def update_analytics_settings(
+    settings_data: AnalyticsSettingsUpdate,
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
+    """Обновляет персональные настройки пользователя для сбора аналитики."""
+    current_user.analytics_settings_posts_count = settings_data.posts_count
+    current_user.analytics_settings_photos_count = settings_data.photos_count
+    await db.commit()
+    await db.refresh(current_user)
+    return AnalyticsSettingsRead(
+        posts_count=current_user.analytics_settings_posts_count,
+        photos_count=current_user.analytics_settings_photos_count
+    )
 
 @router.get("/task-info", response_model=TaskInfoResponse)
 async def get_task_info(

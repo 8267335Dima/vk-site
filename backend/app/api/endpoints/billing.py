@@ -1,4 +1,5 @@
-# backend/app/api/endpoints/billing.py
+# --- START OF FILE backend/app/api/endpoints/billing.py ---
+
 import datetime
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -30,7 +31,7 @@ async def get_available_plans():
                 "id": plan_id,
                 "display_name": config.display_name,
                 "price": config.base_price, 
-                "currency": "RUB", # Можно вынести в конфиг
+                "currency": "RUB",
                 "description": config.description,
                 "features": config.features,
                 "is_popular": config.is_popular,
@@ -64,13 +65,10 @@ async def create_payment(
     
     final_price = round(final_price, 2)
 
-    idempotency_key = str(uuid.uuid4())
-    # Здесь должна быть реальная интеграция с YooKassa
     payment_response = {
         "id": f"test_payment_{uuid.uuid4()}",
         "status": "pending",
-        "amount": {"value": str(final_price), "currency": "RUB"},
-        "confirmation": {"confirmation_url": "https://yoomoney.ru/checkout/payments/v2/contract?orderId=2d12b192-000f-5000-9000-1121d5a37213"}
+        "confirmation": {"confirmation_url": "https://yoomoney.ru/checkout/payments/v2/contract?orderId=fake-order-id"}
     }
     
     new_payment = Payment(
@@ -93,8 +91,6 @@ async def create_payment(
 async def payment_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     """
     Обрабатывает вебхуки от платежной системы.
-    ВНИМАНИЕ: В production-среде необходимо добавить проверку IP-адреса
-    или подписи запроса от YooKassa для безопасности.
     """
     try:
         event = await request.json()
@@ -112,17 +108,12 @@ async def payment_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         if not payment_system_id:
             return {"status": "error", "message": "Payment ID missing."}
 
-        # --- ИСПРАВЛЕНИЕ ЗДЕСЬ: УБИРАЕМ `async with db.begin():` ---
-        # Сессия `db` уже находится в транзакции благодаря `Depends(get_db)`.
-        # Все изменения будут автоматически закоммичены после успешного
-        # завершения эндпоинта.
-
-        query = select(Payment).where(Payment.payment_system_id == payment_system_id)
+        query = select(Payment).where(Payment.payment_system_id == payment_system_id).with_for_update()
         payment = (await db.execute(query)).scalar_one_or_none()
 
         if not payment:
             log.warn("webhook.payment_not_found", payment_id=payment_system_id)
-            return {"status": "ok"} # Возвращаем 200, чтобы система не повторяла запрос
+            return {"status": "ok"}
 
         if payment.status == "succeeded":
             log.info("webhook.already_processed", payment_id=payment.id)
@@ -131,7 +122,6 @@ async def payment_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         user = await db.get(User, payment.user_id, with_for_update=True)
         if not user:
             log.error("webhook.user_not_found", user_id=payment.user_id)
-            # Мы не можем ничего сделать, но должны вернуть 200, чтобы не было повторов
             payment.status = "failed"
             payment.error_message = "User not found"
             await db.commit()
@@ -152,10 +142,15 @@ async def payment_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         
         new_limits = get_limits_for_plan(user.plan)
         for key, value in new_limits.items():
-            setattr(user, key, value)
+            if hasattr(user, key):
+                setattr(user, key, value)
 
         payment.status = "succeeded"
         
         log.info("webhook.success", user_id=user.id, plan=user.plan, expires_at=user.plan_expires_at)
         
+        # --- ИСПРАВЛЕНИЕ: Сохраняем все изменения в БД ---
+        await db.commit()
+        
     return {"status": "ok"}
+

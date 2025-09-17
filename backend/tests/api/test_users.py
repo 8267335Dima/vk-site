@@ -102,3 +102,33 @@ async def test_create_and_get_filter_preset(async_client: AsyncClient, auth_head
     presets_list = response_get.json()
     assert len(presets_list) == 1
     assert presets_list[0]["id"] == created_data["id"]
+
+async def test_update_and_get_analytics_settings(
+    async_client: AsyncClient, auth_headers: dict, test_user: User, db_session: AsyncSession
+):
+    """
+    Тест на успешное обновление и последующее получение
+    пользовательских настроек для аналитики.
+    """
+    # Arrange: Данные для обновления
+    settings_data = {
+        "posts_count": 77,
+        "photos_count": 177
+    }
+
+    # Act: Обновляем настройки
+    response_update = await async_client.put(
+        "/api/v1/users/me/analytics-settings",
+        headers=auth_headers,
+        json=settings_data
+    )
+
+    # Assert: Проверяем ответ и состояние БД
+    assert response_update.status_code == 200
+    updated_settings = response_update.json()
+    assert updated_settings["posts_count"] == 77
+    assert updated_settings["photos_count"] == 177
+
+    await db_session.refresh(test_user)
+    assert test_user.analytics_settings_posts_count == 77
+    assert test_user.analytics_settings_photos_count == 177

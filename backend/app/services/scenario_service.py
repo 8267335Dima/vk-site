@@ -61,7 +61,7 @@ class ScenarioExecutionService:
 
 
         if metric == "friends_count":
-            user_info_list = await self.vk_api.get_user_info(user_ids=str(self.user.vk_id), fields="counters")
+            user_info_list = await self.vk_api.users.get(user_ids=str(self.user.vk_id), fields="counters")
             current_value = user_info_list[0].get("counters", {}).get("friends", 0) if user_info_list else 0
         elif metric == "day_of_week":
             current_value = datetime.datetime.utcnow().isoweekday()

@@ -544,7 +544,8 @@ async def get_current_user_from_ws(
 
 # --- backend/app\api\endpoints\analytics.py ---
 
-# backend/app/api/endpoints/analytics.py
+# --- START OF FILE backend/app/api/endpoints/analytics.py ---
+
 import datetime
 from fastapi import APIRouter, Depends, Query
 from fastapi_cache.decorator import cache
@@ -556,7 +557,8 @@ from app.api.dependencies import get_current_active_profile
 from app.db.session import get_db
 from app.api.schemas.analytics import (
     AudienceAnalyticsResponse, ProfileGrowthResponse, ProfileGrowthItem,
-    ProfileSummaryResponse, FriendRequestConversionResponse, PostActivityHeatmapResponse
+    ProfileSummaryResponse, FriendRequestConversionResponse, PostActivityHeatmapResponse,
+    ProfileSummaryData
 )
 from app.services.vk_api import VKAPI
 from app.core.security import decrypt_data
@@ -574,37 +576,81 @@ async def get_audience_analytics(
 ):
     emitter = SystemLogEmitter(task_name="analytics_endpoint") 
     service = AnalyticsService(db=db, user=current_user, emitter=emitter)
-    # Используем try-finally для гарантированного закрытия сессии
     try:
         return await service.get_audience_distribution()
     finally:
         if service.vk_api:
             await service.vk_api.close()
 
-
 @router.get("/profile-summary", response_model=ProfileSummaryResponse)
 @cache(expire=3600)
-async def get_profile_summary(current_user: User = Depends(get_current_active_profile)):
-    vk_token = decrypt_data(current_user.encrypted_vk_token)
-    vk_api = VKAPI(access_token=vk_token)
-    
-    try:
-        # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
-        user_info_list = await vk_api.users.get(user_ids=str(current_user.vk_id), fields="counters")
-        user_info = user_info_list[0] if user_info_list else {}
-        
-        counters = user_info.get('counters', {})
-        wall_info = await vk_api.wall.get(owner_id=current_user.vk_id, count=0)
-    finally:
-        await vk_api.close()
-    
-    return ProfileSummaryResponse(
-        friends=counters.get('friends', 0),
-        followers=counters.get('followers', 0),
-        photos=counters.get('photos', 0),
-        wall_posts=wall_info.get('count', 0) if wall_info else 0
-    )
+async def get_profile_summary(
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Возвращает текущие метрики профиля и динамику их изменения
+    за последний день и неделю.
+    """
+    today = datetime.date.today()
+    yesterday = today - datetime.timedelta(days=1)
+    week_ago = today - datetime.timedelta(days=7)
 
+    stmt = select(ProfileMetric).where(
+        ProfileMetric.user_id == current_user.id,
+        ProfileMetric.date.in_([today, yesterday, week_ago])
+    )
+    result = await db.execute(stmt)
+    metrics = {metric.date: metric for metric in result.scalars().all()}
+
+    today_metrics = metrics.get(today)
+    yesterday_metrics = metrics.get(yesterday)
+    week_ago_metrics = metrics.get(week_ago)
+
+    # ИСПРАВЛЕНИЕ: Безопасное создание DTO с явным маппингом полей
+    if today_metrics:
+        current_stats = ProfileSummaryData(
+            friends=today_metrics.friends_count,
+            followers=today_metrics.followers_count,
+            photos=today_metrics.photos_count,
+            wall_posts=today_metrics.wall_posts_count,
+            recent_post_likes=today_metrics.recent_post_likes,
+            recent_photo_likes=today_metrics.recent_photo_likes,
+            total_post_likes=today_metrics.total_post_likes,
+            total_photo_likes=today_metrics.total_photo_likes
+        )
+    else:
+        current_stats = ProfileSummaryData()
+
+    growth_daily = {}
+    growth_weekly = {}
+    
+    # Используем поля схемы для итерации, чтобы ничего не пропустить
+    fields_to_compare = ProfileSummaryData.model_fields.keys()
+    model_field_map = {
+        "friends": "friends_count", "followers": "followers_count", "photos": "photos_count",
+        "wall_posts": "wall_posts_count",
+        "recent_post_likes": "recent_post_likes",
+        "recent_photo_likes": "recent_photo_likes",
+        "total_post_likes": "total_post_likes",
+        "total_photo_likes": "total_photo_likes",
+    }
+
+    for schema_field in fields_to_compare:
+        model_field = model_field_map[schema_field]
+        today_val = getattr(today_metrics, model_field, 0) if today_metrics else 0
+        
+        yesterday_val = getattr(yesterday_metrics, model_field, 0) if yesterday_metrics else 0
+        growth_daily[schema_field] = today_val - yesterday_val
+            
+        week_ago_val = getattr(week_ago_metrics, model_field, 0) if week_ago_metrics else 0
+        growth_weekly[schema_field] = today_val - week_ago_val
+
+    return ProfileSummaryResponse(
+        current_stats=current_stats,
+        growth_daily=growth_daily,
+        growth_weekly=growth_weekly
+    )
 
 @router.get("/profile-growth", response_model=ProfileGrowthResponse)
 async def get_profile_growth_analytics(
@@ -612,7 +658,6 @@ async def get_profile_growth_analytics(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    # ... (код без изменений)
     end_date = datetime.date.today()
     start_date = end_date - datetime.timedelta(days=days - 1)
 
@@ -627,13 +672,8 @@ async def get_profile_growth_analytics(
     result = await db.execute(stmt)
     data = result.scalars().all()
     
-    response_data = [
-        ProfileGrowthItem(
-            date=row.date, 
-            total_likes_on_content=row.total_likes_on_content,
-            friends_count=row.friends_count
-        ) for row in data
-    ]
+    # Используем ProfileGrowthItem для валидации и формирования ответа
+    response_data = [ProfileGrowthItem(**row.__dict__) for row in data]
 
     return ProfileGrowthResponse(data=response_data)
 
@@ -643,7 +683,6 @@ async def get_friend_request_conversion_stats(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-
     stmt = (
         select(FriendRequestLog.status, func.count(FriendRequestLog.id))
         .where(FriendRequestLog.user_id == current_user.id)
@@ -655,12 +694,12 @@ async def get_friend_request_conversion_stats(
     sent_total = stats.get('pending', 0) + stats.get('accepted', 0)
     accepted_total = stats.get('accepted', 0)
     
-    conversion_rate = (accepted_total / sent_total * 100) if sent_total > 0 else 0
+    conversion_rate = (accepted_total / sent_total * 100) if sent_total > 0 else 0.0
 
     return FriendRequestConversionResponse(
         sent_total=sent_total,
         accepted_total=accepted_total,
-        conversion_rate=conversion_rate
+        conversion_rate=round(conversion_rate, 2)
     )
 
 
@@ -669,12 +708,12 @@ async def get_post_activity_heatmap(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-
     stmt = select(PostActivityHeatmap).where(PostActivityHeatmap.user_id == current_user.id)
     result = await db.execute(stmt)
     heatmap_data = result.scalar_one_or_none()
     
     if not heatmap_data:
+        # Возвращаем пустую сетку, если данных еще нет
         return PostActivityHeatmapResponse(data=[[0]*24]*7)
         
     return PostActivityHeatmapResponse(data=heatmap_data.heatmap_data.get("data", [[0]*24]*7))
@@ -964,7 +1003,8 @@ async def update_automation(
 
 # --- backend/app\api\endpoints\billing.py ---
 
-# backend/app/api/endpoints/billing.py
+# --- START OF FILE backend/app/api/endpoints/billing.py ---
+
 import datetime
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -996,7 +1036,7 @@ async def get_available_plans():
                 "id": plan_id,
                 "display_name": config.display_name,
                 "price": config.base_price, 
-                "currency": "RUB", # Можно вынести в конфиг
+                "currency": "RUB",
                 "description": config.description,
                 "features": config.features,
                 "is_popular": config.is_popular,
@@ -1030,13 +1070,10 @@ async def create_payment(
     
     final_price = round(final_price, 2)
 
-    idempotency_key = str(uuid.uuid4())
-    # Здесь должна быть реальная интеграция с YooKassa
     payment_response = {
         "id": f"test_payment_{uuid.uuid4()}",
         "status": "pending",
-        "amount": {"value": str(final_price), "currency": "RUB"},
-        "confirmation": {"confirmation_url": "https://yoomoney.ru/checkout/payments/v2/contract?orderId=2d12b192-000f-5000-9000-1121d5a37213"}
+        "confirmation": {"confirmation_url": "https://yoomoney.ru/checkout/payments/v2/contract?orderId=fake-order-id"}
     }
     
     new_payment = Payment(
@@ -1059,8 +1096,6 @@ async def create_payment(
 async def payment_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     """
     Обрабатывает вебхуки от платежной системы.
-    ВНИМАНИЕ: В production-среде необходимо добавить проверку IP-адреса
-    или подписи запроса от YooKassa для безопасности.
     """
     try:
         event = await request.json()
@@ -1078,17 +1113,12 @@ async def payment_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         if not payment_system_id:
             return {"status": "error", "message": "Payment ID missing."}
 
-        # --- ИСПРАВЛЕНИЕ ЗДЕСЬ: УБИРАЕМ `async with db.begin():` ---
-        # Сессия `db` уже находится в транзакции благодаря `Depends(get_db)`.
-        # Все изменения будут автоматически закоммичены после успешного
-        # завершения эндпоинта.
-
-        query = select(Payment).where(Payment.payment_system_id == payment_system_id)
+        query = select(Payment).where(Payment.payment_system_id == payment_system_id).with_for_update()
         payment = (await db.execute(query)).scalar_one_or_none()
 
         if not payment:
             log.warn("webhook.payment_not_found", payment_id=payment_system_id)
-            return {"status": "ok"} # Возвращаем 200, чтобы система не повторяла запрос
+            return {"status": "ok"}
 
         if payment.status == "succeeded":
             log.info("webhook.already_processed", payment_id=payment.id)
@@ -1097,7 +1127,6 @@ async def payment_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         user = await db.get(User, payment.user_id, with_for_update=True)
         if not user:
             log.error("webhook.user_not_found", user_id=payment.user_id)
-            # Мы не можем ничего сделать, но должны вернуть 200, чтобы не было повторов
             payment.status = "failed"
             payment.error_message = "User not found"
             await db.commit()
@@ -1118,13 +1147,19 @@ async def payment_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         
         new_limits = get_limits_for_plan(user.plan)
         for key, value in new_limits.items():
-            setattr(user, key, value)
+            if hasattr(user, key):
+                setattr(user, key, value)
 
         payment.status = "succeeded"
         
         log.info("webhook.success", user_id=user.id, plan=user.plan, expires_at=user.plan_expires_at)
         
+        # --- ИСПРАВЛЕНИЕ: Сохраняем все изменения в БД ---
+        await db.commit()
+        
     return {"status": "ok"}
+
+
 
 # --- backend/app\api\endpoints\notifications.py ---
 
@@ -2050,13 +2085,13 @@ async def reply_to_ticket(
 # backend/app/api/endpoints/tasks.py
 
 # ОТВЕТСТВЕННОСТЬ: Запуск, предпросмотр и конфигурация новых задач.
-from fastapi import APIRouter, Depends, Body, HTTPException, status, Request # <--- ДОБАВЛЕН Request
+from fastapi import APIRouter, Depends, Body, HTTPException, status, Request
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
-from pydantic import BaseModel, ValidationError # <--- ДОБАВЛЕН ValidationError
+from pydantic import BaseModel, ValidationError
 from arq.connections import ArqRedis
-import datetime # <--- ДОБАВЛЕН datetime
+import datetime
 
 from app.db.models import User, TaskHistory
 from app.api.dependencies import get_current_active_profile, get_arq_pool
@@ -2067,18 +2102,21 @@ from app.core.plans import get_plan_config, is_feature_available_for_plan
 from app.core.config_loader import AUTOMATIONS_CONFIG
 from app.core.constants import TaskKey
 from app.services.vk_api import VKAPIError
-
+from app.tasks.service_maps import TASK_CONFIG_MAP
 from app.tasks.task_maps import AnyTaskRequest, TASK_FUNC_MAP, PREVIEW_SERVICE_MAP
 
 router = APIRouter()
 
-# --- Вспомогательная функция ---
+# --- Вспомогательная функция (ИСПРАВЛЕНО) ---
 async def _enqueue_task(
     user: User, db: AsyncSession, arq_pool: ArqRedis, task_key: str, request_data: BaseModel,
     original_task_name: Optional[str] = None,
-    defer_until: Optional[datetime.datetime] = None # <--- ДОБАВЛЕНО
-) -> ActionResponse:
-    """Проверяет лимиты и ставит задачу в очередь ARQ."""
+    defer_until: Optional[datetime.datetime] = None
+) -> TaskHistory:
+    """
+    Проверяет лимиты и ГОТОВИТ задачу к постановке в очередь.
+    НЕ ДЕЛАЕТ COMMIT. Возвращает объект TaskHistory для дальнейшей обработки.
+    """
     plan_config = get_plan_config(user.plan)
 
     max_concurrent = plan_config.get("limits", {}).get("max_concurrent_tasks")
@@ -2111,32 +2149,10 @@ async def _enqueue_task(
         parameters=request_data.model_dump(exclude_unset=True)
     )
     db.add(task_history)
-    await db.commit()
+    await db.flush() # Используем flush, чтобы получить ID, но не коммитим
     await db.refresh(task_history)
-
-    job_kwargs = {
-        'task_history_id': task_history.id,
-        **request_data.model_dump()
-    }
-    if defer_until: # <--- ДОБАВЛЕНО
-        job_kwargs['_defer_until'] = defer_until
-
-    job = await arq_pool.enqueue_job(task_func_name, **job_kwargs)
-
-    # --- ИЗМЕНЕНИЕ ---
-    task_history.arq_job_id = job.job_id
-    # ------------------
-    await db.commit()
     
-    message = f"Задача '{task_display_name}' успешно добавлена в очередь."
-    if defer_until: # <--- ДОБАВЛЕНО
-        message = f"Задача '{task_display_name}' запланирована на {defer_until.strftime('%Y-%m-%d %H:%M:%S')}."
-
-
-    return ActionResponse(
-        message=message,
-        task_id=job.job_id
-    )
+    return task_history
 
 # --- Эндпоинты ---
 @router.get("/{task_key}/config", response_model=TaskConfigResponse, summary="Получить конфигурацию UI для задачи")
@@ -2145,7 +2161,6 @@ async def get_task_config(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    # ... (код без изменений)
     task_config = next((item for item in AUTOMATIONS_CONFIG if item.id == task_key.value), None)
     if not task_config:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Конфигурация для задачи не найдена.")
@@ -2188,19 +2203,19 @@ async def get_task_config(
 @router.post("/run/{task_key}", response_model=ActionResponse, summary="Запустить любую задачу по ее ключу")
 async def run_any_task(
     task_key: TaskKey,
-    request: Request, # <--- ИЗМЕНЕНИЕ
+    request: Request,
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db),
     arq_pool: ArqRedis = Depends(get_arq_pool)
 ):
-    # --- НАЧАЛО ИЗМЕНЕНИЯ ---
-    # Мы читаем тело запроса как JSON, чтобы извлечь `publish_at`
-    # и одновременно валидируем его через Pydantic-модель задачи.
     try:
         raw_body = await request.json()
         
-        # Находим нужную Pydantic модель для валидации
-        RequestModel = next((m for k, (_,_,m) in PREVIEW_SERVICE_MAP.items() if k == task_key), AnyTaskRequest)
+        task_config_tuple = TASK_CONFIG_MAP.get(task_key)
+        if not task_config_tuple:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Конфигурация для задачи '{task_key.value}' не найдена.")
+        
+        RequestModel = task_config_tuple[2]
         request_data = RequestModel(**raw_body)
         
         publish_at_str = raw_body.get("publish_at")
@@ -2208,9 +2223,42 @@ async def run_any_task(
 
     except (ValidationError, TypeError, ValueError) as e:
          raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
-    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
-    return await _enqueue_task(current_user, db, arq_pool, task_key.value, request_data, defer_until=defer_until)
+    # --- НАЧАЛО ИСПРАВЛЕНИЯ: Единый процесс для всех задач ---
+    # 1. Вызываем вспомогательную функцию, которая делает все проверки и готовит объект TaskHistory
+    task_history = await _enqueue_task(
+        user=current_user,
+        db=db,
+        arq_pool=arq_pool,
+        task_key=task_key.value,
+        request_data=request_data,
+        defer_until=defer_until
+    )
+    
+    # 2. Готовим параметры для ARQ
+    task_func_name = TASK_FUNC_MAP[task_key]
+    job_kwargs = {
+        'task_history_id': task_history.id,
+        **request_data.model_dump()
+    }
+    if defer_until:
+        job_kwargs['_defer_until'] = defer_until
+        
+    # 3. Ставим задачу в очередь
+    job = await arq_pool.enqueue_job(task_func_name, **job_kwargs)
+    
+    # 4. Обновляем ID задачи и коммитим ВСЕ изменения в одной транзакции
+    task_history.arq_job_id = job.job_id
+    await db.commit()
+    
+    # 5. Формируем ответ
+    message = f"Задача '{task_history.task_name}' успешно добавлена в очередь."
+    if defer_until:
+        message = f"Задача '{task_history.task_name}' запланирована на {defer_until.strftime('%Y-%m-%d %H:%M:%S')}."
+        
+    return ActionResponse(message=message, task_id=job.job_id)
+    # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+
 
 @router.post("/preview/{task_key}", response_model=PreviewResponse, summary="Предварительный подсчет аудитории для задачи")
 async def preview_task_audience(
@@ -2219,7 +2267,6 @@ async def preview_task_audience(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    # ... (код без изменений)
     if task_key not in PREVIEW_SERVICE_MAP:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -2230,7 +2277,7 @@ async def preview_task_audience(
         def __init__(self): self.user_id = current_user.id
         async def send_log(*args, **kwargs): pass
         async def send_stats_update(*args, **kwargs): pass
-    
+
     service_instance = None
     try:
         ServiceClass, method_name, RequestModel = PREVIEW_SERVICE_MAP[task_key]
@@ -2563,7 +2610,7 @@ from app.services.vk_api import VKAPI, VKAPIError
 from app.core.security import decrypt_data
 from app.repositories.stats import StatsRepository
 from app.core.plans import get_features_for_plan, is_feature_available_for_plan
-from app.api.schemas.users import TaskInfoResponse, FilterPresetCreate, FilterPresetRead, ManagedProfileRead
+from app.api.schemas.users import TaskInfoResponse, FilterPresetCreate, FilterPresetRead, ManagedProfileRead, AnalyticsSettingsRead, AnalyticsSettingsUpdate
 from app.core.constants import PlanName, FeatureKey
 
 router = APIRouter()
@@ -2668,6 +2715,22 @@ async def update_user_delay_profile(
     await db.refresh(current_user)
     # Переиспользуем эндпоинт, чтобы не дублировать логику
     return await read_users_me(current_user)
+
+@router.put("/me/analytics-settings", response_model=AnalyticsSettingsRead)
+async def update_analytics_settings(
+    settings_data: AnalyticsSettingsUpdate,
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
+    """Обновляет персональные настройки пользователя для сбора аналитики."""
+    current_user.analytics_settings_posts_count = settings_data.posts_count
+    current_user.analytics_settings_photos_count = settings_data.photos_count
+    await db.commit()
+    await db.refresh(current_user)
+    return AnalyticsSettingsRead(
+        posts_count=current_user.analytics_settings_posts_count,
+        photos_count=current_user.analytics_settings_photos_count
+    )
 
 @router.get("/task-info", response_model=TaskInfoResponse)
 async def get_task_info(
@@ -2974,9 +3037,10 @@ class EternalOnlineRequest(BaseModel):
 
 # --- backend/app\api\schemas\analytics.py ---
 
-# --- backend/app/api/schemas/analytics.py ---
+# --- START OF FILE backend/app/api/schemas/analytics.py ---
+
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Dict, Any
 from datetime import date
 
 class AudienceStatItem(BaseModel):
@@ -2992,16 +3056,33 @@ class AudienceAnalyticsResponse(BaseModel):
     age_distribution: List[AudienceStatItem]
     sex_distribution: List[SexDistributionResponse]
 
+class ProfileSummaryData(BaseModel):
+    friends: int = 0
+    followers: int = 0
+    photos: int = 0
+    wall_posts: int = 0
+    recent_post_likes: int = 0
+    recent_photo_likes: int = 0
+    total_post_likes: int = 0
+    total_photo_likes: int = 0
+
 class ProfileSummaryResponse(BaseModel):
-    friends: int
-    followers: int
-    photos: int
-    wall_posts: int
+    current_stats: ProfileSummaryData
+    growth_daily: Dict[str, int]
+    growth_weekly: Dict[str, int]
+
 
 class ProfileGrowthItem(BaseModel):
     date: date
-    total_likes_on_content: int
     friends_count: int
+    followers_count: int
+    photos_count: int
+    wall_posts_count: int
+    recent_post_likes: int
+    recent_photo_likes: int
+    total_post_likes: int
+    total_photo_likes: int
+
 
 class ProfileGrowthResponse(BaseModel):
     data: List[ProfileGrowthItem]
@@ -3013,6 +3094,7 @@ class FriendRequestConversionResponse(BaseModel):
 
 class PostActivityHeatmapResponse(BaseModel):
     data: List[List[int]] = Field(..., description="Матрица 7x24, где data[day][hour] = уровень активности от 0 до 100")
+
 
 # --- backend/app\api\schemas\auth.py ---
 
@@ -3408,6 +3490,13 @@ class ManagedProfileRead(BaseModel):
     first_name: str
     last_name: str
     photo_50: str
+    model_config = ConfigDict(from_attributes=True)
+
+class AnalyticsSettingsUpdate(BaseModel):
+    posts_count: int = Field(100, ge=10, le=500, description="Количество недавних постов для анализа лайков.")
+    photos_count: int = Field(200, ge=10, le=1000, description="Количество недавних фото для анализа лайков.")
+
+class AnalyticsSettingsRead(AnalyticsSettingsUpdate):
     model_config = ConfigDict(from_attributes=True)
 
 # --- backend/app\api\schemas\__init__.py ---
@@ -3920,6 +4009,8 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 # --- backend/app\db\models\analytics.py ---
 
+# --- START OF FILE backend/app/db/models/analytics.py ---
+
 import datetime
 from sqlalchemy import (
     Column, Integer, String, DateTime, ForeignKey, BigInteger,
@@ -3976,8 +4067,18 @@ class ProfileMetric(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     date = Column(Date, default=datetime.date.today, nullable=False)
-    total_likes_on_content = Column(Integer, nullable=False)
-    friends_count = Column(Integer, nullable=False)
+    
+    friends_count = Column(Integer, nullable=False, default=0)
+    followers_count = Column(Integer, nullable=False, default=0)
+    photos_count = Column(Integer, nullable=False, default=0)
+    wall_posts_count = Column(Integer, nullable=False, default=0)
+    
+    # <<< ИЗМЕНЕНО: Поля для лайков разделены >>>
+    recent_post_likes = Column(Integer, nullable=False, default=0)
+    recent_photo_likes = Column(Integer, nullable=False, default=0)
+    total_post_likes = Column(Integer, nullable=False, default=0)
+    total_photo_likes = Column(Integer, nullable=False, default=0)
+    
     user = relationship("User", back_populates="profile_metrics")
     __table_args__ = (
         UniqueConstraint('user_id', 'date', name='_user_date_metric_uc'),
@@ -4001,7 +4102,7 @@ class PostActivityHeatmap(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True, unique=True)
     heatmap_data = Column(JSON, nullable=False)
-    last_updated_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    last_updated_at = Column(DateTime(timezone=True), default=datetime.datetime.now(datetime.UTC), onupdate=datetime.datetime.now(datetime.UTC))
     user = relationship("User", back_populates="heatmap")
 
 class FriendRequestLog(Base):
@@ -4010,10 +4111,12 @@ class FriendRequestLog(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     target_vk_id = Column(BigInteger, nullable=False, index=True)
     status = Column(Enum(FriendRequestStatus), nullable=False, default=FriendRequestStatus.pending, index=True)
-    created_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow, index=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.datetime.now(datetime.UTC), index=True)
     resolved_at = Column(DateTime(timezone=True), nullable=True)
     user = relationship("User", back_populates="friend_requests")
     __table_args__ = (UniqueConstraint('user_id', 'target_vk_id', name='_user_target_uc'),)
+
+
 
 # --- backend/app\db\models\payment.py ---
 
@@ -4255,6 +4358,8 @@ class User(Base):
     daily_join_groups_limit = Column(Integer, nullable=False, server_default=text('0'))
     daily_leave_groups_limit = Column(Integer, nullable=False, server_default=text('0'))
     delay_profile = Column(Enum(DelayProfile), nullable=False, server_default=DelayProfile.normal.name)
+    analytics_settings_posts_count = Column(Integer, nullable=False, server_default=text('100'))
+    analytics_settings_photos_count = Column(Integer, nullable=False, server_default=text('200'))
 
     # Связи остаются такими же
     proxies = relationship("Proxy", back_populates="user", cascade="all, delete-orphan", lazy="selectin")
@@ -5720,7 +5825,7 @@ class OutgoingRequestService(BaseVKService):
 
 # --- backend/app\services\profile_analytics_service.py ---
 
-# backend/app/services/profile_analytics_service.py
+# --- ЗАМЕНИТЬ ВЕСЬ ФАЙЛ ---
 import datetime
 from sqlalchemy.dialects.postgresql import insert
 from app.services.base import BaseVKService
@@ -5733,49 +5838,112 @@ log = structlog.get_logger(__name__)
 class ProfileAnalyticsService(BaseVKService):
 
     async def snapshot_profile_metrics(self):
+        """
+        Собирает ключевые метрики профиля, включая ВСЕ и НЕДАВНИЕ лайки (раздельно),
+        и сохраняет их в БД как "снимок" за текущий день.
+        """
         try:
             await self._initialize_vk_api()
         except Exception as e:
             log.error("snapshot_metrics.init_failed", user_id=self.user.id, error=str(e))
             return
 
-        total_likes = 0
-        try:
-            wall_posts = await self.vk_api.get_wall(owner_id=self.user.vk_id, count=100)
-            if wall_posts and wall_posts.get('items'):
-                total_likes += sum(post.get('likes', {}).get('count', 0) for post in wall_posts['items'])
+        # 1. Получаем счетчики
+        user_info_list = await self.vk_api.users.get(user_ids=str(self.user.vk_id), fields="counters")
+        counters = user_info_list[0].get('counters', {}) if user_info_list else {}
+        wall_info = await self.vk_api.wall.get(owner_id=self.user.vk_id, count=0)
+        wall_posts_count = wall_info.get('count', 0) if wall_info else 0
 
-            photos = await self.vk_api.get_photos(owner_id=self.user.vk_id, count=200)
-            if photos and photos.get('items'):
-                total_likes += sum(photo.get('likes', {}).get('count', 0) for photo in photos['items'])
-        except VKAPIError as e:
-            log.warn("snapshot_metrics.likes_error", user_id=self.user.id, error=str(e))
+        # 2. <<< ИЗМЕНЕНО: Используем пользовательские настройки >>>
+        recent_posts_to_check = self.user.analytics_settings_posts_count
+        recent_photos_to_check = self.user.analytics_settings_photos_count
+        
+        # 3. Считаем лайки
+        recent_post_likes, total_post_likes = await self._get_likes_from_wall(wall_posts_count, recent_posts_to_check)
+        recent_photo_likes, total_photo_likes = await self._get_likes_from_photos(counters.get('photos', 0), recent_photos_to_check)
 
-        friends_count = 0
-        try:
-            user_info = await self.vk_api.get_user_info(user_ids=str(self.user.vk_id))
-            if user_info and 'counters' in user_info:
-                friends_count = user_info['counters'].get('friends', 0)
-        except VKAPIError as e:
-            log.error("snapshot_metrics.friends_error", user_id=self.user.id, error=str(e))
-            return
-
+        # 4. Сохраняем все в БД
         today = datetime.date.today()
         stmt = insert(ProfileMetric).values(
-            user_id=self.user.id,
-            date=today,
-            total_likes_on_content=total_likes,
-            friends_count=friends_count
+            user_id=self.user.id, date=today,
+            friends_count=counters.get('friends', 0),
+            followers_count=counters.get('followers', 0),
+            photos_count=counters.get('photos', 0),
+            wall_posts_count=wall_posts_count,
+            recent_post_likes=recent_post_likes,
+            recent_photo_likes=recent_photo_likes,
+            total_post_likes=total_post_likes,
+            total_photo_likes=total_photo_likes,
         ).on_conflict_do_update(
             index_elements=['user_id', 'date'],
             set_={
-                'total_likes_on_content': total_likes,
-                'friends_count': friends_count
+                'friends_count': counters.get('friends', 0), 'followers_count': counters.get('followers', 0),
+                'photos_count': counters.get('photos', 0), 'wall_posts_count': wall_posts_count,
+                'recent_post_likes': recent_post_likes, 'recent_photo_likes': recent_photo_likes,
+                'total_post_likes': total_post_likes, 'total_photo_likes': total_photo_likes,
             }
         )
         await self.db.execute(stmt)
-        await self.db.commit()
-        log.info("snapshot_metrics.success", user_id=self.user.id, likes=total_likes, friends=friends_count)
+        log.info("snapshot_metrics.success", user_id=self.user.id, total_post_likes=total_post_likes, total_photo_likes=total_photo_likes)
+
+    async def _get_likes_from_wall(self, total_count: int, recent_count: int) -> tuple[int, int]:
+        if total_count == 0:
+            return 0, 0
+        
+        total_likes = 0
+        recent_likes = 0
+        offset = 0
+        is_first_chunk = True
+        
+        while offset < total_count:
+            try:
+                chunk = await self.vk_api.wall.get(owner_id=self.user.vk_id, count=100, offset=offset)
+                if not chunk or not chunk.get('items'):
+                    break
+                
+                chunk_likes = sum(p.get('likes', {}).get('count', 0) for p in chunk['items'])
+                total_likes += chunk_likes
+                
+                if is_first_chunk:
+                    # Лайки с первой страницы всегда считаются "недавними" (до recent_count)
+                    recent_items = chunk['items'][:recent_count]
+                    recent_likes = sum(p.get('likes', {}).get('count', 0) for p in recent_items)
+                    is_first_chunk = False
+
+                offset += 100
+            except VKAPIError as e:
+                log.warn("snapshot.wall_likes_error", user_id=self.user.id, error=str(e))
+                break
+        return recent_likes, total_likes
+
+    async def _get_likes_from_photos(self, total_count: int, recent_count: int) -> tuple[int, int]:
+        if total_count == 0:
+            return 0, 0
+
+        total_likes = 0
+        recent_likes = 0
+        offset = 0
+        is_first_chunk = True
+
+        while offset < total_count:
+            try:
+                chunk = await self.vk_api.photos.getAll(owner_id=self.user.vk_id, count=200, offset=offset)
+                if not chunk or not chunk.get('items'):
+                    break
+                
+                chunk_likes = sum(p.get('likes', {}).get('count', 0) for p in chunk['items'])
+                total_likes += chunk_likes
+
+                if is_first_chunk:
+                    recent_items = chunk['items'][:recent_count]
+                    recent_likes = sum(p.get('likes', {}).get('count', 0) for p in recent_items)
+                    is_first_chunk = False
+
+                offset += 200
+            except VKAPIError as e:
+                log.warn("snapshot.photo_likes_error", user_id=self.user.id, error=str(e))
+                break
+        return recent_likes, total_likes
 
 # --- backend/app\services\proxy_service.py ---
 
@@ -5876,7 +6044,7 @@ class ScenarioExecutionService:
 
 
         if metric == "friends_count":
-            user_info_list = await self.vk_api.get_user_info(user_ids=str(self.user.vk_id), fields="counters")
+            user_info_list = await self.vk_api.users.get(user_ids=str(self.user.vk_id), fields="counters")
             current_value = user_info_list[0].get("counters", {}).get("friends", 0) if user_info_list else 0
         elif metric == "day_of_week":
             current_value = datetime.datetime.utcnow().isoweekday()
@@ -7089,12 +7257,14 @@ PREVIEW_SERVICE_MAP = {
 
 # --- backend/app\tasks\logic\analytics_jobs.py ---
 
-# --- backend/app/tasks/logic/analytics_jobs.py ---
+# --- START OF FILE backend/app/tasks/logic/analytics_jobs.py ---
+
 import datetime
 import structlog
 import pytz
+from contextlib import asynccontextmanager
 from sqlalchemy import func, select, update
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.session import AsyncSessionFactory
@@ -7109,6 +7279,19 @@ from app.services.analytics_service import AnalyticsService
 from app.services.profile_analytics_service import ProfileAnalyticsService
 
 log = structlog.get_logger(__name__)
+
+@asynccontextmanager
+async def get_session(provided_session: AsyncSession | None = None):
+    """
+    Контекстный менеджер для получения сессии БД.
+    Если сессия передана извне (как в тестах), использует ее.
+    Иначе, создает новую сессию (как в production).
+    """
+    if provided_session:
+        yield provided_session
+    else:
+        async with AsyncSessionFactory() as session:
+            yield session
 
 async def _aggregate_daily_stats_async():
     """Агрегирует вчерашнюю дневную статистику в недельную и месячную."""
@@ -7129,86 +7312,149 @@ async def _aggregate_daily_stats_async():
         week_id, month_id = yesterday.strftime('%Y-%W'), yesterday.strftime('%Y-%m')
 
         for stat_type, identifier in [(WeeklyStats, week_id), (MonthlyStats, month_id)]:
-            values = [
-                {"user_id": r.user_id, f"{stat_type.__tablename__[:-1]}_identifier": identifier, "likes_count": r.likes,
-                 "friends_added_count": r.friends, "friend_requests_accepted_count": r.accepted} for r in daily_sums
-            ]
-            if not values: continue
+            values_to_upsert = []
+            for r in daily_sums:
+                values_to_upsert.append({
+                    "user_id": r.user_id,
+                    f"{stat_type.__tablename__.replace('s', '')}_identifier": identifier,
+                    "likes_count": r.likes,
+                    "friends_added_count": r.friends,
+                    "friend_requests_accepted_count": r.accepted
+                })
 
-            insert_stmt = insert(stat_type).values(values)
-            update_stmt = insert_stmt.on_conflict_do_update(
-                index_elements=['user_id', f"{stat_type.__tablename__[:-1]}_identifier"],
-                set_={
-                    'likes_count': getattr(stat_type, 'likes_count') + insert_stmt.excluded.likes_count,
-                    'friends_added_count': getattr(stat_type, 'friends_added_count') + insert_stmt.excluded.friends_added_count,
-                    'friend_requests_accepted_count': getattr(stat_type, 'friend_requests_accepted_count') + insert_stmt.excluded.friend_requests_accepted_count
-                }
+            if not values_to_upsert:
+                continue
+            
+            # В SQLAlchemy 2.0+ on_conflict_do_update строится немного иначе
+            from sqlalchemy.dialects.postgresql import insert
+            
+            insert_stmt = insert(stat_type).values(values_to_upsert)
+            
+            # Определяем, как обновлять поля при конфликте
+            update_dict = {
+                'likes_count': getattr(stat_type, 'likes_count') + insert_stmt.excluded.likes_count,
+                'friends_added_count': getattr(stat_type, 'friends_added_count') + insert_stmt.excluded.friends_added_count,
+                'friend_requests_accepted_count': getattr(stat_type, 'friend_requests_accepted_count') + insert_stmt.excluded.friend_requests_accepted_count
+            }
+            
+            # Собираем окончательный запрос
+            final_stmt = insert_stmt.on_conflict_do_update(
+                index_elements=['user_id', f"{stat_type.__tablename__.replace('s', '')}_identifier"],
+                set_=update_dict
             )
-            await session.execute(update_stmt)
+            await session.execute(final_stmt)
         
         await session.commit()
         log.info("analytics.aggregated_daily_stats", count=len(daily_sums), date=yesterday.isoformat())
 
-async def _snapshot_all_users_metrics_async():
-    """Создает снимок ключевых метрик профиля (лайки, друзья) для всех активных пользователей."""
-    async with AsyncSessionFactory() as session:
-        active_users = (await session.execute(select(User).where(User.plan_expires_at > datetime.datetime.now(datetime.UTC)))).scalars().all()
-        if not active_users: return
+async def _snapshot_all_users_metrics_async(session_for_test: AsyncSession | None = None):
+    """Создает снимок ключевых метрик профиля для всех активных пользователей."""
+    async with get_session(session_for_test) as session:
+        now = datetime.datetime.now(datetime.UTC)
+        stmt = select(User).where(
+            (User.plan_expires_at == None) | (User.plan_expires_at > now)
+        )
+        result = await session.execute(stmt)
+        active_users = result.scalars().all()
 
-        log.info("analytics.snapshot_metrics_started", count=len(active_users))
+        if not active_users:
+            log.info("snapshot_metrics_task.no_active_users")
+            return
+
+        log.info("snapshot_metrics_task.start", count=len(active_users))
+
         for user in active_users:
             try:
-                # Используем новую сессию для каждого пользователя, чтобы избежать проблем с транзакциями
-                async with AsyncSessionFactory() as user_session:
-                    service = ProfileAnalyticsService(db=user_session, user=user, emitter=SystemLogEmitter("snapshot_metrics"))
+                async with session.begin_nested():
+                    # Создаем сервис с той же сессией
+                    service = ProfileAnalyticsService(db=session, user=user, emitter=SystemLogEmitter("snapshot_metrics"))
                     await service.snapshot_profile_metrics()
+                # begin_nested() автоматически коммитит, если не было ошибок
             except VKAuthError:
-                log.warn("analytics.snapshot_metrics_auth_error", user_id=user.id)
+                log.warn("snapshot_metrics_task.auth_error", user_id=user.id)
+                # Роллбэк для этого пользователя произойдет автоматически при выходе из блока `begin_nested`
             except Exception as e:
-                log.error("analytics.snapshot_metrics_user_error", user_id=user.id, error=str(e))
+                log.error("snapshot_metrics_task.user_error", user_id=user.id, error=str(e), exc_info=True)
+
+        if not session_for_test:
+            await session.commit()
+
+        log.info("snapshot_metrics_task.finished")
+
 
 async def _generate_all_heatmaps_async():
     """Генерирует тепловые карты активности для всех пользователей с доступом к фиче."""
     async with AsyncSessionFactory() as session:
-        users = (await session.execute(select(User).where(User.plan.in_(['Plus', 'PRO', 'Agency'])))).scalars().all()
+        users = (await session.execute(select(User).where(User.plan.in_(['PLUS', 'PRO', 'AGENCY'])))).scalars().all()
         if not users: return
         
         log.info("analytics.heatmap_generation_started", count=len(users))
         for user in users:
             try:
                 async with AsyncSessionFactory() as user_session:
-                    emitter = SystemLogEmitter(task_name="heatmap_generator", user_id=user.id)
-                    service = AnalyticsService(db=user_session, user=user, emitter=emitter)
-                    await service.generate_post_activity_heatmap()
+                    async with user_session.begin():
+                        emitter = SystemLogEmitter(task_name="heatmap_generator")
+                        emitter.set_context(user_id=user.id)
+                        service = AnalyticsService(db=user_session, user=user, emitter=emitter)
+                        await service.generate_post_activity_heatmap()
             except Exception as e:
                 log.error("analytics.heatmap_generation_user_error", user_id=user.id, error=str(e))
 
 async def _update_friend_request_statuses_async():
     """Проверяет статусы отправленных заявок в друзья (приняты или нет)."""
     async with AsyncSessionFactory() as session:
-        users = (await session.execute(select(User).options(selectinload(User.friend_requests)).where(User.friend_requests.any(FriendRequestLog.status == FriendRequestStatus.pending)))).scalars().unique().all()
-        if not users: return
+        # Находим пользователей, у которых есть заявки в статусе 'pending'
+        stmt = select(User).options(selectinload(User.friend_requests)).where(
+            User.friend_requests.any(FriendRequestLog.status == FriendRequestStatus.pending)
+        )
+        users_with_pending_reqs = (await session.execute(stmt)).scalars().unique().all()
+        
+        if not users_with_pending_reqs:
+            return
 
-        log.info("analytics.conversion_tracker_started", count=len(users))
-        for user in users:
+        log.info("analytics.conversion_tracker_started", count=len(users_with_pending_reqs))
+        
+        for user in users_with_pending_reqs:
             pending_reqs = [req for req in user.friend_requests if req.status == FriendRequestStatus.pending]
-            if not pending_reqs: continue
+            if not pending_reqs:
+                continue
 
+            vk_api = None
             try:
-                vk_api = VKAPI(access_token=decrypt_data(user.encrypted_vk_token))
-                friend_ids = {f['id'] for f in (await vk_api.get_user_friends(user.vk_id))}
+                vk_token = decrypt_data(user.encrypted_vk_token)
+                if not vk_token:
+                    log.warn("analytics.conversion_tracker_no_token", user_id=user.id)
+                    continue
+
+                vk_api = VKAPI(access_token=vk_token)
+                
+                # Получаем актуальный список ID друзей
+                friends_response = await vk_api.get_user_friends(user_id=user.vk_id, fields="")
+                if not friends_response or 'items' not in friends_response:
+                    continue
+                
+                friend_ids = set(friends_response['items'])
                 
                 accepted_req_ids = [req.id for req in pending_reqs if req.target_vk_id in friend_ids]
+                
                 if accepted_req_ids:
-                    await session.execute(update(FriendRequestLog).where(FriendRequestLog.id.in_(accepted_req_ids)).values(
-                        status=FriendRequestStatus.accepted, resolved_at=datetime.datetime.now(pytz.utc)
-                    ))
+                    update_stmt = update(FriendRequestLog).where(FriendRequestLog.id.in_(accepted_req_ids)).values(
+                        status=FriendRequestStatus.accepted, 
+                        resolved_at=datetime.datetime.now(pytz.utc)
+                    )
+                    await session.execute(update_stmt)
                     await session.commit()
                     log.info("analytics.conversion_tracker_updated", user_id=user.id, count=len(accepted_req_ids))
+
             except VKAuthError:
                 log.warn("analytics.conversion_tracker_auth_error", user_id=user.id)
             except Exception as e:
                 log.error("analytics.conversion_tracker_user_error", user_id=user.id, error=str(e))
+            finally:
+                if vk_api:
+                    await vk_api.close()
+
+
 
 # --- backend/app\tasks\logic\automation_jobs.py ---
 
@@ -7332,43 +7578,56 @@ async def _run_daily_automations_async(automation_group: str):
 
 # --- backend/app\tasks\logic\maintenance_jobs.py ---
 
-# --- backend/app/tasks/logic/maintenance_jobs.py ---
+# app/tasks/logic/maintenance_jobs.py
 import datetime
 import structlog
 from sqlalchemy import delete, select, update, or_
+from sqlalchemy.ext.asyncio import AsyncSession
+from contextlib import asynccontextmanager
 
 from app.db.session import AsyncSessionFactory
 from app.db.models import TaskHistory, User, Automation, Notification
 from app.core.plans import get_limits_for_plan
-from app.core.constants import CronSettings
+from app.core.constants import CronSettings, PlanName
 
 log = structlog.get_logger(__name__)
+
+@asynccontextmanager
+async def get_session(provided_session: AsyncSession | None = None):
+    """Контекстный менеджер для получения сессии БД."""
+    if provided_session:
+        yield provided_session
+    else:
+        async with AsyncSessionFactory() as session:
+            yield session
 
 async def _clear_old_task_history_async():
     """Удаляет старые записи из TaskHistory согласно настройкам хранения."""
     async with AsyncSessionFactory() as session:
+        # (код этой функции остается без изменений)
         pro_cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=CronSettings.TASK_HISTORY_RETENTION_DAYS_PRO)
         stmt_pro = delete(TaskHistory).where(
             TaskHistory.user_id.in_(select(User.id).filter(User.plan.in_(['PRO', 'Plus', 'Agency']))),
             TaskHistory.created_at < pro_cutoff
         )
         pro_result = await session.execute(stmt_pro)
-
         base_cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=CronSettings.TASK_HISTORY_RETENTION_DAYS_BASE)
         stmt_base = delete(TaskHistory).where(
-            TaskHistory.user_id.in_(select(User.id).filter(User.plan.in_(['Базовый', 'Expired']))),
+            TaskHistory.user_id.in_(
+                select(User.id).filter(User.plan.in_([PlanName.BASE.name, PlanName.EXPIRED.name]))
+            ),
             TaskHistory.created_at < base_cutoff
         )
         base_result = await session.execute(stmt_base)
-
         await session.commit()
         total_deleted = pro_result.rowcount + base_result.rowcount
         if total_deleted > 0:
             log.info("maintenance.task_history_cleaned", count=total_deleted)
 
-async def _check_expired_plans_async():
+async def _check_expired_plans_async(session_for_test: AsyncSession | None = None):
     """Проверяет и деактивирует истекшие тарифные планы пользователей."""
-    async with AsyncSessionFactory() as session:
+    # --- ИСПРАВЛЕНИЕ: Используем контекстный менеджер ---
+    async with get_session(session_for_test) as session:
         now = datetime.datetime.now(datetime.UTC)
         stmt = select(User).where(User.plan != 'Expired', User.plan_expires_at != None, User.plan_expires_at < now)
         expired_users = (await session.execute(stmt)).scalars().all()
@@ -7384,11 +7643,19 @@ async def _check_expired_plans_async():
         session.add_all(notifications)
 
         await session.execute(update(Automation).where(Automation.user_id.in_(user_ids_to_deactivate)).values(is_active=False))
+        
         await session.execute(update(User).where(User.id.in_(user_ids_to_deactivate)).values(
             plan="Expired",
             daily_likes_limit=expired_plan_limits["daily_likes_limit"],
             daily_add_friends_limit=expired_plan_limits["daily_add_friends_limit"],
             daily_message_limit=expired_plan_limits["daily_message_limit"],
-            daily_posts_limit=expired_plan_limits["daily_posts_limit"]
+            daily_posts_limit=expired_plan_limits["daily_posts_limit"],
+            daily_join_groups_limit=expired_plan_limits["daily_join_groups_limit"],
+            daily_leave_groups_limit=expired_plan_limits["daily_leave_groups_limit"]
         ))
-        await session.commit()
+        
+        # Коммит делается, только если мы не в тесте
+        if not session_for_test:
+            await session.commit()
+        else:
+            await session.flush()

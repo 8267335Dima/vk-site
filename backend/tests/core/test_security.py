@@ -1,4 +1,5 @@
-# tests/core/test_security.py
+# --- START OF FILE tests/core/test_security.py ---
+
 import pytest
 from app.core.security import encrypt_data, decrypt_data
 
@@ -38,3 +39,4 @@ def test_encrypt_decrypt_none_value():
     # Act & Assert
     assert encrypt_data(None) is None
     assert decrypt_data(None) is None
+

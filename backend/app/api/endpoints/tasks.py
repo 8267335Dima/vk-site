@@ -1,13 +1,13 @@
 # backend/app/api/endpoints/tasks.py
 
 # ОТВЕТСТВЕННОСТЬ: Запуск, предпросмотр и конфигурация новых задач.
-from fastapi import APIRouter, Depends, Body, HTTPException, status, Request # <--- ДОБАВЛЕН Request
+from fastapi import APIRouter, Depends, Body, HTTPException, status, Request
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
-from pydantic import BaseModel, ValidationError # <--- ДОБАВЛЕН ValidationError
+from pydantic import BaseModel, ValidationError
 from arq.connections import ArqRedis
-import datetime # <--- ДОБАВЛЕН datetime
+import datetime
 
 from app.db.models import User, TaskHistory
 from app.api.dependencies import get_current_active_profile, get_arq_pool
@@ -18,18 +18,21 @@ from app.core.plans import get_plan_config, is_feature_available_for_plan
 from app.core.config_loader import AUTOMATIONS_CONFIG
 from app.core.constants import TaskKey
 from app.services.vk_api import VKAPIError
-
+from app.tasks.service_maps import TASK_CONFIG_MAP
 from app.tasks.task_maps import AnyTaskRequest, TASK_FUNC_MAP, PREVIEW_SERVICE_MAP
 
 router = APIRouter()
 
-# --- Вспомогательная функция ---
+# --- Вспомогательная функция (ИСПРАВЛЕНО) ---
 async def _enqueue_task(
     user: User, db: AsyncSession, arq_pool: ArqRedis, task_key: str, request_data: BaseModel,
     original_task_name: Optional[str] = None,
-    defer_until: Optional[datetime.datetime] = None # <--- ДОБАВЛЕНО
-) -> ActionResponse:
-    """Проверяет лимиты и ставит задачу в очередь ARQ."""
+    defer_until: Optional[datetime.datetime] = None
+) -> TaskHistory:
+    """
+    Проверяет лимиты и ГОТОВИТ задачу к постановке в очередь.
+    НЕ ДЕЛАЕТ COMMIT. Возвращает объект TaskHistory для дальнейшей обработки.
+    """
     plan_config = get_plan_config(user.plan)
 
     max_concurrent = plan_config.get("limits", {}).get("max_concurrent_tasks")
@@ -62,32 +65,10 @@ async def _enqueue_task(
         parameters=request_data.model_dump(exclude_unset=True)
     )
     db.add(task_history)
-    await db.commit()
+    await db.flush() # Используем flush, чтобы получить ID, но не коммитим
     await db.refresh(task_history)
-
-    job_kwargs = {
-        'task_history_id': task_history.id,
-        **request_data.model_dump()
-    }
-    if defer_until: # <--- ДОБАВЛЕНО
-        job_kwargs['_defer_until'] = defer_until
-
-    job = await arq_pool.enqueue_job(task_func_name, **job_kwargs)
-
-    # --- ИЗМЕНЕНИЕ ---
-    task_history.arq_job_id = job.job_id
-    # ------------------
-    await db.commit()
     
-    message = f"Задача '{task_display_name}' успешно добавлена в очередь."
-    if defer_until: # <--- ДОБАВЛЕНО
-        message = f"Задача '{task_display_name}' запланирована на {defer_until.strftime('%Y-%m-%d %H:%M:%S')}."
-
-
-    return ActionResponse(
-        message=message,
-        task_id=job.job_id
-    )
+    return task_history
 
 # --- Эндпоинты ---
 @router.get("/{task_key}/config", response_model=TaskConfigResponse, summary="Получить конфигурацию UI для задачи")
@@ -96,7 +77,6 @@ async def get_task_config(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    # ... (код без изменений)
     task_config = next((item for item in AUTOMATIONS_CONFIG if item.id == task_key.value), None)
     if not task_config:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Конфигурация для задачи не найдена.")
@@ -139,19 +119,19 @@ async def get_task_config(
 @router.post("/run/{task_key}", response_model=ActionResponse, summary="Запустить любую задачу по ее ключу")
 async def run_any_task(
     task_key: TaskKey,
-    request: Request, # <--- ИЗМЕНЕНИЕ
+    request: Request,
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db),
     arq_pool: ArqRedis = Depends(get_arq_pool)
 ):
-    # --- НАЧАЛО ИЗМЕНЕНИЯ ---
-    # Мы читаем тело запроса как JSON, чтобы извлечь `publish_at`
-    # и одновременно валидируем его через Pydantic-модель задачи.
     try:
         raw_body = await request.json()
         
-        # Находим нужную Pydantic модель для валидации
-        RequestModel = next((m for k, (_,_,m) in PREVIEW_SERVICE_MAP.items() if k == task_key), AnyTaskRequest)
+        task_config_tuple = TASK_CONFIG_MAP.get(task_key)
+        if not task_config_tuple:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Конфигурация для задачи '{task_key.value}' не найдена.")
+        
+        RequestModel = task_config_tuple[2]
         request_data = RequestModel(**raw_body)
         
         publish_at_str = raw_body.get("publish_at")
@@ -159,9 +139,42 @@ async def run_any_task(
 
     except (ValidationError, TypeError, ValueError) as e:
          raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
-    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
-    return await _enqueue_task(current_user, db, arq_pool, task_key.value, request_data, defer_until=defer_until)
+    # --- НАЧАЛО ИСПРАВЛЕНИЯ: Единый процесс для всех задач ---
+    # 1. Вызываем вспомогательную функцию, которая делает все проверки и готовит объект TaskHistory
+    task_history = await _enqueue_task(
+        user=current_user,
+        db=db,
+        arq_pool=arq_pool,
+        task_key=task_key.value,
+        request_data=request_data,
+        defer_until=defer_until
+    )
+    
+    # 2. Готовим параметры для ARQ
+    task_func_name = TASK_FUNC_MAP[task_key]
+    job_kwargs = {
+        'task_history_id': task_history.id,
+        **request_data.model_dump()
+    }
+    if defer_until:
+        job_kwargs['_defer_until'] = defer_until
+        
+    # 3. Ставим задачу в очередь
+    job = await arq_pool.enqueue_job(task_func_name, **job_kwargs)
+    
+    # 4. Обновляем ID задачи и коммитим ВСЕ изменения в одной транзакции
+    task_history.arq_job_id = job.job_id
+    await db.commit()
+    
+    # 5. Формируем ответ
+    message = f"Задача '{task_history.task_name}' успешно добавлена в очередь."
+    if defer_until:
+        message = f"Задача '{task_history.task_name}' запланирована на {defer_until.strftime('%Y-%m-%d %H:%M:%S')}."
+        
+    return ActionResponse(message=message, task_id=job.job_id)
+    # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+
 
 @router.post("/preview/{task_key}", response_model=PreviewResponse, summary="Предварительный подсчет аудитории для задачи")
 async def preview_task_audience(
@@ -170,7 +183,6 @@ async def preview_task_audience(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    # ... (код без изменений)
     if task_key not in PREVIEW_SERVICE_MAP:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -181,7 +193,7 @@ async def preview_task_audience(
         def __init__(self): self.user_id = current_user.id
         async def send_log(*args, **kwargs): pass
         async def send_stats_update(*args, **kwargs): pass
-    
+
     service_instance = None
     try:
         ServiceClass, method_name, RequestModel = PREVIEW_SERVICE_MAP[task_key]

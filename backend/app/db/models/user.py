@@ -24,6 +24,8 @@ class User(Base):
     daily_join_groups_limit = Column(Integer, nullable=False, server_default=text('0'))
     daily_leave_groups_limit = Column(Integer, nullable=False, server_default=text('0'))
     delay_profile = Column(Enum(DelayProfile), nullable=False, server_default=DelayProfile.normal.name)
+    analytics_settings_posts_count = Column(Integer, nullable=False, server_default=text('100'))
+    analytics_settings_photos_count = Column(Integer, nullable=False, server_default=text('200'))
 
     # Связи остаются такими же
     proxies = relationship("Proxy", back_populates="user", cascade="all, delete-orphan", lazy="selectin")
