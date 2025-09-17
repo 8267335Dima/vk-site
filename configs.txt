@@ -32,10 +32,8 @@ ALLOWED_ORIGINS=http://localhost,http://localhost:3000,http://127.0.0.1:3000
 
 # --- backend/app\core\configs\automations.yml ---
 
-# --- backend/app\core\configs\automations.yml ---
-
-# backend/app/core/configs/automations.yml
-# Единый источник правды обо всех возможных действиях в системе.
+# Единый источник правды обо всех возможных действиях (задачах),
+# которые пользователь может запустить. Используется для построения UI.
 
 - id: "like_feed"
   name: "Лайки в ленте новостей"
@@ -81,7 +79,7 @@ ALLOWED_ORIGINS=http://localhost,http://localhost:3000,http://127.0.0.1:3000
 - id: "birthday_congratulation"
   name: "Поздравления с Днем Рождения"
   description: "Автоматически отправляет персональные поздравления вашим друзьям в их день рождения."
-  has_filters: false
+  has_filters: false # Фильтры здесь не нужны, т.к. логика специфична
   has_count_slider: false
   group: "standard"
 
@@ -130,19 +128,13 @@ ALLOWED_ORIGINS=http://localhost,http://localhost:3000,http://127.0.0.1:3000
       "6": { "is_active": false, "start_time": "11:00", "end_time": "20:00" }
       "7": { "is_active": false, "start_time": "11:00", "end_time": "20:00" }
 
-- id: "post_scheduler"
-  name: "Планировщик постов"
-  description: "Создавайте и планируйте публикации наперед."
-  has_filters: false
-  has_count_slider: false
-  group: "content"
-
 
 # --- backend/app\core\configs\plans.yml ---
 
-# backend/app/core/configs/plans.yml
+# Единый источник правды о тарифных планах.
+# Ключи: BASE, PLUS, PRO - соответствуют PlanName Enum в коде.
 
-Базовый:
+BASE:
   display_name: "Базовый"
   description: "Начальный тариф для ознакомления с базовыми возможностями."
   limits:
@@ -150,8 +142,8 @@ ALLOWED_ORIGINS=http://localhost,http://localhost:3000,http://127.0.0.1:3000
     daily_add_friends_limit: 20
     daily_message_limit: 20
     daily_posts_limit: 5
-    daily_join_groups_limit: 20 # <--- ДОБАВЛЕНО
-    daily_leave_groups_limit: 20 # <--- ДОБАВЛЕНО
+    daily_join_groups_limit: 20
+    daily_leave_groups_limit: 20
     max_concurrent_tasks: 1
   available_features:
     - "like_feed"
@@ -162,9 +154,8 @@ ALLOWED_ORIGINS=http://localhost,http://localhost:3000,http://127.0.0.1:3000
     - "mass_messaging"
     - "leave_groups"
     - "join_groups"
-    - "eternal_online"
 
-Plus:
+PLUS:
   display_name: "Plus"
   description: "Расширенные возможности и увеличенные лимиты для активного продвижения."
   base_price: 399
@@ -174,6 +165,7 @@ Plus:
     - "Доступ к Центру автоматизаций"
     - "Планировщик постов"
     - "Аналитика роста профиля"
+    - "Автопоздравления с ДР"
   periods:
     - months: 3
       discount_percent: 10
@@ -186,8 +178,8 @@ Plus:
     daily_add_friends_limit: 40
     daily_message_limit: 50
     daily_posts_limit: 20
-    daily_join_groups_limit: 50 # <--- ДОБАВЛЕНО
-    daily_leave_groups_limit: 100 # <--- ДОБАВЛЕНО
+    daily_join_groups_limit: 50
+    daily_leave_groups_limit: 100
     max_concurrent_tasks: 2
   available_features:
     - "like_feed"
@@ -198,8 +190,8 @@ Plus:
     - "mass_messaging"
     - "leave_groups"
     - "join_groups"
-    - "eternal_online"
     - "birthday_congratulation"
+    - "eternal_online"
     - "automations_center"
     - "post_scheduler"
     - "profile_growth_analytics"
@@ -225,12 +217,12 @@ PRO:
     daily_add_friends_limit: 80
     daily_message_limit: 100
     daily_posts_limit: 50
-    daily_join_groups_limit: 100 # <--- ДОБАВЛЕНО
-    daily_leave_groups_limit: 200 # <--- ДОБАВЛЕНО
+    daily_join_groups_limit: 100
+    daily_leave_groups_limit: 200
     max_concurrent_tasks: 5
   available_features: "*"
 
-Agency:
+AGENCY:
   display_name: "Agency"
   description: "Для агентств и команд. Управление несколькими аккаунтами."
   base_price: 1499
@@ -250,14 +242,14 @@ Agency:
     daily_add_friends_limit: 100
     daily_message_limit: 200
     daily_posts_limit: 100
-    daily_join_groups_limit: 150 # <--- ДОБАВЛЕНО
-    daily_leave_groups_limit: 300 # <--- ДОБАВЛЕНО
+    daily_join_groups_limit: 150
+    daily_leave_groups_limit: 300
     max_concurrent_tasks: 10
     max_profiles: 5
     max_team_members: 5
   available_features: "*"
 
-Expired:
+EXPIRED:
   display_name: "Expired"
   description: "Срок действия вашего тарифа истек."
   limits:
@@ -265,7 +257,7 @@ Expired:
     daily_add_friends_limit: 0
     daily_message_limit: 0
     daily_posts_limit: 0
-    daily_join_groups_limit: 0 # <--- ДОБАВЛЕНО
-    daily_leave_groups_limit: 0 # <--- ДОБАВЛЕНО
+    daily_join_groups_limit: 0
+    daily_leave_groups_limit: 0
     max_concurrent_tasks: 1
   available_features: []

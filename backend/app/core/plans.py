@@ -5,8 +5,10 @@ from app.core.constants import PlanName, FeatureKey, TaskKey
 
 @lru_cache(maxsize=16)
 def get_plan_config(plan_name: PlanName | str) -> dict:
-    """Безопасно получает конфигурацию плана, возвращая 'Expired' если план не найден."""
-    plan_model = PLAN_CONFIG.get(str(plan_name), PLAN_CONFIG[PlanName.EXPIRED])
+    # Эта функция теперь будет корректно работать, т.к. user.plan
+    # будет хранить системное имя ("BASE", "PRO" и т.д.)
+    key = plan_name.name if isinstance(plan_name, PlanName) else plan_name
+    plan_model = PLAN_CONFIG.get(key, PLAN_CONFIG["EXPIRED"]) # Используем строковый ключ "EXPIRED"
     return plan_model.model_dump()
 
 def get_limits_for_plan(plan_name: PlanName | str) -> dict:
@@ -33,7 +35,11 @@ def get_all_feature_keys() -> list[str]:
 @lru_cache(maxsize=256)
 def is_feature_available_for_plan(plan_name: PlanName | str, feature_id: str) -> bool:
     """Проверяет, доступна ли указанная фича для данного тарифного плана."""
-    plan_model = PLAN_CONFIG.get(str(plan_name), PLAN_CONFIG[PlanName.EXPIRED])
+    # ИЗМЕНЕНО: Ключевое исправление.
+    # Мы используем .name для получения строкового ключа, чтобы избежать KeyError.
+    key = plan_name if isinstance(plan_name, str) else plan_name.name
+    plan_model = PLAN_CONFIG.get(key, PLAN_CONFIG[PlanName.EXPIRED.name])
+    
     available_features = plan_model.available_features
     
     if available_features == "*":
@@ -46,10 +52,12 @@ def get_features_for_plan(plan_name: PlanName | str) -> list[str]:
     Возвращает полный список доступных ключей фич для тарифного плана.
     Обрабатывает wildcard '*' для PRO тарифов.
     """
-    plan_model = PLAN_CONFIG.get(str(plan_name), PLAN_CONFIG[PlanName.EXPIRED])
+    # ИЗМЕНЕНО: Аналогичное исправление для консистентности.
+    key = plan_name if isinstance(plan_name, str) else plan_name.name
+    plan_model = PLAN_CONFIG.get(key, PLAN_CONFIG[PlanName.EXPIRED.name])
     available = plan_model.available_features
     
     if available == "*":
         return get_all_feature_keys()
     
-    return available if isinstance(available, list) else []
+    return available if isinstance(available, list) else [] 

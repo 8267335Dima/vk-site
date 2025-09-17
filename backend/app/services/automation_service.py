@@ -21,13 +21,17 @@ class AutomationService(BaseVKService):
         Находит друзей-именинников и применяет к ним все фильтры.
         Используется для предпросмотра и для выполнения задачи.
         """
-        friends = await self.vk_api.get_user_friends(self.user.vk_id, fields="bdate,sex,online,last_seen,is_closed,status,city")
-        if not friends:
+        await self._initialize_vk_api()
+        friends_response = await self.vk_api.get_user_friends(self.user.vk_id, fields="bdate,sex,online,last_seen,is_closed,status,city")
+        if not friends_response or not friends_response.get('items'):
             return []
 
+        friends = friends_response.get('items', [])
         today = datetime.date.today()
         today_str = f"{today.day}.{today.month}"
         
+        # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+        # Итерируемся по списку друзей, а не по всему ответу API
         birthday_friends_raw = [f for f in friends if f.get("bdate") and f.get("bdate").startswith(today_str)]
         if not birthday_friends_raw:
             return []
@@ -40,7 +44,8 @@ class AutomationService(BaseVKService):
         
         if params.only_new_dialogs or params.only_unread:
             message_service = MessageService(self.db, self.user, self.emitter)
-            await message_service._initialize_vk_api() 
+            # API уже инициализирован, можно использовать напрямую
+            message_service.vk_api = self.vk_api
             final_targets = await message_service.filter_targets_by_conversation_status(
                 birthday_friends_filtered, params.only_new_dialogs, params.only_unread
             )
@@ -60,6 +65,7 @@ class AutomationService(BaseVKService):
         Приватный метод с основной логикой поздравления.
         """
         await self.emitter.send_log("Запуск задачи: Поздравление друзей с Днем Рождения.", "info")
+        stats = await self._get_today_stats()
         
         final_targets = await self.get_birthday_congratulation_targets(params)
         if not final_targets:
@@ -82,6 +88,11 @@ class AutomationService(BaseVKService):
         processed_count = 0
 
         for friend in targets_to_process:
+            # Проверяем лимит перед каждой отправкой
+            if stats.messages_sent_count >= self.user.daily_message_limit:
+                await self.emitter.send_log(f"Достигнут дневной лимит сообщений ({self.user.daily_message_limit}). Поздравления остановлены.", "warning")
+                break
+
             friend_id = friend['id']
             sex = friend.get("sex")
             template = params.message_template_default
@@ -90,33 +101,36 @@ class AutomationService(BaseVKService):
             elif sex == 1 and params.message_template_female:
                 template = params.message_template_female
             
+            is_sent_successfully = False
             if params.humanized_sending.enabled:
                 humanizer = MessageHumanizer(self.vk_api, self.emitter)
-                result = await humanizer.send_messages_sequentially(
+                sent_count = await humanizer.send_messages_sequentially(
                     targets=[friend], template=template,
                     speed=params.humanized_sending.speed,
                     simulate_typing=params.humanized_sending.simulate_typing
                 )
-                if result > 0:
-                    processed_count += 1
-                    insert_stmt = insert(SentCongratulation).values(user_id=self.user.id, friend_vk_id=friend_id, year=current_year).on_conflict_do_nothing()
-                    await self.db.execute(insert_stmt)
+                if sent_count > 0:
+                    is_sent_successfully = True
             else:
                 message = template.replace("{name}", friend.get("first_name", ""))
                 url = f"https://vk.com/id{friend_id}"
                 await self.humanizer.think(action_type='message')
                 if await self.vk_api.send_message(friend_id, message):
-                    insert_stmt = insert(SentCongratulation).values(user_id=self.user.id, friend_vk_id=friend_id, year=current_year).on_conflict_do_nothing()
-                    await self.db.execute(insert_stmt)
                     await self.emitter.send_log(f"Успешно отправлено поздравление для {friend.get('first_name', '')}", "success", target_url=url)
-                    processed_count += 1
+                    is_sent_successfully = True
+
+            # Если отправка удалась, обновляем статистику и логи
+            if is_sent_successfully:
+                processed_count += 1
+                await self._increment_stat(stats, 'messages_sent_count')
+                insert_stmt = insert(SentCongratulation).values(user_id=self.user.id, friend_vk_id=friend_id, year=current_year).on_conflict_do_nothing()
+                await self.db.execute(insert_stmt)
 
         await self.emitter.send_log(f"Задача завершена. Отправлено поздравлений: {processed_count}.", "success")
         
     async def set_online_status(self, params: EternalOnlineRequest):
         """
         Устанавливает статус "онлайн" для пользователя.
-        Вся сложная логика расписания вынесена в cron-обработчик.
         """
         return await self._execute_logic(self._set_online_status_logic)
 
@@ -125,4 +139,4 @@ class AutomationService(BaseVKService):
         Непосредственно вызывает метод VK API для установки статуса.
         """
         await self.emitter.send_log("Поддержание статуса 'онлайн'...", "debug")
-        await self.vk_api.set_online()
+        await self.vk_api.account.setOnline()

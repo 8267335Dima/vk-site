@@ -687,7 +687,7 @@ from app.core.security import create_access_token, encrypt_data
 from app.core.config import settings
 from app.core.plans import get_limits_for_plan
 from app.core.constants import PlanName
-from app.api.dependencies import get_current_manager_user, limiter # Импортируем limiter
+from app.api.dependencies import get_current_manager_user, limiter
 
 router = APIRouter()
 
@@ -699,7 +699,7 @@ class TokenRequest(BaseModel):
     "/vk",
     response_model=EnrichedTokenResponse,
     summary="Аутентификация или регистрация по токену VK",
-    dependencies=[Depends(limiter)] # Оставляем защиту для production
+    dependencies=[Depends(limiter)]
 )
 async def login_via_vk(
     *,
@@ -726,18 +726,16 @@ async def login_via_vk(
     if user:
         user.encrypted_vk_token = encrypted_token
     else:
-        # --- НАЧАЛО ИЗМЕНЕНИЯ ---
         user_data = {
             "vk_id": vk_id,
             "encrypted_vk_token": encrypted_token,
-            "plan": PlanName.BASE,
+            "plan": PlanName.BASE.name,
             "plan_expires_at": datetime.now(UTC) + timedelta(days=14),
         }
         
-        # Получаем все имена колонок из модели User
-        user_model_columns = {c.name for c in User.__table__.columns}
+        base_plan_limits = get_limits_for_plan(PlanName.BASE)
         
-        # Фильтруем лимиты, оставляя только те, что есть в модели
+        user_model_columns = {c.name for c in User.__table__.columns}
         valid_limits_for_db = {
             key: value
             for key, value in base_plan_limits.items()
@@ -746,16 +744,15 @@ async def login_via_vk(
         user_data.update(valid_limits_for_db)
         
         user = User(**user_data)
-        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
         db.add(user)
 
     if str(vk_id) == settings.ADMIN_VK_ID:
         admin_limits = get_limits_for_plan(PlanName.PRO)
         user.is_admin = True
-        user.plan = PlanName.PRO
+        # ИЗМЕНЕНО: Используем .name, чтобы в БД записалась строка "PRO"
+        user.plan = PlanName.PRO.name
         user.plan_expires_at = None
         
-        # Здесь используем тот же безопасный подход
         user_model_columns = {c.name for c in User.__table__.columns}
         for key, value in admin_limits.items():
             if key in user_model_columns:
@@ -767,7 +764,7 @@ async def login_via_vk(
     user_id = user.id
 
     login_entry = LoginHistory(
-        user_id=user_id, # Используем сохраненный ID
+        user_id=user_id,
         ip_address=request.client.host if request.client else "unknown",
         user_agent=request.headers.get("user-agent", "unknown")
     )
@@ -777,7 +774,6 @@ async def login_via_vk(
 
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     
-    # Используем сохраненный ID для создания токена
     token_data = {"sub": str(user_id), "profile_id": str(user_id)}
     
     access_token = create_access_token(
@@ -801,14 +797,9 @@ async def switch_profile(
     manager: User = Depends(get_current_manager_user),
     db: AsyncSession = Depends(get_db)
 ) -> EnrichedTokenResponse:
-
-    
-    # Загружаем связи "менеджер -> управляемый профиль"
     await db.refresh(manager, attribute_names=["managed_profiles"])
     
-    # Собираем все ID профилей, к которым у менеджера есть прямой доступ
     allowed_profile_ids = {p.profile_user_id for p in manager.managed_profiles}
-    # Менеджер всегда имеет доступ к своему собственному профилю
     allowed_profile_ids.add(manager.id)
 
     if request_data.profile_id not in allowed_profile_ids:
@@ -1852,13 +1843,20 @@ async def get_friends_analytics(current_user: User = Depends(get_current_active_
     vk_api = VKAPI(access_token=vk_token, proxy=None)
     
     try:
-        friends = await vk_api.get_user_friends(user_id=current_user.vk_id, fields="sex")
+        friends_response = await vk_api.get_user_friends(user_id=current_user.vk_id, fields="sex")
     except VKAPIError as e:
         raise HTTPException(status_code=status.HTTP_424_FAILED_DEPENDENCY, detail=f"Ошибка VK API: {e.message}")
+    finally:
+        # --- ИСПРАВЛЕНИЕ: Гарантированно закрываем сессию ---
+        if vk_api:
+            await vk_api.close()
 
     analytics = {"male_count": 0, "female_count": 0, "other_count": 0}
-    if friends:
-        for friend in friends:
+    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+    # Проверяем наличие ответа и ключа 'items'
+    if friends_response and friends_response.get('items'):
+        # Итерируемся по списку друзей, а не по всему словарю
+        for friend in friends_response['items']:
             sex = friend.get("sex")
             if sex == 1:
                 analytics["female_count"] += 1
@@ -2021,12 +2019,13 @@ async def reply_to_ticket(
 # backend/app/api/endpoints/tasks.py
 
 # ОТВЕТСТВЕННОСТЬ: Запуск, предпросмотр и конфигурация новых задач.
-from fastapi import APIRouter, Depends, Body, HTTPException, status
+from fastapi import APIRouter, Depends, Body, HTTPException, status, Request # <--- ДОБАВЛЕН Request
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError # <--- ДОБАВЛЕН ValidationError
 from arq.connections import ArqRedis
+import datetime # <--- ДОБАВЛЕН datetime
 
 from app.db.models import User, TaskHistory
 from app.api.dependencies import get_current_active_profile, get_arq_pool
@@ -2038,17 +2037,15 @@ from app.core.config_loader import AUTOMATIONS_CONFIG
 from app.core.constants import TaskKey
 from app.services.vk_api import VKAPIError
 
-# --- НАЧАЛО ИЗМЕНЕНИЯ: Импортируем карты из нового централизованного модуля ---
 from app.tasks.task_maps import AnyTaskRequest, TASK_FUNC_MAP, PREVIEW_SERVICE_MAP
-# --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
 router = APIRouter()
 
-# --- Определения типов и карты были отсюда удалены ---
-
 # --- Вспомогательная функция ---
 async def _enqueue_task(
-    user: User, db: AsyncSession, arq_pool: ArqRedis, task_key: str, request_data: BaseModel, original_task_name: Optional[str] = None
+    user: User, db: AsyncSession, arq_pool: ArqRedis, task_key: str, request_data: BaseModel,
+    original_task_name: Optional[str] = None,
+    defer_until: Optional[datetime.datetime] = None # <--- ДОБАВЛЕНО
 ) -> ActionResponse:
     """Проверяет лимиты и ставит задачу в очередь ARQ."""
     plan_config = get_plan_config(user.plan)
@@ -2086,17 +2083,25 @@ async def _enqueue_task(
     await db.commit()
     await db.refresh(task_history)
 
-    job = await arq_pool.enqueue_job(
-        task_func_name,
-        task_history_id=task_history.id,
+    job_kwargs = {
+        'task_history_id': task_history.id,
         **request_data.model_dump()
-    )
+    }
+    if defer_until: # <--- ДОБАВЛЕНО
+        job_kwargs['_defer_until'] = defer_until
+
+    job = await arq_pool.enqueue_job(task_func_name, **job_kwargs)
 
     task_history.celery_task_id = job.job_id
     await db.commit()
+    
+    message = f"Задача '{task_display_name}' успешно добавлена в очередь."
+    if defer_until: # <--- ДОБАВЛЕНО
+        message = f"Задача '{task_display_name}' запланирована на {defer_until.strftime('%Y-%m-%d %H:%M:%S')}."
+
 
     return ActionResponse(
-        message=f"Задача '{task_display_name}' успешно добавлена в очередь.",
+        message=message,
         task_id=job.job_id
     )
 
@@ -2107,6 +2112,7 @@ async def get_task_config(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
+    # ... (код без изменений)
     task_config = next((item for item in AUTOMATIONS_CONFIG if item.id == task_key.value), None)
     if not task_config:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Конфигурация для задачи не найдена.")
@@ -2145,15 +2151,33 @@ async def get_task_config(
         ))
     return TaskConfigResponse(display_name=task_config.name, has_filters=task_config.has_filters, fields=fields)
 
+
 @router.post("/run/{task_key}", response_model=ActionResponse, summary="Запустить любую задачу по ее ключу")
 async def run_any_task(
     task_key: TaskKey,
-    request_data: AnyTaskRequest = Body(...),
+    request: Request, # <--- ИЗМЕНЕНИЕ
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db),
     arq_pool: ArqRedis = Depends(get_arq_pool)
 ):
-    return await _enqueue_task(current_user, db, arq_pool, task_key.value, request_data)
+    # --- НАЧАЛО ИЗМЕНЕНИЯ ---
+    # Мы читаем тело запроса как JSON, чтобы извлечь `publish_at`
+    # и одновременно валидируем его через Pydantic-модель задачи.
+    try:
+        raw_body = await request.json()
+        
+        # Находим нужную Pydantic модель для валидации
+        RequestModel = next((m for k, (_,_,m) in PREVIEW_SERVICE_MAP.items() if k == task_key), AnyTaskRequest)
+        request_data = RequestModel(**raw_body)
+        
+        publish_at_str = raw_body.get("publish_at")
+        defer_until = datetime.datetime.fromisoformat(publish_at_str) if publish_at_str else None
+
+    except (ValidationError, TypeError, ValueError) as e:
+         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
+    return await _enqueue_task(current_user, db, arq_pool, task_key.value, request_data, defer_until=defer_until)
 
 @router.post("/preview/{task_key}", response_model=PreviewResponse, summary="Предварительный подсчет аудитории для задачи")
 async def preview_task_audience(
@@ -2162,6 +2186,7 @@ async def preview_task_audience(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
+    # ... (код без изменений)
     if task_key not in PREVIEW_SERVICE_MAP:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -2861,9 +2886,14 @@ class MassMessagingRequest(BaseModel):
     count: int = Field(50, ge=1)
     filters: ActionFilters = Field(default_factory=ActionFilters)
     message_text: str = Field(..., min_length=1, max_length=1000)
+    attachments: Optional[List[str]] = Field(
+        None,
+        description="Список attachment ID (напр. 'photo123_456').",
+        max_length=10
+    )
+    # ------------------
     only_new_dialogs: bool = Field(False)
     only_unread: bool = Field(False)
-    # ДОБАВЛЕНО: Настройки очеловечивания для массовой рассылки
     humanized_sending: HumanizedSendingConfig = Field(default_factory=HumanizedSendingConfig)
 
 
@@ -3039,7 +3069,7 @@ class NotificationsResponse(BaseModel):
 
 # --- backend/app\api\schemas\posts.py ---
 
-# --- backend/app/api/schemas/posts.py ---
+# backend/app/api/schemas/posts.py
 from pydantic import BaseModel, Field, ConfigDict, HttpUrl
 from datetime import datetime
 from typing import List, Optional
@@ -3052,7 +3082,7 @@ class PostCreate(PostBase):
     attachments: Optional[List[str]] = Field(
         default_factory=list, 
         description="Список готовых attachment ID (photo_id, etc.). Не более 10.",
-        max_items=10 
+        max_length=10 # <--- ИЗМЕНЕНИЕ: max_items -> max_length
     )
 
 class PostRead(PostBase):
@@ -3073,9 +3103,8 @@ class UploadImageFromUrlRequest(BaseModel):
 class UploadedImagesResponse(BaseModel):
     attachment_ids: List[str]
 
-# --- НОВАЯ СХЕМА ДЛЯ ПАКЕТНОЙ ЗАГРУЗКИ ПО URL ---
 class UploadImagesFromUrlsRequest(BaseModel):
-    image_urls: List[HttpUrl] = Field(..., description="Список URL изображений для загрузки. Не более 10.", max_items=10)
+    image_urls: List[HttpUrl] = Field(..., description="Список URL изображений для загрузки. Не более 10.", max_length=10) # <--- ИЗМЕНЕНИЕ: max_items -> max_length
 
 class PostBatchCreate(BaseModel):
     posts: List[PostCreate]
@@ -3468,11 +3497,11 @@ except (FileNotFoundError, Exception) as e:
 from enum import Enum
 
 class PlanName(str, Enum):
-    BASE = "Базовый"
-    PLUS = "Plus"
+    BASE = "BASE"
+    PLUS = "PLUS"
     PRO = "PRO"
-    AGENCY = "Agency"
-    EXPIRED = "Expired"
+    AGENCY = "AGENCY"
+    EXPIRED = "EXPIRED"
 
 class FeatureKey(str, Enum):
     PROXY_MANAGEMENT = "proxy_management"
@@ -3606,8 +3635,10 @@ from app.core.constants import PlanName, FeatureKey, TaskKey
 
 @lru_cache(maxsize=16)
 def get_plan_config(plan_name: PlanName | str) -> dict:
-    """Безопасно получает конфигурацию плана, возвращая 'Expired' если план не найден."""
-    plan_model = PLAN_CONFIG.get(str(plan_name), PLAN_CONFIG[PlanName.EXPIRED])
+    # Эта функция теперь будет корректно работать, т.к. user.plan
+    # будет хранить системное имя ("BASE", "PRO" и т.д.)
+    key = plan_name.name if isinstance(plan_name, PlanName) else plan_name
+    plan_model = PLAN_CONFIG.get(key, PLAN_CONFIG["EXPIRED"]) # Используем строковый ключ "EXPIRED"
     return plan_model.model_dump()
 
 def get_limits_for_plan(plan_name: PlanName | str) -> dict:
@@ -3634,7 +3665,11 @@ def get_all_feature_keys() -> list[str]:
 @lru_cache(maxsize=256)
 def is_feature_available_for_plan(plan_name: PlanName | str, feature_id: str) -> bool:
     """Проверяет, доступна ли указанная фича для данного тарифного плана."""
-    plan_model = PLAN_CONFIG.get(str(plan_name), PLAN_CONFIG[PlanName.EXPIRED])
+    # ИЗМЕНЕНО: Ключевое исправление.
+    # Мы используем .name для получения строкового ключа, чтобы избежать KeyError.
+    key = plan_name if isinstance(plan_name, str) else plan_name.name
+    plan_model = PLAN_CONFIG.get(key, PLAN_CONFIG[PlanName.EXPIRED.name])
+    
     available_features = plan_model.available_features
     
     if available_features == "*":
@@ -3647,13 +3682,15 @@ def get_features_for_plan(plan_name: PlanName | str) -> list[str]:
     Возвращает полный список доступных ключей фич для тарифного плана.
     Обрабатывает wildcard '*' для PRO тарифов.
     """
-    plan_model = PLAN_CONFIG.get(str(plan_name), PLAN_CONFIG[PlanName.EXPIRED])
+    # ИЗМЕНЕНО: Аналогичное исправление для консистентности.
+    key = plan_name if isinstance(plan_name, str) else plan_name.name
+    plan_model = PLAN_CONFIG.get(key, PLAN_CONFIG[PlanName.EXPIRED.name])
     available = plan_model.available_features
     
     if available == "*":
         return get_all_feature_keys()
     
-    return available if isinstance(available, list) else []
+    return available if isinstance(available, list) else [] 
 
 # --- backend/app\core\security.py ---
 
@@ -3843,6 +3880,7 @@ from app.core.config import settings
 engine = create_async_engine(
     settings.database_url,
     pool_pre_ping=True,
+    connect_args={"statement_cache_size": 0}
 )
 
 AsyncSessionFactory = sessionmaker(
@@ -4176,6 +4214,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 from app.db.base import Base
 from app.db.enums import DelayProfile, TeamMemberRole
+from app.core.constants import PlanName
 
 class User(Base):
     __tablename__ = "users"
@@ -4183,7 +4222,7 @@ class User(Base):
     vk_id = Column(BigInteger, unique=True, index=True, nullable=False)
     encrypted_vk_token = Column(String, nullable=False)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
-    plan = Column(String, nullable=False, server_default='Базовый')
+    plan = Column(String, nullable=False, server_default=PlanName.BASE.value)
     plan_expires_at = Column(DateTime(timezone=True), nullable=True)
     is_admin = Column(Boolean, nullable=False, server_default='false')
     daily_likes_limit = Column(Integer, nullable=False, server_default=text('0'))
@@ -4512,13 +4551,17 @@ class AutomationService(BaseVKService):
         Находит друзей-именинников и применяет к ним все фильтры.
         Используется для предпросмотра и для выполнения задачи.
         """
-        friends = await self.vk_api.get_user_friends(self.user.vk_id, fields="bdate,sex,online,last_seen,is_closed,status,city")
-        if not friends:
+        await self._initialize_vk_api()
+        friends_response = await self.vk_api.get_user_friends(self.user.vk_id, fields="bdate,sex,online,last_seen,is_closed,status,city")
+        if not friends_response or not friends_response.get('items'):
             return []
 
+        friends = friends_response.get('items', [])
         today = datetime.date.today()
         today_str = f"{today.day}.{today.month}"
         
+        # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+        # Итерируемся по списку друзей, а не по всему ответу API
         birthday_friends_raw = [f for f in friends if f.get("bdate") and f.get("bdate").startswith(today_str)]
         if not birthday_friends_raw:
             return []
@@ -4531,7 +4574,8 @@ class AutomationService(BaseVKService):
         
         if params.only_new_dialogs or params.only_unread:
             message_service = MessageService(self.db, self.user, self.emitter)
-            await message_service._initialize_vk_api() 
+            # API уже инициализирован, можно использовать напрямую
+            message_service.vk_api = self.vk_api
             final_targets = await message_service.filter_targets_by_conversation_status(
                 birthday_friends_filtered, params.only_new_dialogs, params.only_unread
             )
@@ -4551,6 +4595,7 @@ class AutomationService(BaseVKService):
         Приватный метод с основной логикой поздравления.
         """
         await self.emitter.send_log("Запуск задачи: Поздравление друзей с Днем Рождения.", "info")
+        stats = await self._get_today_stats()
         
         final_targets = await self.get_birthday_congratulation_targets(params)
         if not final_targets:
@@ -4573,6 +4618,11 @@ class AutomationService(BaseVKService):
         processed_count = 0
 
         for friend in targets_to_process:
+            # Проверяем лимит перед каждой отправкой
+            if stats.messages_sent_count >= self.user.daily_message_limit:
+                await self.emitter.send_log(f"Достигнут дневной лимит сообщений ({self.user.daily_message_limit}). Поздравления остановлены.", "warning")
+                break
+
             friend_id = friend['id']
             sex = friend.get("sex")
             template = params.message_template_default
@@ -4581,33 +4631,36 @@ class AutomationService(BaseVKService):
             elif sex == 1 and params.message_template_female:
                 template = params.message_template_female
             
+            is_sent_successfully = False
             if params.humanized_sending.enabled:
                 humanizer = MessageHumanizer(self.vk_api, self.emitter)
-                result = await humanizer.send_messages_sequentially(
+                sent_count = await humanizer.send_messages_sequentially(
                     targets=[friend], template=template,
                     speed=params.humanized_sending.speed,
                     simulate_typing=params.humanized_sending.simulate_typing
                 )
-                if result > 0:
-                    processed_count += 1
-                    insert_stmt = insert(SentCongratulation).values(user_id=self.user.id, friend_vk_id=friend_id, year=current_year).on_conflict_do_nothing()
-                    await self.db.execute(insert_stmt)
+                if sent_count > 0:
+                    is_sent_successfully = True
             else:
                 message = template.replace("{name}", friend.get("first_name", ""))
                 url = f"https://vk.com/id{friend_id}"
                 await self.humanizer.think(action_type='message')
                 if await self.vk_api.send_message(friend_id, message):
-                    insert_stmt = insert(SentCongratulation).values(user_id=self.user.id, friend_vk_id=friend_id, year=current_year).on_conflict_do_nothing()
-                    await self.db.execute(insert_stmt)
                     await self.emitter.send_log(f"Успешно отправлено поздравление для {friend.get('first_name', '')}", "success", target_url=url)
-                    processed_count += 1
+                    is_sent_successfully = True
+
+            # Если отправка удалась, обновляем статистику и логи
+            if is_sent_successfully:
+                processed_count += 1
+                await self._increment_stat(stats, 'messages_sent_count')
+                insert_stmt = insert(SentCongratulation).values(user_id=self.user.id, friend_vk_id=friend_id, year=current_year).on_conflict_do_nothing()
+                await self.db.execute(insert_stmt)
 
         await self.emitter.send_log(f"Задача завершена. Отправлено поздравлений: {processed_count}.", "success")
         
     async def set_online_status(self, params: EternalOnlineRequest):
         """
         Устанавливает статус "онлайн" для пользователя.
-        Вся сложная логика расписания вынесена в cron-обработчик.
         """
         return await self._execute_logic(self._set_online_status_logic)
 
@@ -4616,7 +4669,7 @@ class AutomationService(BaseVKService):
         Непосредственно вызывает метод VK API для установки статуса.
         """
         await self.emitter.send_log("Поддержание статуса 'онлайн'...", "debug")
-        await self.vk_api.set_online()
+        await self.vk_api.account.setOnline()
 
 # --- backend/app\services\base.py ---
 
@@ -4680,21 +4733,15 @@ class BaseVKService:
     async def _execute_logic(self, logic_func, *args, **kwargs):
         """
         Универсальный метод-обертка для выполнения основной логики сервиса.
-        Управляет инициализацией, транзакциями и закрытием соединений.
+        Управляет инициализацией и закрытием соединений.
+        ТРАНЗАКЦИЯМИ НЕ УПРАВЛЯЕТ.
         """
         await self._initialize_vk_api()
-        
         try:
-            # ИЗМЕНЕНИЕ: Сохраняем и возвращаем результат
+            # Просто выполняем логику. Коммит/откат будет в вызывающем коде (arq_task_runner).
             result = await logic_func(*args, **kwargs)
-            await self.db.commit()
             return result
-        except Exception as e:
-            await self.db.rollback()
-            await self.emitter.send_log(
-                f"Произошла критическая ошибка: {type(e).__name__} - {e}. Все изменения отменены.", 
-                status="error"
-            )
+        except Exception:
             raise
         finally:
             if self.vk_api:
@@ -5246,7 +5293,7 @@ class IncomingRequestService(BaseVKService):
             batch = targets[i:i + batch_size]
             calls = [{"method": "friends.add", "params": {"user_id": p.get('id')}} for p in batch]
 
-            await self.humanizer.imitate_simple_action()
+            await self.humanizer.think(action_type='add_friend')
             results = await self.vk_api.execute(calls)
 
             if results is None:
@@ -5274,7 +5321,7 @@ class IncomingRequestService(BaseVKService):
 import asyncio
 import random
 import structlog
-from typing import List, Dict, Any, Literal
+from typing import List, Dict, Any, Literal, Optional
 from app.services.vk_api import VKAPI, VKAccessDeniedError
 from app.services.event_emitter import RedisEventEmitter
 
@@ -5302,6 +5349,7 @@ class MessageHumanizer:
         self,
         targets: List[Dict[str, Any]],
         message_template: str,
+        attachments: Optional[str] = None, # <-- ИЗМЕНЕНИЕ: Принимает готовую строку вложений
         speed: SpeedProfile = "normal",
         simulate_typing: bool = True
     ) -> int:
@@ -5310,6 +5358,7 @@ class MessageHumanizer:
 
         :param targets: Список словарей с информацией о получателях.
         :param message_template: Шаблон сообщения, поддерживает {name}.
+        :param attachments: Строка с ID вложений (напр. 'photo123_456,photo123_789').
         :param speed: Профиль скорости отправки.
         :param simulate_typing: Включать ли имитацию набора текста.
         :return: Количество успешно отправленных сообщений.
@@ -5330,26 +5379,23 @@ class MessageHumanizer:
             
             try:
                 # 1. Имитация "открытия и прочтения" диалога
-                await self.vk_api.messages.markAsRead(peer_id=target_id)
+                # --- ИСПРАВЛЕНИЕ: Удалена строка `await self.vk_api.messages.markAsRead(peer_id=target_id)`, вызывавшая ошибку ---
                 await asyncio.sleep(random.uniform(0.5, 1.2))
 
                 # 2. Расчет задержки и имитация набора текста
                 if simulate_typing:
-                    # Среднее время набора текста в секундах
                     typing_duration = (len(final_message) / (profile["cpm"] / 60)) 
-                    # Добавляем вариативность
                     variation = profile["variation"]
                     total_delay = typing_duration * random.uniform(1 - variation, 1 + variation)
                     
-                    # Небольшая базовая задержка перед началом "набора"
                     await asyncio.sleep(profile["base_delay"] * random.uniform(0.8, 1.2))
                     
                     await self.emitter.send_log(f"Имитация набора текста для {full_name} (~{total_delay:.1f} сек)...", "debug")
                     await self.vk_api.messages.setActivity(user_id=target_id, type='typing')
                     await asyncio.sleep(total_delay)
 
-                # 3. Отправка сообщения
-                if await self.vk_api.messages.send(target_id, final_message):
+                # 3. Отправка сообщения с вложениями
+                if await self.vk_api.messages.send(target_id, final_message, attachment=attachments):
                     successful_sends += 1
                     await self.emitter.send_log(f"Сообщение для {full_name} успешно отправлено.", "success", target_url=url)
                 else:
@@ -5376,7 +5422,6 @@ from app.core.exceptions import InvalidActionSettingsError, UserLimitReachedErro
 from app.services.vk_api import VKAccessDeniedError
 from app.services.vk_user_filter import apply_filters_to_profiles
 from app.api.schemas.actions import MassMessagingRequest
-# --- НОВЫЙ ИМПОРТ ---
 from app.services.message_humanizer import MessageHumanizer
 
 
@@ -5414,11 +5459,16 @@ class MessageService(BaseVKService):
 
     async def get_mass_messaging_targets(self, params: MassMessagingRequest) -> List[Dict[str, Any]]:
         """Вспомогательный метод для получения и фильтрации целей для МАССОВОЙ РАССЫЛКИ."""
-        friends_response = await self.vk_api.get_user_friends(self.user.vk_id, fields="sex,online,last_seen,status,is_closed,city")
-        if not friends_response:
+        # <<< ИСПРАВЛЕНИЕ ЗДЕСЬ >>>
+        response = await self.vk_api.get_user_friends(self.user.vk_id, fields="sex,online,last_seen,status,is_closed,city")
+        
+        if not response or not response.get('items'):
             return []
+        
+        # Итерируемся по response.get('items', []), а не по всему ответу
+        friends_list = [f for f in response.get('items', []) if f.get('id') != self.user.vk_id]
 
-        filtered_friends = await apply_filters_to_profiles(friends_response, params.filters)
+        filtered_friends = await apply_filters_to_profiles(friends_list, params.filters)
         
         targets = await self.filter_targets_by_conversation_status(
             filtered_friends, params.only_new_dialogs, params.only_unread
@@ -5432,9 +5482,13 @@ class MessageService(BaseVKService):
     async def _send_mass_message_logic(self, params: MassMessagingRequest):
         if not params.message_text or not params.message_text.strip():
             raise InvalidActionSettingsError("Текст сообщения не может быть пустым.")
+        
+        attachments_str = ",".join(params.attachments) if params.attachments else None
 
         await self.emitter.send_log(f"Запуск массовой рассылки. Цель: {params.count} сообщений.", "info")
         stats = await self._get_today_stats()
+        if self.user.daily_message_limit <= 0:
+            raise UserLimitReachedError(f"Достигнут дневной лимит сообщений ({self.user.daily_message_limit}).")
 
         target_friends = await self.get_mass_messaging_targets(params)
 
@@ -5445,54 +5499,51 @@ class MessageService(BaseVKService):
         await self.emitter.send_log(f"Найдено получателей по фильтрам: {len(target_friends)}. Начинаем отправку.", "info")
         random.shuffle(target_friends)
         
-        # Ограничиваем количество целей согласно запросу
         targets_to_process = target_friends[:params.count]
-            
         processed_count = 0
         
-        # --- ИЗМЕНЕНИЕ: Добавляем ветку для "человечной" отправки ---
         if params.humanized_sending.enabled:
             await self.emitter.send_log("Активирован режим 'человечной' отправки.", "info")
             humanizer = MessageHumanizer(self.vk_api, self.emitter)
             
             for target in targets_to_process:
-                # Проверяем лимит перед каждой отправкой
+                # Вторичная проверка внутри цикла на случай, если лимит закончился во время работы
                 if stats.messages_sent_count >= self.user.daily_message_limit:
-                    raise UserLimitReachedError(f"Достигнут дневной лимит сообщений ({self.user.daily_message_limit}).")
+                    await self.emitter.send_log(f"Дневной лимит сообщений ({self.user.daily_message_limit}) был достигнут во время рассылки.", "warning")
+                    break # Выходим из цикла, а не бросаем ошибку
                 
-                # Отправляем через хуманайзер, который сам вернет результат и залогирует
-                result = await humanizer.send_messages_sequentially(
-                    targets=[target], # Отправляем по одному
+                sent_count = await humanizer.send_messages_sequentially(
+                    targets=[target],
                     message_template=params.message_text,
+                    attachments=attachments_str,
                     speed=params.humanized_sending.speed,
                     simulate_typing=params.humanized_sending.simulate_typing
                 )
-                if result > 0:
+                if sent_count > 0:
                     processed_count += 1
                     await self._increment_stat(stats, 'messages_sent_count')
 
-        else: # Старая логика быстрой отправки
+        else: # Быстрая пакетная отправка
             for friend in targets_to_process:
                 if stats.messages_sent_count >= self.user.daily_message_limit:
-                    raise UserLimitReachedError(f"Достигнут дневной лимит сообщений ({self.user.daily_message_limit}).")
+                    await self.emitter.send_log(f"Дневной лимит сообщений ({self.user.daily_message_limit}) был достигнут во время рассылки.", "warning")
+                    break
 
                 friend_id = friend.get('id')
                 name = f"{friend.get('first_name', '')} {friend.get('last_name', '')}"
                 url = f"https://vk.com/id{friend_id}"
                 
                 final_message = params.message_text.replace("{name}", friend.get('first_name', ''))
-
-                # Здесь можно оставить минимальную задержку из старого хуманайзера
-                await self.humanizer.think(action_type='like')
+                await self.humanizer.think(action_type='message')
 
                 try:
-                    if await self.vk_api.send_message(friend_id, final_message):
+                    if await self.vk_api.messages.send(friend_id, final_message, attachment=attachments_str):
                         processed_count += 1
                         await self._increment_stat(stats, 'messages_sent_count')
                         await self.emitter.send_log(f"Сообщение для {name} успешно отправлено.", "success", target_url=url)
                 except VKAccessDeniedError:
                     await self.emitter.send_log(f"Не удалось отправить (профиль закрыт или ЧС): {name}", "warning", target_url=url)
-
+        
         await self.emitter.send_log(f"Рассылка завершена. Отправлено сообщений: {processed_count}.", "success")
 
 # --- backend/app\services\outgoing_request_service.py ---
@@ -5513,16 +5564,21 @@ class OutgoingRequestService(BaseVKService):
     async def get_add_recommended_targets(self, params: AddFriendsRequest) -> List[Dict[str, Any]]:
         """
         ПОИСК ЦЕЛЕЙ: Получает и фильтрует пользователей из рекомендаций.
-        Этот метод используется как для предпросмотра, так и для реального выполнения.
         """
+        await self._initialize_vk_api()
         # Берем с запасом, т.к. фильтрация может отсеять многих
         response = await self.vk_api.get_recommended_friends(count=params.count * 3)
+        
+        # <<< ИСПРАВЛЕНИЕ ЗДЕСЬ >>>
         if not response or not response.get('items'):
             await self.emitter.send_log("Рекомендации не найдены.", "warning")
             return []
 
         await self.emitter.send_log(f"Найдено {len(response.get('items', []))} рекомендаций. Применяем фильтры...", "info")
+        
+        # Итерируемся по response.get('items', [])
         filtered_profiles = await apply_filters_to_profiles(response.get('items', []), params.filters)
+        # <<< КОНЕЦ ИСПРАВЛЕНИЯ >>>
         
         return filtered_profiles
 
@@ -5557,9 +5613,16 @@ class OutgoingRequestService(BaseVKService):
                 if not await redis_lock_client.set(lock_key, "1", ex=3600, nx=True):
                     continue
 
-                await self.humanizer.read_and_scroll()
+                await self.humanizer.think(action_type='add_friend')
                 
-                message = params.message_text.replace("{name}", profile.get("first_name", "")) if params.message_text and params.send_message_on_add else None
+                message = None
+                if params.send_message_on_add and params.message_text:
+                    # Проверяем лимит сообщений ПЕРЕД тем, как сформировать сообщение
+                    if stats.messages_sent_count < self.user.daily_message_limit:
+                        message = params.message_text.replace("{name}", profile.get("first_name", ""))
+                    else:
+                        await self.emitter.send_log(f"Достигнут лимит сообщений. Заявка для {profile.get('first_name')} будет отправлена без приветствия.", "warning")
+
                 result = await self.vk_api.add_friend(user_id, message) 
                 
                 name = f"{profile.get('first_name', '')} {profile.get('last_name', '')}"
@@ -5569,6 +5632,10 @@ class OutgoingRequestService(BaseVKService):
                     processed_count += 1
                     await self._increment_stat(stats, 'friends_added_count')
                     
+                    # Если сообщение было успешно отправлено вместе с заявкой, учитываем его в лимите
+                    if message:
+                        await self._increment_stat(stats, 'messages_sent_count')
+
                     log_stmt = insert(FriendRequestLog).values(user_id=self.user.id, target_vk_id=user_id).on_conflict_do_nothing()
                     await self.db.execute(log_stmt)
 
@@ -5578,7 +5645,6 @@ class OutgoingRequestService(BaseVKService):
                     await self.emitter.send_log(log_msg, "success", target_url=url)
                     final_results.append(log_msg)
                     
-                    # --- ИЗМЕНЕНИЕ ЗДЕСЬ: Улучшенная логика проверки и логирования ---
                     if params.like_config.enabled:
                         if not profile.get('is_closed', True):
                             like_results = await self._like_user_content(user_id, profile, params.like_config, stats)
@@ -5599,6 +5665,7 @@ class OutgoingRequestService(BaseVKService):
             await redis_lock_client.close()
 
     async def _like_user_content(self, user_id: int, profile: Dict[str, Any], config: LikeAfterAddConfig, stats: DailyStats) -> list[str]:
+        # ... (код без изменений)
         like_results = []
         if stats.likes_count >= self.user.daily_likes_limit:
             await self.emitter.send_log("Достигнут дневной лимит лайков, пропуск лайкинга после добавления.", "warning")
@@ -6131,13 +6198,32 @@ from typing import Optional, Dict, Any, Literal
 from .base import BaseVKSection
 
 class MessagesAPI(BaseVKSection):
-    async def send(self, user_id: int, message: str) -> Optional[int]:
-        params = {"user_id": user_id, "message": message, "random_id": random.randint(0, 2**31)}
+    async def send(self, user_id: int, message: str, attachment: Optional[str] = None) -> Optional[int]:
+        params = {
+            "user_id": user_id,
+            "message": message,
+            "random_id": random.randint(0, 2**31)
+        }
+        # --- ДОБАВЛЕНО ---
+        if attachment:
+            params["attachment"] = attachment
+        # -----------------
         return await self._make_request("messages.send", params=params)
-    
+
     async def getConversations(self, count: int = 200, filter: Optional[Literal['all', 'unread', 'important', 'unanswered']] = 'all') -> Optional[Dict[str, Any]]:
         params = {"count": count, "filter": filter}
         return await self._make_request("messages.getConversations", params=params)
+    
+    async def markAsRead(self, peer_id: int) -> Optional[int]:
+        """Отмечает сообщения как прочитанные."""
+        params = {"peer_id": peer_id}
+        return await self._make_request("messages.markAsRead", params=params)
+
+    # НОВЫЙ МЕТОД:
+    async def setActivity(self, user_id: int, type: str = 'typing') -> Optional[int]:
+        """Показывает статус 'набирает сообщение'."""
+        params = {"user_id": user_id, "type": type}
+        return await self._make_request("messages.setActivity", params=params)
 
 # --- backend/app\services\vk_api\newsfeed.py ---
 
@@ -6415,6 +6501,12 @@ class VKAPI:
             Удобный метод-обертка для получения постов со стены.
             """
             return await self.wall.get(owner_id=owner_id, count=count)
+    
+    async def get_conversations(self, count: int = 200, filter: str = 'all') -> Optional[Dict[str, Any]]:
+        """
+        Удобный метод-обертка для получения диалогов.
+        """
+        return await self.messages.getConversations(count=count, filter=filter)
 
 
 async def is_token_valid(vk_token: str) -> Optional[int]:
@@ -6624,8 +6716,7 @@ import functools
 import structlog
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
-from contextlib import asynccontextmanager
+from sqlalchemy.orm import selectinload, joinedload
 
 from app.db.models import User, TaskHistory, Automation
 from app.db.session import AsyncSessionFactory
@@ -6637,85 +6728,107 @@ from app.tasks.service_maps import TASK_CONFIG_MAP
 
 log = structlog.get_logger(__name__)
 
-@asynccontextmanager
-async def get_task_session(provided_session: AsyncSession | None = None):
-    """
-    Контекстный менеджер для получения сессии БД.
-    Если сессия передана извне (как в тестах), использует ее.
-    Иначе, создает новую сессию (как в production).
-    """
-    if provided_session:
-        yield provided_session
-    else:
-        async with AsyncSessionFactory() as session:
-            yield session
 
 def arq_task_runner(func):
+    """
+    Декоратор-обертка для всех ARQ задач, выполняемых пользователем.
+    (описание без изменений)
+    """
     @functools.wraps(func)
     async def wrapper(ctx, task_history_id: int, **kwargs):
-        db_session_for_test = kwargs.pop("db_session_for_test", None)
         emitter_for_test = kwargs.pop("emitter_for_test", None)
 
-        async with get_task_session(db_session_for_test) as session:
-            stmt = select(TaskHistory).where(TaskHistory.id == task_history_id).options(
-                selectinload(TaskHistory.user).selectinload(User.proxies)
-            )
-            task_history = (await session.execute(stmt)).scalar_one_or_none()
-
-            if not task_history or not task_history.user:
-                log.error("task.runner.not_found", task_history_id=task_history_id)
-                return
-
-            emitter = emitter_for_test or RedisEventEmitter(ctx['redis_pool'])
-            emitter.set_context(task_history.user.id, task_history.id)
-
+        async with AsyncSessionFactory() as session:
+            task_history = None
+            emitter = None
+            # --- ИСПРАВЛЕНИЕ: Заранее объявляем переменные для хранения данных ---
+            # Это защитит нас от доступа к "просроченным" атрибутам после commit.
+            task_name = "Неизвестная задача"
+            created_at = None
+            user_id = None
+            
             try:
-                task_history.status = "STARTED"
-                if not db_session_for_test:
-                    await session.commit()
-                await emitter.send_task_status_update(status="STARTED", task_name=task_history.task_name, created_at=task_history.created_at)
+                # Загружаем все необходимые данные одним запросом ("жадная" загрузка)
+                stmt = select(TaskHistory).where(TaskHistory.id == task_history_id).options(
+                    joinedload(TaskHistory.user).selectinload(User.proxies)
+                )
+                task_history = (await session.execute(stmt)).scalar_one_or_none()
 
+                if not task_history or not task_history.user:
+                    log.error("task.runner.not_found_final", task_history_id=task_history_id)
+                    return
+
+                # --- ИСПРАВЛЕНИЕ: Считываем все нужные данные в локальные переменные ДО первого commit ---
+                task_name = task_history.task_name
+                created_at = task_history.created_at
+                user_id = task_history.user.id
+
+                emitter = emitter_for_test or RedisEventEmitter(ctx['redis_pool'])
+                emitter.set_context(user_id, task_history_id)
+                
+                # Обновляем статус и делаем commit
+                task_history.status = "STARTED"
+                await session.commit()
+                # !!! С ЭТОГО МОМЕНТА ОБЪЕКТ task_history "ПРОСРОЧЕН" !!!
+                
+                # Теперь этот вызов абсолютно безопасен, так как мы используем локальные переменные
+                await emitter.send_task_status_update(status="STARTED", task_name=task_name, created_at=created_at)
+
+                # Вызываем основную логику задачи, передавая "просроченные" объекты.
+                # Функция func сама будет работать внутри этой же сессии и SQLAlchemy корректно
+                # подгрузит нужные данные для них.
                 summary_result = await func(session, task_history.user, task_history.parameters or {}, emitter)
 
                 task_history.status = "SUCCESS"
                 task_history.result = summary_result if isinstance(summary_result, str) else "Задача успешно выполнена."
 
-            except VKAuthError:
-                task_history.status = "FAILURE"
-                task_history.result = "Ошибка авторизации VK. Токен невалиден."
-                log.error("task_runner.auth_error_critical", user_id=task_history.user.id)
-                await emitter.send_system_notification(session, "Критическая ошибка: токен VK недействителен. Все автоматизации остановлены. Пожалуйста, войдите в систему заново.", "error")
-                await session.execute(update(Automation).where(Automation.user_id == task_history.user.id).values(is_active=False))
-            
-            except UserActionException as e:
-                task_history.status = "FAILURE"
-                task_history.result = str(e)
-                await emitter.send_system_notification(session, str(e), "warning")
-            
-            except VKAPIError as e:
-                task_history.status = "FAILURE"
-                task_history.result = f"Ошибка VK API: {e.message}"
-                log.error("task_runner.generic_vk_error", user_id=task_history.user.id, error=str(e))
-                await emitter.send_system_notification(session, f"Произошла непредвиденная ошибка при обращении к API ВКонтакте: '{e.message}'.", "error")
+            except (UserActionException, VKAPIError, VKAuthError) as e:
+                if task_history:
+                    await session.rollback()
+                    task_history.status = "FAILURE"
+                    if isinstance(e, VKAuthError):
+                        task_history.result = "Ошибка авторизации VK. Токен невалиден."
+                        log.error("task_runner.auth_error_critical", user_id=user_id)
+                        if emitter: await emitter.send_system_notification(session, f"Критическая ошибка: токен VK недействителен для задачи '{task_name}'. Автоматизации остановлены.", "error")
+                        await session.execute(update(Automation).where(Automation.user_id == user_id).values(is_active=False))
+                    else:
+                        error_message = str(getattr(e, 'message', e))
+                        task_history.result = f"Ошибка: {error_message}"
+                        if emitter: await emitter.send_system_notification(session, f"Задача '{task_name}' завершилась с ошибкой: {error_message}", "error")
 
             except Exception as e:
-                task_history.status = "FAILURE"
-                task_history.result = f"Внутренняя ошибка сервера: {type(e).__name__}"
-                log.exception("task_runner.unhandled_exception", id=task_history_id)
-                await emitter.send_system_notification(session, "Произошла внутренняя ошибка сервера при выполнении задачи.", "error")
+                if task_history:
+                    await session.rollback()
+                    task_history.status = "FAILURE"
+                    task_history.result = f"Внутренняя ошибка сервера: {type(e).__name__}"
+                    log.exception("task_runner.unhandled_exception", id=task_history_id)
+                    if emitter: await emitter.send_system_notification(session, f"Задача '{task_name}' завершилась из-за внутренней ошибки сервера.", "error")
             
             finally:
-                if not db_session_for_test:
+                if task_history:
+                    final_status = task_history.status
+                    final_result = task_history.result
+                    
                     await session.commit()
-                await emitter.send_task_status_update(status=task_history.status, result=task_history.result, task_name=task_history.task_name, created_at=task_history.created_at)
+                    
+                    if emitter:
+                        # Используем безопасные локальные переменные для финального уведомления
+                        await emitter.send_task_status_update(
+                            status=final_status,
+                            result=final_result,
+                            task_name=task_name,
+                            created_at=created_at
+                        )
     return wrapper
 
+
 async def _run_service_method(session, user, params, emitter, task_key: TaskKey):
-    """Находит нужный сервис и метод по ключу и выполняет его."""
+    """Вспомогательная функция: находит нужный сервис и метод по ключу и выполняет его."""
     ServiceClass, method_name, ParamsModel = TASK_CONFIG_MAP[task_key]
     validated_params = ParamsModel(**params)
     service_instance = ServiceClass(db=session, user=user, emitter=emitter)
     return await getattr(service_instance, method_name)(validated_params)
+
 
 @arq_task_runner
 async def like_feed_task(session, user, params, emitter):

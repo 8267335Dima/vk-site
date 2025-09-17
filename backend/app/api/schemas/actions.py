@@ -53,9 +53,14 @@ class MassMessagingRequest(BaseModel):
     count: int = Field(50, ge=1)
     filters: ActionFilters = Field(default_factory=ActionFilters)
     message_text: str = Field(..., min_length=1, max_length=1000)
+    attachments: Optional[List[str]] = Field(
+        None,
+        description="Список attachment ID (напр. 'photo123_456').",
+        max_length=10
+    )
+    # ------------------
     only_new_dialogs: bool = Field(False)
     only_unread: bool = Field(False)
-    # ДОБАВЛЕНО: Настройки очеловечивания для массовой рассылки
     humanized_sending: HumanizedSendingConfig = Field(default_factory=HumanizedSendingConfig)
 
 

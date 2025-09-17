@@ -1,118 +1,114 @@
-# backend/tests/conftest.py
-
+# tests/conftest.py
 import asyncio
-import sys
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Generator
+
 import pytest
 import pytest_asyncio
-from asgi_lifespan import LifespanManager
-from httpx import AsyncClient, ASGITransport
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from httpx import AsyncClient
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from alembic.config import Config
+from alembic import command
+
+# --- Переопределяем переменные окружения для тестов ---
+# Это гарантирует, что приложение при импорте будет использовать тестовую БД
+import os
+os.environ['ENV_FILE'] = os.path.join(os.path.dirname(__file__), '..', '.env')
 
 from app.main import app
-from app.api.dependencies import limiter
-from app.core.config import settings
-from app.core.constants import PlanName
-from app.core.security import decrypt_data
+from app.db.session import get_db, engine as main_engine
 from app.db.base import Base
+from app.core.config import settings
 from app.db.models import User
-from app.db.session import get_db
-from app.services.vk_api import VKAPI
-from redis.asyncio import Redis as AsyncRedis
+from app.core.security import create_access_token, encrypt_data
+from app.core.constants import PlanName
 from app.core.plans import get_limits_for_plan
 
-@pytest.fixture(scope="function")
+
+# Создаем отдельный движок и сессии для тестовой БД
+test_engine = create_async_engine(settings.database_url, echo=False)
+TestingSessionLocal = sessionmaker(
+    autocommit=False, autoflush=False, bind=test_engine, class_=AsyncSession
+)
+
+# Переопределяем зависимость get_db для использования тестовой сессии
+async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
+    async with TestingSessionLocal() as session:
+        yield session
+
+app.dependency_overrides[get_db] = override_get_db
+
+@pytest.fixture(scope="session")
+def event_loop() -> Generator:
+    """Создает экземпляр event loop для всего тестового сеанса."""
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    yield loop
+    loop.close()
+
+@pytest_asyncio.fixture(scope="session", autouse=True)
+async def setup_test_database():
+    """
+    Применяет миграции Alembic в начале сессии и откатывает их в конце.
+    `autouse=True` означает, что эта фикстура будет запускаться автоматически.
+    """
+    alembic_cfg = Config("alembic.ini")
+    
+    # Применяем миграции
+    command.upgrade(alembic_cfg, "head")
+
+    yield
+
+    # Откатываем миграции
+    command.downgrade(alembic_cfg, "base")
+
+
+@pytest_asyncio.fixture(scope="function")
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
     """
-    Создает чистую базу данных и сессию для каждого тестового случая.
-    Также очищает Redis DB #2, используемую для блокировок.
+    Предоставляет сессию БД для каждого теста, откатывая транзакцию после завершения.
+    Это гарантирует, что тесты не влияют друг на друга.
     """
-    redis_lock_client = AsyncRedis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/2")
-    await redis_lock_client.flushdb()
-    await redis_lock_client.close()
+    connection = await test_engine.connect()
+    transaction = await connection.begin()
+    session = TestingSessionLocal(bind=connection)
+
+    yield session
+
+    await session.close()
+    await transaction.rollback()
+    await connection.close()
+
+
+@pytest_asyncio.fixture(scope="function")
+async def async_client() -> AsyncGenerator[AsyncClient, None]:
+    """
+    Создает тестовый клиент для отправки HTTP-запросов к приложению.
+    """
+    async with AsyncClient(app=app, base_url="http://test") as client:
+        yield client
+
+
+@pytest_asyncio.fixture(scope="function")
+async def test_user(db_session: AsyncSession) -> User:
+    """Создает и возвращает тестового пользователя в БД."""
+    user_data = {
+        "vk_id": 12345678,
+        "encrypted_vk_token": encrypt_data("test_vk_token"),
+        "plan": PlanName.PRO.name,
+    }
+    limits = get_limits_for_plan(PlanName.PRO)
+    user = User(**user_data, **limits)
     
-    engine = create_async_engine(
-        settings.database_url, 
-        connect_args={"statement_cache_size": 0}
-    )
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
-
-    async with engine.connect() as connection:
-        async with connection.begin() as transaction:
-            session = AsyncSession(bind=connection, expire_on_commit=False)
-            yield session
-            await transaction.rollback()
-
-    await engine.dispose()
-
-
-@pytest.fixture(scope="function")
-async def async_client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
-    """
-    Предоставляет тестовый HTTP-клиент для каждого теста,
-    подменяя зависимость базы данных на тестовую сессию.
-    """
-    async def _override_get_db() -> AsyncGenerator[AsyncSession, None]:
-        yield db_session
-
-    app.dependency_overrides[get_db] = _override_get_db
-    app.dependency_overrides[limiter] = lambda: None
-
-    async with LifespanManager(app):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            yield client
-    
-    app.dependency_overrides.clear()
-
-@pytest.fixture(scope="function")
-async def authorized_user_and_headers(async_client: AsyncClient, db_session: AsyncSession) -> tuple[User, dict]:
-    """
-    Авторизует пользователя и ГАРАНТИРОВАННО устанавливает ему
-    полные лимиты PRO тарифа для корректной работы тестов.
-    """
-    test_token = settings.VK_HEALTH_CHECK_TOKEN
-    assert test_token, "Переменная VK_HEALTH_CHECK_TOKEN должна быть в .env"
-
-    r = await async_client.post("/api/v1/auth/vk", json={"vk_token": test_token})
-    assert r.status_code == 200, f"Не удалось авторизоваться: {r.text}"
-
-    response_data = r.json()
-    access_token = response_data.get("access_token")
-    user_id = response_data.get("manager_id")
-    headers = {"Authorization": f"Bearer {access_token}"}
-
-    user = await db_session.get(User, user_id)
-    assert user is not None
-
-    user.plan = PlanName.PRO
-    pro_limits = get_limits_for_plan(PlanName.PRO)
-    for key, value in pro_limits.items():
-        setattr(user, key, value)
-    
-    user.daily_join_groups_limit = 100
-    user.daily_leave_groups_limit = 100
-
+    db_session.add(user)
     await db_session.commit()
     await db_session.refresh(user)
+    return user
 
-    return user, headers
 
-@pytest.fixture(scope="function")
-async def vk_api_client(authorized_user_and_headers: tuple[User, dict]) -> AsyncGenerator[VKAPI, None]:
-    """
-    Предоставляет настроенный и готовый к работе клиент для VK API.
-    """
-    user, _ = authorized_user_and_headers
-    token = decrypt_data(user.encrypted_vk_token)
-    assert token, "Не удалось расшифровать токен VK"
-
-    api_client = VKAPI(access_token=token)
-    # Добавляем ID пользователя в клиент для удобства в тестах
-    setattr(api_client, "user_id", user.vk_id)
-
-    yield api_client
-    await api_client.close()
+@pytest_asyncio.fixture(scope="function")
+def auth_headers(test_user: User) -> dict[str, str]:
+    """Генерирует заголовки авторизации для тестового пользователя."""
+    token_data = {"sub": str(test_user.id), "profile_id": str(test_user.id)}
+    access_token = create_access_token(data=token_data)
+    return {"Authorization": f"Bearer {access_token}"}

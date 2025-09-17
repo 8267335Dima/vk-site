@@ -58,21 +58,15 @@ class BaseVKService:
     async def _execute_logic(self, logic_func, *args, **kwargs):
         """
         Универсальный метод-обертка для выполнения основной логики сервиса.
-        Управляет инициализацией, транзакциями и закрытием соединений.
+        Управляет инициализацией и закрытием соединений.
+        ТРАНЗАКЦИЯМИ НЕ УПРАВЛЯЕТ.
         """
         await self._initialize_vk_api()
-        
         try:
-            # ИЗМЕНЕНИЕ: Сохраняем и возвращаем результат
+            # Просто выполняем логику. Коммит/откат будет в вызывающем коде (arq_task_runner).
             result = await logic_func(*args, **kwargs)
-            await self.db.commit()
             return result
-        except Exception as e:
-            await self.db.rollback()
-            await self.emitter.send_log(
-                f"Произошла критическая ошибка: {type(e).__name__} - {e}. Все изменения отменены.", 
-                status="error"
-            )
+        except Exception:
             raise
         finally:
             if self.vk_api:

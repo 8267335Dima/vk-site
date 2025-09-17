@@ -8,6 +8,7 @@ from app.core.config import settings
 engine = create_async_engine(
     settings.database_url,
     pool_pre_ping=True,
+    connect_args={"statement_cache_size": 0}
 )
 
 AsyncSessionFactory = sessionmaker(

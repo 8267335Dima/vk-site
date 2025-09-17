@@ -146,6 +146,12 @@ class VKAPI:
             Удобный метод-обертка для получения постов со стены.
             """
             return await self.wall.get(owner_id=owner_id, count=count)
+    
+    async def get_conversations(self, count: int = 200, filter: str = 'all') -> Optional[Dict[str, Any]]:
+        """
+        Удобный метод-обертка для получения диалогов.
+        """
+        return await self.messages.getConversations(count=count, filter=filter)
 
 
 async def is_token_valid(vk_token: str) -> Optional[int]:

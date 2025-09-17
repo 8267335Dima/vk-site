@@ -1,4 +1,4 @@
-# --- backend/app/api/schemas/posts.py ---
+# backend/app/api/schemas/posts.py
 from pydantic import BaseModel, Field, ConfigDict, HttpUrl
 from datetime import datetime
 from typing import List, Optional
@@ -11,7 +11,7 @@ class PostCreate(PostBase):
     attachments: Optional[List[str]] = Field(
         default_factory=list, 
         description="Список готовых attachment ID (photo_id, etc.). Не более 10.",
-        max_items=10 
+        max_length=10 # <--- ИЗМЕНЕНИЕ: max_items -> max_length
     )
 
 class PostRead(PostBase):
@@ -32,9 +32,8 @@ class UploadImageFromUrlRequest(BaseModel):
 class UploadedImagesResponse(BaseModel):
     attachment_ids: List[str]
 
-# --- НОВАЯ СХЕМА ДЛЯ ПАКЕТНОЙ ЗАГРУЗКИ ПО URL ---
 class UploadImagesFromUrlsRequest(BaseModel):
-    image_urls: List[HttpUrl] = Field(..., description="Список URL изображений для загрузки. Не более 10.", max_items=10)
+    image_urls: List[HttpUrl] = Field(..., description="Список URL изображений для загрузки. Не более 10.", max_length=10) # <--- ИЗМЕНЕНИЕ: max_items -> max_length
 
 class PostBatchCreate(BaseModel):
     posts: List[PostCreate]

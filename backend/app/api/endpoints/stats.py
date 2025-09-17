@@ -26,13 +26,20 @@ async def get_friends_analytics(current_user: User = Depends(get_current_active_
     vk_api = VKAPI(access_token=vk_token, proxy=None)
     
     try:
-        friends = await vk_api.get_user_friends(user_id=current_user.vk_id, fields="sex")
+        friends_response = await vk_api.get_user_friends(user_id=current_user.vk_id, fields="sex")
     except VKAPIError as e:
         raise HTTPException(status_code=status.HTTP_424_FAILED_DEPENDENCY, detail=f"Ошибка VK API: {e.message}")
+    finally:
+        # --- ИСПРАВЛЕНИЕ: Гарантированно закрываем сессию ---
+        if vk_api:
+            await vk_api.close()
 
     analytics = {"male_count": 0, "female_count": 0, "other_count": 0}
-    if friends:
-        for friend in friends:
+    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+    # Проверяем наличие ответа и ключа 'items'
+    if friends_response and friends_response.get('items'):
+        # Итерируемся по списку друзей, а не по всему словарю
+        for friend in friends_response['items']:
             sex = friend.get("sex")
             if sex == 1:
                 analytics["female_count"] += 1

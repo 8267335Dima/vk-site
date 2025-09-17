@@ -1,7 +1,5 @@
-# --- backend/app\core\configs\automations.yml ---
-
-# backend/app/core/configs/automations.yml
-# Единый источник правды обо всех возможных действиях в системе.
+# Единый источник правды обо всех возможных действиях (задачах),
+# которые пользователь может запустить. Используется для построения UI.
 
 - id: "like_feed"
   name: "Лайки в ленте новостей"
@@ -47,7 +45,7 @@
 - id: "birthday_congratulation"
   name: "Поздравления с Днем Рождения"
   description: "Автоматически отправляет персональные поздравления вашим друзьям в их день рождения."
-  has_filters: false
+  has_filters: false # Фильтры здесь не нужны, т.к. логика специфична
   has_count_slider: false
   group: "standard"
 
@@ -95,10 +93,3 @@
       "5": { "is_active": true, "start_time": "09:00", "end_time": "22:00" }
       "6": { "is_active": false, "start_time": "11:00", "end_time": "20:00" }
       "7": { "is_active": false, "start_time": "11:00", "end_time": "20:00" }
-
-- id: "post_scheduler"
-  name: "Планировщик постов"
-  description: "Создавайте и планируйте публикации наперед."
-  has_filters: false
-  has_count_slider: false
-  group: "content"

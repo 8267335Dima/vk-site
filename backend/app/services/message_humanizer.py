@@ -2,7 +2,7 @@
 import asyncio
 import random
 import structlog
-from typing import List, Dict, Any, Literal
+from typing import List, Dict, Any, Literal, Optional
 from app.services.vk_api import VKAPI, VKAccessDeniedError
 from app.services.event_emitter import RedisEventEmitter
 
@@ -30,6 +30,7 @@ class MessageHumanizer:
         self,
         targets: List[Dict[str, Any]],
         message_template: str,
+        attachments: Optional[str] = None, # <-- ИЗМЕНЕНИЕ: Принимает готовую строку вложений
         speed: SpeedProfile = "normal",
         simulate_typing: bool = True
     ) -> int:
@@ -38,6 +39,7 @@ class MessageHumanizer:
 
         :param targets: Список словарей с информацией о получателях.
         :param message_template: Шаблон сообщения, поддерживает {name}.
+        :param attachments: Строка с ID вложений (напр. 'photo123_456,photo123_789').
         :param speed: Профиль скорости отправки.
         :param simulate_typing: Включать ли имитацию набора текста.
         :return: Количество успешно отправленных сообщений.
@@ -58,26 +60,23 @@ class MessageHumanizer:
             
             try:
                 # 1. Имитация "открытия и прочтения" диалога
-                await self.vk_api.messages.markAsRead(peer_id=target_id)
+                # --- ИСПРАВЛЕНИЕ: Удалена строка `await self.vk_api.messages.markAsRead(peer_id=target_id)`, вызывавшая ошибку ---
                 await asyncio.sleep(random.uniform(0.5, 1.2))
 
                 # 2. Расчет задержки и имитация набора текста
                 if simulate_typing:
-                    # Среднее время набора текста в секундах
                     typing_duration = (len(final_message) / (profile["cpm"] / 60)) 
-                    # Добавляем вариативность
                     variation = profile["variation"]
                     total_delay = typing_duration * random.uniform(1 - variation, 1 + variation)
                     
-                    # Небольшая базовая задержка перед началом "набора"
                     await asyncio.sleep(profile["base_delay"] * random.uniform(0.8, 1.2))
                     
                     await self.emitter.send_log(f"Имитация набора текста для {full_name} (~{total_delay:.1f} сек)...", "debug")
                     await self.vk_api.messages.setActivity(user_id=target_id, type='typing')
                     await asyncio.sleep(total_delay)
 
-                # 3. Отправка сообщения
-                if await self.vk_api.messages.send(target_id, final_message):
+                # 3. Отправка сообщения с вложениями
+                if await self.vk_api.messages.send(target_id, final_message, attachment=attachments):
                     successful_sends += 1
                     await self.emitter.send_log(f"Сообщение для {full_name} успешно отправлено.", "success", target_url=url)
                 else:

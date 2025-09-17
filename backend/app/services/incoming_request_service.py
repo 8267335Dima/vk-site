@@ -43,7 +43,7 @@ class IncomingRequestService(BaseVKService):
             batch = targets[i:i + batch_size]
             calls = [{"method": "friends.add", "params": {"user_id": p.get('id')}} for p in batch]
 
-            await self.humanizer.imitate_simple_action()
+            await self.humanizer.think(action_type='add_friend')
             results = await self.vk_api.execute(calls)
 
             if results is None:

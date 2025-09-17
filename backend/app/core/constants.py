@@ -2,11 +2,11 @@
 from enum import Enum
 
 class PlanName(str, Enum):
-    BASE = "Базовый"
-    PLUS = "Plus"
+    BASE = "BASE"
+    PLUS = "PLUS"
     PRO = "PRO"
-    AGENCY = "Agency"
-    EXPIRED = "Expired"
+    AGENCY = "AGENCY"
+    EXPIRED = "EXPIRED"
 
 class FeatureKey(str, Enum):
     PROXY_MANAGEMENT = "proxy_management"

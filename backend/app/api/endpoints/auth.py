@@ -14,7 +14,7 @@ from app.core.security import create_access_token, encrypt_data
 from app.core.config import settings
 from app.core.plans import get_limits_for_plan
 from app.core.constants import PlanName
-from app.api.dependencies import get_current_manager_user, limiter # Импортируем limiter
+from app.api.dependencies import get_current_manager_user, limiter
 
 router = APIRouter()
 
@@ -26,7 +26,7 @@ class TokenRequest(BaseModel):
     "/vk",
     response_model=EnrichedTokenResponse,
     summary="Аутентификация или регистрация по токену VK",
-    dependencies=[Depends(limiter)] # Оставляем защиту для production
+    dependencies=[Depends(limiter)]
 )
 async def login_via_vk(
     *,
@@ -53,18 +53,16 @@ async def login_via_vk(
     if user:
         user.encrypted_vk_token = encrypted_token
     else:
-        # --- НАЧАЛО ИЗМЕНЕНИЯ ---
         user_data = {
             "vk_id": vk_id,
             "encrypted_vk_token": encrypted_token,
-            "plan": PlanName.BASE,
+            "plan": PlanName.BASE.name,
             "plan_expires_at": datetime.now(UTC) + timedelta(days=14),
         }
         
-        # Получаем все имена колонок из модели User
-        user_model_columns = {c.name for c in User.__table__.columns}
+        base_plan_limits = get_limits_for_plan(PlanName.BASE)
         
-        # Фильтруем лимиты, оставляя только те, что есть в модели
+        user_model_columns = {c.name for c in User.__table__.columns}
         valid_limits_for_db = {
             key: value
             for key, value in base_plan_limits.items()
@@ -73,16 +71,15 @@ async def login_via_vk(
         user_data.update(valid_limits_for_db)
         
         user = User(**user_data)
-        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
         db.add(user)
 
     if str(vk_id) == settings.ADMIN_VK_ID:
         admin_limits = get_limits_for_plan(PlanName.PRO)
         user.is_admin = True
-        user.plan = PlanName.PRO
+        # ИЗМЕНЕНО: Используем .name, чтобы в БД записалась строка "PRO"
+        user.plan = PlanName.PRO.name
         user.plan_expires_at = None
         
-        # Здесь используем тот же безопасный подход
         user_model_columns = {c.name for c in User.__table__.columns}
         for key, value in admin_limits.items():
             if key in user_model_columns:
@@ -94,7 +91,7 @@ async def login_via_vk(
     user_id = user.id
 
     login_entry = LoginHistory(
-        user_id=user_id, # Используем сохраненный ID
+        user_id=user_id,
         ip_address=request.client.host if request.client else "unknown",
         user_agent=request.headers.get("user-agent", "unknown")
     )
@@ -104,7 +101,6 @@ async def login_via_vk(
 
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     
-    # Используем сохраненный ID для создания токена
     token_data = {"sub": str(user_id), "profile_id": str(user_id)}
     
     access_token = create_access_token(
@@ -128,14 +124,9 @@ async def switch_profile(
     manager: User = Depends(get_current_manager_user),
     db: AsyncSession = Depends(get_db)
 ) -> EnrichedTokenResponse:
-
-    
-    # Загружаем связи "менеджер -> управляемый профиль"
     await db.refresh(manager, attribute_names=["managed_profiles"])
     
-    # Собираем все ID профилей, к которым у менеджера есть прямой доступ
     allowed_profile_ids = {p.profile_user_id for p in manager.managed_profiles}
-    # Менеджер всегда имеет доступ к своему собственному профилю
     allowed_profile_ids.add(manager.id)
 
     if request_data.profile_id not in allowed_profile_ids:

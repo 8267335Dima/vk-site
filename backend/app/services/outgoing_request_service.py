@@ -14,16 +14,21 @@ class OutgoingRequestService(BaseVKService):
     async def get_add_recommended_targets(self, params: AddFriendsRequest) -> List[Dict[str, Any]]:
         """
         ПОИСК ЦЕЛЕЙ: Получает и фильтрует пользователей из рекомендаций.
-        Этот метод используется как для предпросмотра, так и для реального выполнения.
         """
+        await self._initialize_vk_api()
         # Берем с запасом, т.к. фильтрация может отсеять многих
         response = await self.vk_api.get_recommended_friends(count=params.count * 3)
+        
+        # <<< ИСПРАВЛЕНИЕ ЗДЕСЬ >>>
         if not response or not response.get('items'):
             await self.emitter.send_log("Рекомендации не найдены.", "warning")
             return []
 
         await self.emitter.send_log(f"Найдено {len(response.get('items', []))} рекомендаций. Применяем фильтры...", "info")
+        
+        # Итерируемся по response.get('items', [])
         filtered_profiles = await apply_filters_to_profiles(response.get('items', []), params.filters)
+        # <<< КОНЕЦ ИСПРАВЛЕНИЯ >>>
         
         return filtered_profiles
 
@@ -58,9 +63,16 @@ class OutgoingRequestService(BaseVKService):
                 if not await redis_lock_client.set(lock_key, "1", ex=3600, nx=True):
                     continue
 
-                await self.humanizer.read_and_scroll()
+                await self.humanizer.think(action_type='add_friend')
                 
-                message = params.message_text.replace("{name}", profile.get("first_name", "")) if params.message_text and params.send_message_on_add else None
+                message = None
+                if params.send_message_on_add and params.message_text:
+                    # Проверяем лимит сообщений ПЕРЕД тем, как сформировать сообщение
+                    if stats.messages_sent_count < self.user.daily_message_limit:
+                        message = params.message_text.replace("{name}", profile.get("first_name", ""))
+                    else:
+                        await self.emitter.send_log(f"Достигнут лимит сообщений. Заявка для {profile.get('first_name')} будет отправлена без приветствия.", "warning")
+
                 result = await self.vk_api.add_friend(user_id, message) 
                 
                 name = f"{profile.get('first_name', '')} {profile.get('last_name', '')}"
@@ -70,6 +82,10 @@ class OutgoingRequestService(BaseVKService):
                     processed_count += 1
                     await self._increment_stat(stats, 'friends_added_count')
                     
+                    # Если сообщение было успешно отправлено вместе с заявкой, учитываем его в лимите
+                    if message:
+                        await self._increment_stat(stats, 'messages_sent_count')
+
                     log_stmt = insert(FriendRequestLog).values(user_id=self.user.id, target_vk_id=user_id).on_conflict_do_nothing()
                     await self.db.execute(log_stmt)
 
@@ -79,7 +95,6 @@ class OutgoingRequestService(BaseVKService):
                     await self.emitter.send_log(log_msg, "success", target_url=url)
                     final_results.append(log_msg)
                     
-                    # --- ИЗМЕНЕНИЕ ЗДЕСЬ: Улучшенная логика проверки и логирования ---
                     if params.like_config.enabled:
                         if not profile.get('is_closed', True):
                             like_results = await self._like_user_content(user_id, profile, params.like_config, stats)
@@ -100,6 +115,7 @@ class OutgoingRequestService(BaseVKService):
             await redis_lock_client.close()
 
     async def _like_user_content(self, user_id: int, profile: Dict[str, Any], config: LikeAfterAddConfig, stats: DailyStats) -> list[str]:
+        # ... (код без изменений)
         like_results = []
         if stats.likes_count >= self.user.daily_likes_limit:
             await self.emitter.send_log("Достигнут дневной лимит лайков, пропуск лайкинга после добавления.", "warning")

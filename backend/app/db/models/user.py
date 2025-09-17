@@ -6,6 +6,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 from app.db.base import Base
 from app.db.enums import DelayProfile, TeamMemberRole
+from app.core.constants import PlanName
 
 class User(Base):
     __tablename__ = "users"
@@ -13,7 +14,7 @@ class User(Base):
     vk_id = Column(BigInteger, unique=True, index=True, nullable=False)
     encrypted_vk_token = Column(String, nullable=False)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
-    plan = Column(String, nullable=False, server_default='Базовый')
+    plan = Column(String, nullable=False, server_default=PlanName.BASE.value)
     plan_expires_at = Column(DateTime(timezone=True), nullable=True)
     is_admin = Column(Boolean, nullable=False, server_default='false')
     daily_likes_limit = Column(Integer, nullable=False, server_default=text('0'))
