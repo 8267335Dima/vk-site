@@ -134,3 +134,24 @@ async def test_payment_webhook_amount_mismatch(
     assert payment.status == "failed"
     assert "Amount mismatch" in payment.error_message
     assert test_user.plan == PlanName.BASE.name
+
+async def test_create_payment_for_invalid_period_fails(
+    async_client: AsyncClient, auth_headers: dict, test_user: User
+):
+    """
+    Тест проверяет, что нельзя создать платеж для тарифа PLUS на 2 месяца,
+    так как такой период не определен в конфигурации (есть 3, 6, 12).
+    """
+    # Arrange
+    payment_data = {"plan_id": "PLUS", "months": 2} # Невалидный период
+
+    # Act
+    response = await async_client.post(
+        "/api/v1/billing/create-payment",
+        headers=auth_headers,
+        json=payment_data
+    )
+
+    # Assert
+    assert response.status_code == 400
+    assert "Недопустимый период подписки" in response.json()["detail"]

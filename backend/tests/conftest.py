@@ -169,3 +169,24 @@ def get_auth_headers_for():
         access_token = create_access_token(data=token_data)
         return {"Authorization": f"Bearer {access_token}"}
     return _get_auth_headers
+
+
+@pytest_asyncio.fixture(scope="function")
+async def admin_user(db_session: AsyncSession) -> User:
+    """Создает пользователя с правами администратора."""
+    user_data = {
+        "vk_id": int(settings.ADMIN_VK_ID), # Используем ID из настроек
+        "encrypted_vk_token": encrypt_data("admin_vk_token"),
+        "plan": PlanName.PRO.name,
+        "is_admin": True # Главный флаг
+    }
+    all_limits = get_limits_for_plan(PlanName.PRO)
+    user_columns = {c.name for c in User.__table__.columns}
+    valid_limits = {k: v for k, v in all_limits.items() if k in user_columns}
+    user = User(**user_data, **valid_limits)
+    db_session.add(user)
+    
+    await db_session.commit()
+    await db_session.refresh(user)
+    
+    return user

@@ -10,7 +10,7 @@ from sqlalchemy.orm import selectinload
 # --- ИСПРАВЛЕНИЕ: Добавляем недостающий импорт ---
 from app.core.config import settings
 # -----------------------------------------------
-
+from arq.connections import create_pool
 from app.db.session import AsyncSessionFactory
 from app.db.models import Automation, TaskHistory, User
 from app.core.config_loader import AUTOMATIONS_CONFIG
@@ -51,7 +51,7 @@ async def _run_daily_automations_async(automation_group: str):
     в указанной группе, проверяет их расписание и ставит в очередь ARQ.
     """
     from app.worker import redis_settings
-    from arq.connections import create_pool
+
 
     redis_lock_client = await Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/2", decode_responses=True)
     lock_key = f"lock:task:run_automations:{automation_group}"

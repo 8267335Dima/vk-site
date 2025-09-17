@@ -217,3 +217,35 @@ async def test_get_managed_profiles_handles_missing_vk_user(
     # Ключевая проверка: для "пропавшего" пользователя подставились значения по умолчанию
     assert profiles_by_v_id[another_managed_user.vk_id]['first_name'] == "N/A"
     assert profiles_by_v_id[another_managed_user.vk_id]['last_name'] == ""
+
+async def test_create_duplicate_filter_preset_fails(
+    async_client: AsyncClient, auth_headers: dict, test_user: User
+):
+    """
+    Тест проверяет, что API вернет ошибку 409 Conflict при попытке создать
+    пресет фильтров с именем, которое уже существует для того же действия.
+    """
+    preset_data = {
+        "name": "Удаление неактивных",
+        "action_type": "remove_friends",
+        "filters": {"last_seen_days": 90}
+    }
+
+    # 1. Создаем пресет в первый раз - должно быть успешно
+    response_first = await async_client.post(
+        "/api/v1/users/me/filter-presets",
+        headers=auth_headers,
+        json=preset_data
+    )
+    assert response_first.status_code == 201
+
+    # 2. Пытаемся создать пресет с тем же именем и типом действия во второй раз
+    response_second = await async_client.post(
+        "/api/v1/users/me/filter-presets",
+        headers=auth_headers,
+        json=preset_data
+    )
+
+    # Assert: Ожидаем ошибку 409 Conflict
+    assert response_second.status_code == 409
+    assert "Пресет с таким названием для данного действия уже существует" in response_second.json()["detail"]

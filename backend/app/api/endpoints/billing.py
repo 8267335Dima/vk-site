@@ -60,6 +60,14 @@ async def create_payment(
     final_price = base_price * months
 
     period_info = next((p for p in plan_info.periods if p.months == months), None)
+    if months > 1 and not period_info:
+        allowed_periods = ", ".join(str(p.months) for p in plan_info.periods)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Недопустимый период подписки. Доступные периоды (в месяцах): 1, {allowed_periods}"
+        )
+
+        
     if period_info:
         final_price *= (1 - period_info.discount_percent / 100)
     
