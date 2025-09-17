@@ -183,3 +183,73 @@ async def test_team_member_cannot_switch_to_unauthorized_profile(
     assert "Доступ к этому профилю запрещен" in response_switch.json()["detail"]
 
     del app.dependency_overrides[get_current_active_profile]
+
+async def test_full_team_access_lifecycle(
+    async_client: AsyncClient, db_session: AsyncSession, manager_user: User, team_member_user: User, managed_profile_user: User, get_auth_headers_for
+):
+    """
+    E2E Тест:
+    1. Менеджер создает команду и приглашает участника.
+    2. Участник пытается переключиться на управляемый профиль -> Ошибка 403.
+    3. Менеджер выдает участнику права на управление профилем.
+    4. Участник снова пытается переключиться -> Успех 200.
+    5. Менеджер удаляет права доступа.
+    6. Участник снова пытается переключиться -> Ошибка 403.
+    """
+    manager_headers = get_auth_headers_for(manager_user)
+    team_member_headers = get_auth_headers_for(team_member_user)
+
+    # --- ШАГ 1: Менеджер приглашает участника ---
+    app.dependency_overrides[get_current_active_profile] = lambda: manager_user
+    invite_response = await async_client.post(
+        "/api/v1/teams/my-team/members",
+        headers=manager_headers, json={"user_vk_id": team_member_user.vk_id}
+    )
+    assert invite_response.status_code == 201
+
+    team_member_db = (await db_session.execute(select(TeamMember).where(TeamMember.user_id == team_member_user.id))).scalar_one()
+    member_id = team_member_db.id
+
+    # --- ШАГ 2: Участник не может переключиться на профиль ---
+    app.dependency_overrides[get_current_active_profile] = lambda: team_member_user
+    switch_fail_response = await async_client.post(
+        "/api/v1/auth/switch-profile",
+        headers=team_member_headers, json={"profile_id": managed_profile_user.id}
+    )
+    assert switch_fail_response.status_code == 403
+
+    # --- ШАГ 3: Менеджер выдает права ---
+    app.dependency_overrides[get_current_active_profile] = lambda: manager_user
+    access_payload = [{"profile_user_id": managed_profile_user.id, "has_access": True}]
+    grant_access_response = await async_client.put(
+        f"/api/v1/teams/my-team/members/{member_id}/access",
+        headers=manager_headers, json=access_payload
+    )
+    assert grant_access_response.status_code == 200
+
+    # --- ШАГ 4: Участник успешно переключается ---
+    app.dependency_overrides[get_current_active_profile] = lambda: team_member_user
+    switch_success_response = await async_client.post(
+        "/api/v1/auth/switch-profile",
+        headers=team_member_headers, json={"profile_id": managed_profile_user.id}
+    )
+    assert switch_success_response.status_code == 200
+
+    # --- ШАГ 5: Менеджер отзывает права ---
+    app.dependency_overrides[get_current_active_profile] = lambda: manager_user
+    revoke_access_payload = [{"profile_user_id": managed_profile_user.id, "has_access": False}]
+    revoke_access_response = await async_client.put(
+        f"/api/v1/teams/my-team/members/{member_id}/access",
+        headers=manager_headers, json=revoke_access_payload
+    )
+    assert revoke_access_response.status_code == 200
+
+    # --- ШАГ 6: Участник снова не может переключиться ---
+    app.dependency_overrides[get_current_active_profile] = lambda: team_member_user
+    switch_fail_again_response = await async_client.post(
+        "/api/v1/auth/switch-profile",
+        headers=team_member_headers, json={"profile_id": managed_profile_user.id}
+    )
+    assert switch_fail_again_response.status_code == 403
+
+    del app.dependency_overrides[get_current_active_profile]

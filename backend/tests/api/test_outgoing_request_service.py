@@ -9,6 +9,7 @@ from app.db.models import User
 from app.api.schemas.actions import AddFriendsRequest
 from app.services.event_emitter import RedisEventEmitter
 from app.core.exceptions import UserLimitReachedError
+from app.db.models import DailyStats
 
 pytestmark = pytest.mark.asyncio
 
@@ -65,3 +66,44 @@ async def test_add_friends_daily_limit_reached(db_session: AsyncSession, test_us
         await service._add_recommended_friends_logic(AddFriendsRequest(count=10))
 
     assert "Достигнут дневной лимит" in str(excinfo.value)
+
+async def test_add_friends_stops_when_limit_is_reached_mid_task(
+    db_session: AsyncSession, test_user: User, mock_emitter: RedisEventEmitter, mocker
+):
+    """
+    Тест: Задача по добавлению друзей корректно прерывается через исключение,
+    когда дневной лимит достигается в процессе ее выполнения.
+    """
+    # Arrange (остается без изменений)
+    test_user.daily_add_friends_limit = 40
+    await db_session.merge(test_user)
+    stats = DailyStats(user_id=test_user.id, friends_added_count=35)
+    db_session.add(stats)
+    await db_session.commit()
+
+    service = OutgoingRequestService(db=db_session, user=test_user, emitter=mock_emitter)
+    mock_vk_api = AsyncMock()
+    mock_vk_api.get_recommended_friends.return_value = {
+        "items": [{"id": 100 + i, "first_name": f"Friend{i}"} for i in range(20)]
+    }
+    mock_vk_api.add_friend.return_value = 1
+    service.vk_api = mock_vk_api
+    service.humanizer = AsyncMock()
+    mocker.patch('app.services.outgoing_request_service.AsyncRedis.from_url').return_value = AsyncMock()
+    
+    request_params = AddFriendsRequest(count=20)
+
+    # Act & Assert:
+    # Ожидаем, что будет выброшено исключение UserLimitReachedError.
+    # Контекстный менеджер pytest.raises перехватит его, и тест будет считаться пройденным.
+    with pytest.raises(UserLimitReachedError) as excinfo:
+        await service._add_recommended_friends_logic(request_params)
+
+    # Дополнительно проверяем, что в тексте исключения есть нужная информация.
+    assert "Достигнут дневной лимит на отправку заявок (40)" in str(excinfo.value)
+
+    # Также проверяем состояние системы ДО того, как было выброшено исключение.
+    # Это подтверждает, что цикл успел выполниться 5 раз.
+    assert mock_vk_api.add_friend.call_count == 5
+    await db_session.refresh(stats)
+    assert stats.friends_added_count == 40

@@ -35,9 +35,7 @@ async def get_friends_analytics(current_user: User = Depends(get_current_active_
             await vk_api.close()
 
     analytics = {"male_count": 0, "female_count": 0, "other_count": 0}
-    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
-    # Проверяем наличие ответа и ключа 'items'
-    if friends_response and friends_response.get('items'):
+    if friends_response and isinstance(friends_response.get('items'), list):
         # Итерируемся по списку друзей, а не по всему словарю
         for friend in friends_response['items']:
             sex = friend.get("sex")

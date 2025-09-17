@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 
 from app.db.models import User, DailyStats, FilterPreset
 from app.core.constants import PlanName, FeatureKey
+from app.db.models.user import ManagedProfile
 
 # Все тесты в этом файле должны использовать anyio
 pytestmark = pytest.mark.anyio
@@ -166,3 +167,53 @@ async def test_create_filter_preset_validation(
     # Assert
     assert response.status_code == expected_status
     assert expected_detail_substring in str(response.json())
+
+async def test_get_managed_profiles_handles_missing_vk_user(
+    async_client: AsyncClient, db_session: AsyncSession, manager_user: User, managed_profile_user: User, get_auth_headers_for, mocker
+):
+    """
+    Тест проверяет, что эндпоинт /me/managed-profiles не падает, если VK API
+    не возвращает информацию об одном из управляемых профилей.
+    """
+    # Arrange:
+    # 1. Создаем менеджера и два управляемых профиля в нашей БД.
+    another_managed_user = User(vk_id=333, encrypted_vk_token="another", plan="PRO")
+    db_session.add(another_managed_user)
+    await db_session.flush()
+
+    rel1 = ManagedProfile(manager_user_id=manager_user.id, profile_user_id=managed_profile_user.id)
+    rel2 = ManagedProfile(manager_user_id=manager_user.id, profile_user_id=another_managed_user.id)
+    db_session.add_all([rel1, rel2])
+    await db_session.commit()
+
+    # 2. Мокаем VK API так, чтобы он вернул информацию только о менеджере и ПЕРВОМ профиле.
+    # Информация о `another_managed_user` (vk_id=333) будет отсутствовать.
+    mock_vk_api_class = mocker.patch('app.api.endpoints.users.VKAPI')
+    mock_instance = mock_vk_api_class.return_value
+    mock_vk_response = [
+        {"id": manager_user.vk_id, "first_name": "Manager", "last_name": "User", "photo_50": "url1"},
+        {"id": managed_profile_user.vk_id, "first_name": "Managed", "last_name": "Profile", "photo_50": "url2"},
+    ]
+    mock_instance.users.get = AsyncMock(return_value=mock_vk_response)
+    mock_instance.close = AsyncMock()
+
+    # Act:
+    manager_headers = get_auth_headers_for(manager_user)
+    response = await async_client.get("/api/v1/users/me/managed-profiles", headers=manager_headers)
+
+    # Assert:
+    assert response.status_code == 200
+    data = response.json()
+    
+    # Ответ должен содержать всех трех пользователей (менеджер + 2 профиля) из нашей БД
+    assert len(data) == 3 
+    
+    profiles_by_v_id = {p['vk_id']: p for p in data}
+    
+    # Проверяем, что данные для существующих в VK пользователей подтянулись
+    assert profiles_by_v_id[manager_user.vk_id]['first_name'] == "Manager"
+    assert profiles_by_v_id[managed_profile_user.vk_id]['first_name'] == "Managed"
+
+    # Ключевая проверка: для "пропавшего" пользователя подставились значения по умолчанию
+    assert profiles_by_v_id[another_managed_user.vk_id]['first_name'] == "N/A"
+    assert profiles_by_v_id[another_managed_user.vk_id]['last_name'] == ""
