@@ -55,9 +55,9 @@ async def cancel_task(
     if task.status not in ["PENDING", "STARTED"]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Отменить можно только задачи в очереди или в процессе выполнения.")
 
-    if task.celery_task_id:
+    if task.arq_job_id:
         try:
-            await arq_pool.abort_job(task.celery_task_id)
+            await arq_pool.abort_job(task.arq_job_id)
         except Exception:
             pass
     task.status = "CANCELLED"

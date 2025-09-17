@@ -13,30 +13,33 @@ from app.core.exceptions import UserActionException
 from app.services.vk_api import VKAPIError, VKAuthError
 from app.core.constants import TaskKey
 from app.tasks.service_maps import TASK_CONFIG_MAP
+from contextlib import asynccontextmanager
 
 log = structlog.get_logger(__name__)
 
 
 def arq_task_runner(func):
-    """
-    Декоратор-обертка для всех ARQ задач, выполняемых пользователем.
-    (описание без изменений)
-    """
     @functools.wraps(func)
     async def wrapper(ctx, task_history_id: int, **kwargs):
+        session_for_test = kwargs.pop("session_for_test", None)
         emitter_for_test = kwargs.pop("emitter_for_test", None)
 
-        async with AsyncSessionFactory() as session:
+        @asynccontextmanager
+        async def get_session_context():
+            if session_for_test:
+                yield session_for_test
+            else:
+                async with AsyncSessionFactory() as session:
+                    yield session
+        
+        async with get_session_context() as session:
             task_history = None
             emitter = None
-            # --- ИСПРАВЛЕНИЕ: Заранее объявляем переменные для хранения данных ---
-            # Это защитит нас от доступа к "просроченным" атрибутам после commit.
             task_name = "Неизвестная задача"
             created_at = None
             user_id = None
             
             try:
-                # Загружаем все необходимые данные одним запросом ("жадная" загрузка)
                 stmt = select(TaskHistory).where(TaskHistory.id == task_history_id).options(
                     joinedload(TaskHistory.user).selectinload(User.proxies)
                 )
@@ -46,7 +49,6 @@ def arq_task_runner(func):
                     log.error("task.runner.not_found_final", task_history_id=task_history_id)
                     return
 
-                # --- ИСПРАВЛЕНИЕ: Считываем все нужные данные в локальные переменные ДО первого commit ---
                 task_name = task_history.task_name
                 created_at = task_history.created_at
                 user_id = task_history.user.id
@@ -54,17 +56,11 @@ def arq_task_runner(func):
                 emitter = emitter_for_test or RedisEventEmitter(ctx['redis_pool'])
                 emitter.set_context(user_id, task_history_id)
                 
-                # Обновляем статус и делаем commit
                 task_history.status = "STARTED"
                 await session.commit()
-                # !!! С ЭТОГО МОМЕНТА ОБЪЕКТ task_history "ПРОСРОЧЕН" !!!
                 
-                # Теперь этот вызов абсолютно безопасен, так как мы используем локальные переменные
                 await emitter.send_task_status_update(status="STARTED", task_name=task_name, created_at=created_at)
 
-                # Вызываем основную логику задачи, передавая "просроченные" объекты.
-                # Функция func сама будет работать внутри этой же сессии и SQLAlchemy корректно
-                # подгрузит нужные данные для них.
                 summary_result = await func(session, task_history.user, task_history.parameters or {}, emitter)
 
                 task_history.status = "SUCCESS"
@@ -100,7 +96,6 @@ def arq_task_runner(func):
                     await session.commit()
                     
                     if emitter:
-                        # Используем безопасные локальные переменные для финального уведомления
                         await emitter.send_task_status_update(
                             status=final_status,
                             result=final_result,

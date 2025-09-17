@@ -9,10 +9,9 @@ class ActionResponse(BaseModel):
     message: str
     task_id: str
 
-# --- Схемы для отображения истории задач ---
 class TaskHistoryRead(BaseModel):
     id: int
-    celery_task_id: Optional[str] = None
+    arq_job_id: Optional[str] = None
     task_name: str
     status: str
     parameters: Optional[Dict[str, Any]] = None

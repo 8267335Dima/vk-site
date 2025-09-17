@@ -21,7 +21,7 @@ class TaskHistory(Base):
     __tablename__ = "task_history"
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    celery_task_id = Column(String, unique=True, nullable=True, index=True)
+    arq_job_id = Column(String, unique=True, nullable=True, index=True)
     task_name = Column(String, nullable=False, index=True)
     status = Column(String, default="PENDING", nullable=False, index=True)
     parameters = Column(JSON, nullable=True)
@@ -94,7 +94,7 @@ class ScheduledPost(Base):
     attachments = Column(JSON, nullable=True)
     publish_at = Column(DateTime(timezone=True), nullable=False, index=True)
     status = Column(Enum(ScheduledPostStatus), nullable=False, default=ScheduledPostStatus.scheduled, index=True)
-    celery_task_id = Column(String, nullable=True, unique=True)
+    arq_job_id = Column(String, nullable=True, unique=True)
     vk_post_id = Column(String, nullable=True)
     error_message = Column(Text, nullable=True)
     user = relationship("User", back_populates="scheduled_posts")

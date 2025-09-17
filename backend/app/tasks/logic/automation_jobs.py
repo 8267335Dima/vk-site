@@ -42,7 +42,7 @@ async def _create_and_run_arq_task(session, arq_pool, user_id, task_name_key, se
     await session.flush()
 
     job = await arq_pool.enqueue_job(task_func_name, task_history_id=task_history.id, **(settings_dict or {}))
-    task_history.celery_task_id = job.job_id
+    task_history.arq_job_id = job.job_id
     await session.commit()
 
 async def _run_daily_automations_async(automation_group: str):

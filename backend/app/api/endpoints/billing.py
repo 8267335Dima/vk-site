@@ -19,7 +19,6 @@ log = structlog.get_logger(__name__)
 router = APIRouter()
 
 @router.get("/plans", response_model=AvailablePlansResponse)
-@cache(expire=3600)
 async def get_available_plans():
     """
     Возвращает список всех доступных для покупки тарифных планов.

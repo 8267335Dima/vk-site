@@ -36,7 +36,9 @@ async def get_automations_status(
     
     response_list = []
     for config_item in AUTOMATIONS_CONFIG:
-        auto_type = config_item['id']
+        # --- ИЗМЕНЕНИЕ ---
+        auto_type = config_item.id
+        # -----------------
         db_item = user_automations_db.get(auto_type)
         
         is_available = is_feature_available_for_plan(current_user.plan, auto_type)
@@ -44,9 +46,11 @@ async def get_automations_status(
         response_list.append(AutomationStatus(
             automation_type=auto_type,
             is_active=db_item.is_active if db_item else False,
-            settings=db_item.settings if db_item else config_item.get('default_settings', {}),
-            name=config_item['name'],
-            description=config_item['description'],
+            # --- ИЗМЕНЕНИЕ ---
+            settings=db_item.settings if db_item else config_item.default_settings or {},
+            name=config_item.name,
+            description=config_item.description,
+            # -----------------
             is_available=is_available
         ))
         
@@ -65,7 +69,9 @@ async def update_automation(
             detail=f"Функция '{automation_type}' недоступна на вашем тарифе '{current_user.plan}'."
         )
 
-    config_item = next((item for item in AUTOMATIONS_CONFIG if item['id'] == automation_type), None)
+    # --- ИЗМЕНЕНИЕ ---
+    config_item = next((item for item in AUTOMATIONS_CONFIG if item.id == automation_type), None)
+    # -----------------
     if not config_item:
         raise HTTPException(status_code=404, detail="Автоматизация такого типа не найдена.")
 
@@ -81,14 +87,14 @@ async def update_automation(
             user_id=current_user.id,
             automation_type=automation_type,
             is_active=request_data.is_active,
-            settings=request_data.settings or config_item.get('default_settings', {})
+            # --- ИЗМЕНЕНИЕ ---
+            settings=request_data.settings or config_item.default_settings or {}
+            # -----------------
         )
         db.add(automation)
     else:
         automation.is_active = request_data.is_active
         if request_data.settings is not None:
-            # Полностью заменяем настройки, а не обновляем.
-            # Это позволяет фронтенду удалять ключи, отправляя объект без них.
             automation.settings = request_data.settings
     
     await db.commit()
@@ -98,7 +104,9 @@ async def update_automation(
         automation_type=automation.automation_type,
         is_active=automation.is_active,
         settings=automation.settings,
-        name=config_item['name'],
-        description=config_item['description'],
+        # --- ИЗМЕНЕНИЕ ---
+        name=config_item.name,
+        description=config_item.description,
+        # -----------------
         is_available=is_feature_available_for_plan(current_user.plan, automation_type)
     )

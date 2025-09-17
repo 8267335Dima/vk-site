@@ -74,7 +74,9 @@ async def _enqueue_task(
 
     job = await arq_pool.enqueue_job(task_func_name, **job_kwargs)
 
-    task_history.celery_task_id = job.job_id
+    # --- ИЗМЕНЕНИЕ ---
+    task_history.arq_job_id = job.job_id
+    # ------------------
     await db.commit()
     
     message = f"Задача '{task_display_name}' успешно добавлена в очередь."

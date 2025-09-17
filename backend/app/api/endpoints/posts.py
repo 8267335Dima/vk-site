@@ -181,7 +181,7 @@ async def schedule_batch_posts(
             post_id=post.id,
             _defer_until=post.publish_at
         )
-        post.celery_task_id = job.job_id
+        post.arq_job_id = job.job_id
 
     await db.commit()
     

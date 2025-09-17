@@ -1,91 +1,107 @@
 # tests/conftest.py
-import asyncio
-from typing import AsyncGenerator, Generator
 
+import os
+import uuid
+# Указываем pytest использовать тестовую конфигурацию до импорта любых модулей приложения.
+os.environ['ENV_FILE'] = os.path.join(os.path.dirname(__file__), '..', '.env.test')
+
+import asyncio
+from typing import AsyncGenerator
+from app.services.event_emitter import RedisEventEmitter
 import pytest
 import pytest_asyncio
-from httpx import AsyncClient
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+import httpx
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, AsyncEngine
 from sqlalchemy.orm import sessionmaker
-from alembic.config import Config
-from alembic import command
-
-# --- Переопределяем переменные окружения для тестов ---
-# Это гарантирует, что приложение при импорте будет использовать тестовую БД
-import os
-os.environ['ENV_FILE'] = os.path.join(os.path.dirname(__file__), '..', '.env')
-
+from unittest.mock import AsyncMock
 from app.main import app
-from app.db.session import get_db, engine as main_engine
 from app.db.base import Base
-from app.core.config import settings
 from app.db.models import User
-from app.core.security import create_access_token, encrypt_data
+from app.db.session import get_db
+from app.core.config import settings
 from app.core.constants import PlanName
 from app.core.plans import get_limits_for_plan
-
-
-# Создаем отдельный движок и сессии для тестовой БД
-test_engine = create_async_engine(settings.database_url, echo=False)
-TestingSessionLocal = sessionmaker(
-    autocommit=False, autoflush=False, bind=test_engine, class_=AsyncSession
-)
-
-# Переопределяем зависимость get_db для использования тестовой сессии
-async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
-    async with TestingSessionLocal() as session:
-        yield session
-
-app.dependency_overrides[get_db] = override_get_db
-
-@pytest.fixture(scope="session")
-def event_loop() -> Generator:
-    """Создает экземпляр event loop для всего тестового сеанса."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
-
-@pytest_asyncio.fixture(scope="session", autouse=True)
-async def setup_test_database():
-    """
-    Применяет миграции Alembic в начале сессии и откатывает их в конце.
-    `autouse=True` означает, что эта фикстура будет запускаться автоматически.
-    """
-    alembic_cfg = Config("alembic.ini")
-    
-    # Применяем миграции
-    command.upgrade(alembic_cfg, "head")
-
-    yield
-
-    # Откатываем миграции
-    command.downgrade(alembic_cfg, "base")
-
+from app.core.security import create_access_token, encrypt_data
+from app.api.dependencies import get_db, get_arq_pool, get_current_active_profile
 
 @pytest_asyncio.fixture(scope="function")
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
     """
-    Предоставляет сессию БД для каждого теста, откатывая транзакцию после завершения.
-    Это гарантирует, что тесты не влияют друг на друга.
+    Создает свежий движок, базу данных и транзакционную сессию для каждого теста.
+    Это гарантирует 100% изоляцию.
     """
-    connection = await test_engine.connect()
-    transaction = await connection.begin()
-    session = TestingSessionLocal(bind=connection)
+    # 1. Создаем новый движок для каждого теста.
+    engine = create_async_engine(settings.database_url)
 
-    yield session
+    # 2. Создаем таблицы с нуля.
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
 
-    await session.close()
-    await transaction.rollback()
-    await connection.close()
+    # 3. Создаем соединение и начинаем транзакцию.
+    async with engine.connect() as connection:
+        transaction = await connection.begin()
+        
+        # 4. Создаем фабрику сессий, привязанную к этому соединению.
+        TestingSessionLocal = sessionmaker(
+            bind=connection, class_=AsyncSession, autocommit=False, autoflush=False, expire_on_commit=False
+        )
+        session = TestingSessionLocal()
+
+        try:
+            # 5. Передаем сессию в тест.
+            yield session
+        finally:
+            # 6. Закрываем сессию и откатываем транзакцию после теста.
+            await session.close()
+            await transaction.rollback()
+            await connection.close()
+            # 7. Уничтожаем движок.
+            await engine.dispose()
 
 
+@pytest.fixture(scope="function")
+def test_app(db_session: AsyncSession, test_user: User):
+    """
+    Подготавливает приложение, подменяя ключевые зависимости.
+    """
+    # Мок ARQ
+    mock_arq_pool = AsyncMock()
+    def create_mock_job(*args, **kwargs):
+        mock_job = AsyncMock()
+        mock_job.job_id = f"test_job_{uuid.uuid4()}"
+        return mock_job
+    mock_arq_pool.enqueue_job = AsyncMock(side_effect=create_mock_job)
+
+    async def override_get_db():
+        yield db_session
+
+    async def override_get_arq_pool():
+        return mock_arq_pool
+
+    # Переопределяем зависимость так, чтобы она возвращала НАШ объект test_user
+    async def override_get_current_active_profile():
+        return test_user
+    
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_arq_pool] = override_get_arq_pool
+    app.dependency_overrides[get_current_active_profile] = override_get_current_active_profile
+    
+    yield app
+    
+    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+    # Используем .pop(key, None) вместо del, чтобы избежать KeyError
+    app.dependency_overrides.pop(get_db, None)
+    app.dependency_overrides.pop(get_arq_pool, None)
+    app.dependency_overrides.pop(get_current_active_profile, None)
+
+
+# --- Клиент для HTTP-запросов ---
 @pytest_asyncio.fixture(scope="function")
-async def async_client() -> AsyncGenerator[AsyncClient, None]:
-    """
-    Создает тестовый клиент для отправки HTTP-запросов к приложению.
-    """
-    async with AsyncClient(app=app, base_url="http://test") as client:
+async def async_client(test_app) -> AsyncGenerator[AsyncClient, None]:
+    """Создает тестовый HTTP-клиент."""
+    async with httpx.AsyncClient(transport=ASGITransport(app=test_app), base_url="http://test") as client:
         yield client
 
 
@@ -97,9 +113,54 @@ async def test_user(db_session: AsyncSession) -> User:
         "encrypted_vk_token": encrypt_data("test_vk_token"),
         "plan": PlanName.PRO.name,
     }
-    limits = get_limits_for_plan(PlanName.PRO)
-    user = User(**user_data, **limits)
+    all_limits = get_limits_for_plan(PlanName.PRO)
+    user_columns = {c.name for c in User.__table__.columns}
+    valid_limits_for_user_model = {
+        key: value for key, value in all_limits.items() if key in user_columns
+    }
+    user = User(**user_data, **valid_limits_for_user_model)
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+    return user
+
+@pytest.fixture(scope="function")
+def auth_headers(test_user: User) -> dict[str, str]:
+    """Генерирует заголовки авторизации для тестового пользователя."""
+    token_data = {"sub": str(test_user.id), "profile_id": str(test_user.id)}
+    access_token = create_access_token(data=token_data)
+    return {"Authorization": f"Bearer {access_token}"}
+
+@pytest.fixture
+def mock_emitter(mocker) -> RedisEventEmitter:
+    """
+    Мокает эмиттер событий, чтобы не было реальных Pub/Sub сообщений.
+    Предоставляет mock-объект с асинхронными заглушками для методов.
+    """
+    # Создаем мок для redis-клиента, который будет передан в эмиттер
+    mock_redis = AsyncMock()
     
+    # Создаем экземпляр эмиттера с моком redis
+    emitter = RedisEventEmitter(mock_redis)
+    
+    # Мокаем (заменяем) его публичные методы на асинхронные заглушки
+    emitter.send_log = mocker.AsyncMock()
+    emitter.send_stats_update = mocker.AsyncMock()
+    emitter.send_task_status_update = mocker.AsyncMock()
+    emitter.send_system_notification = mocker.AsyncMock()
+    
+    return emitter
+
+@pytest_asyncio.fixture(scope="function")
+async def manager_user(db_session: AsyncSession) -> User:
+    """Создает пользователя-менеджера с тарифом Agency."""
+    user_data = {
+        "vk_id": 111111,
+        "encrypted_vk_token": encrypt_data("manager_token"),
+        "plan": PlanName.AGENCY.name,
+    }
+    limits = get_limits_for_plan(PlanName.AGENCY)
+    user = User(**user_data, **{k: v for k, v in limits.items() if hasattr(User, k)})
     db_session.add(user)
     await db_session.commit()
     await db_session.refresh(user)
@@ -107,8 +168,42 @@ async def test_user(db_session: AsyncSession) -> User:
 
 
 @pytest_asyncio.fixture(scope="function")
-def auth_headers(test_user: User) -> dict[str, str]:
-    """Генерирует заголовки авторизации для тестового пользователя."""
-    token_data = {"sub": str(test_user.id), "profile_id": str(test_user.id)}
-    access_token = create_access_token(data=token_data)
-    return {"Authorization": f"Bearer {access_token}"}
+async def managed_profile_user(db_session: AsyncSession) -> User:
+    """Создает пользователя, которым будет управлять менеджер."""
+    user_data = {
+        "vk_id": 222222,
+        "encrypted_vk_token": encrypt_data("managed_profile_token"),
+        "plan": PlanName.PRO.name,
+    }
+    limits = get_limits_for_plan(PlanName.PRO)
+    user = User(**user_data, **{k: v for k, v in limits.items() if hasattr(User, k)})
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+    return user
+
+
+@pytest_asyncio.fixture(scope="function")
+async def team_member_user(db_session: AsyncSession) -> User:
+    """Создает пользователя, который будет членом команды."""
+    user_data = {
+        "vk_id": 333333,
+        "encrypted_vk_token": encrypt_data("team_member_token"),
+        "plan": PlanName.BASE.name,
+    }
+    limits = get_limits_for_plan(PlanName.BASE)
+    user = User(**user_data, **{k: v for k, v in limits.items() if hasattr(User, k)})
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+    return user
+
+
+@pytest.fixture(scope="function")
+def get_auth_headers_for():
+    """Фабрика для создания заголовков для любого пользователя."""
+    def _get_auth_headers(user: User) -> dict[str, str]:
+        token_data = {"sub": str(user.id), "profile_id": str(user.id)}
+        access_token = create_access_token(data=token_data)
+        return {"Authorization": f"Bearer {access_token}"}
+    return _get_auth_headers

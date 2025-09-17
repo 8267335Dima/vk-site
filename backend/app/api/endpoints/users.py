@@ -14,7 +14,7 @@ from app.services.vk_api import VKAPI, VKAPIError
 from app.core.security import decrypt_data
 from app.repositories.stats import StatsRepository
 from app.core.plans import get_features_for_plan, is_feature_available_for_plan
-from app.api.schemas.users import TaskInfoResponse, FilterPresetCreate, FilterPresetRead
+from app.api.schemas.users import TaskInfoResponse, FilterPresetCreate, FilterPresetRead, ManagedProfileRead
 from app.core.constants import PlanName, FeatureKey
 
 router = APIRouter()
@@ -195,16 +195,6 @@ async def delete_filter_preset(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пресет не найден.")
     await db.commit()
 
-
-class ManagedProfileRead(BaseModel):
-    id: int
-    vk_id: int
-    first_name: str
-    last_name: str
-    photo_50: str
-    
-    class Config:
-        from_attributes = True
 
 @router.get("/me/managed-profiles", response_model=List[ManagedProfileRead], summary="Получить список профилей для переключения")
 async def get_managed_profiles(

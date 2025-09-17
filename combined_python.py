@@ -38,7 +38,7 @@ from app.api.endpoints import (
     scenarios_router, notifications_router, posts_router, teams_router,
     websockets_router, support_router, task_history_router
 )
-
+from fastapi_limiter import FastAPILimiter
 # Вызываем настройку логирования в самом начале
 configure_logging()
 
@@ -48,14 +48,22 @@ async def run_redis_listener(redis_client):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # --- НАЧАЛО ИЗМЕНЕНИЙ ---
     # Код, который выполнится при старте приложения
     
     # Пул для постановки задач в очередь ARQ из API
     arq_pool = await create_pool(redis_settings)
     app.state.arq_pool = arq_pool
     
-    # Клиент для WebSocket
+    # --- ДОБАВЛЕНО: Инициализация Rate Limiter ---
+    # Используем базу Redis №0 для limiter'а
+    limiter_redis = AsyncRedis.from_url(
+        f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/0",
+        decode_responses=True
+    )
+    await FastAPILimiter.init(limiter_redis)
+    # ---------------------------------------------
+    
+    # Клиент для WebSocket (использует базу 1)
     redis_client = AsyncRedis.from_url(
         f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/1", 
         decode_responses=True
@@ -73,11 +81,12 @@ async def lifespan(app: FastAPI):
         await listener_task
     except asyncio.CancelledError:
         pass # Ожидаемое исключение при отмене
+        
     await redis_client.close()
+    await limiter_redis.close() # <--- ДОБАВЛЕНО: Закрываем соединение с Redis для limiter'а
     
     # Закрываем пул ARQ
     await arq_pool.close()
-    # --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
 
 # --- ВАЖНО: Вот тот самый объект 'app', который мы пытаемся импортировать ---
@@ -797,13 +806,28 @@ async def switch_profile(
     manager: User = Depends(get_current_manager_user),
     db: AsyncSession = Depends(get_db)
 ) -> EnrichedTokenResponse:
-    await db.refresh(manager, attribute_names=["managed_profiles"])
     
-    allowed_profile_ids = {p.profile_user_id for p in manager.managed_profiles}
-    allowed_profile_ids.add(manager.id)
+    # --- НАЧАЛО ИСПРАВЛЕННОЙ ЛОГИКИ ---
+    # Загружаем все необходимые связи для проверки прав
+    await db.refresh(manager, attribute_names=["managed_profiles", "team_membership"])
+    if manager.team_membership:
+        await db.refresh(manager.team_membership, attribute_names=["profile_accesses"])
 
+    # 1. Начинаем собирать все ID профилей, к которым у пользователя есть доступ
+    allowed_profile_ids = {manager.id} # Пользователь всегда может "переключиться" на себя
+
+    # 2. Добавляем профили, которыми он управляет напрямую
+    if manager.managed_profiles:
+        allowed_profile_ids.update({p.profile_user_id for p in manager.managed_profiles})
+
+    # 3. Добавляем профили, к которым ему дали доступ как члену команды
+    if manager.team_membership and manager.team_membership.profile_accesses:
+        allowed_profile_ids.update({p.profile_user_id for p in manager.team_membership.profile_accesses})
+
+    # 4. Проверяем, есть ли желаемый ID в собранном списке
     if request_data.profile_id not in allowed_profile_ids:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступ к этому профилю запрещен.")
+    # --- КОНЕЦ ИСПРАВЛЕННОЙ ЛОГИКИ ---
 
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     token_data = {
@@ -862,7 +886,9 @@ async def get_automations_status(
     
     response_list = []
     for config_item in AUTOMATIONS_CONFIG:
-        auto_type = config_item['id']
+        # --- ИЗМЕНЕНИЕ ---
+        auto_type = config_item.id
+        # -----------------
         db_item = user_automations_db.get(auto_type)
         
         is_available = is_feature_available_for_plan(current_user.plan, auto_type)
@@ -870,9 +896,11 @@ async def get_automations_status(
         response_list.append(AutomationStatus(
             automation_type=auto_type,
             is_active=db_item.is_active if db_item else False,
-            settings=db_item.settings if db_item else config_item.get('default_settings', {}),
-            name=config_item['name'],
-            description=config_item['description'],
+            # --- ИЗМЕНЕНИЕ ---
+            settings=db_item.settings if db_item else config_item.default_settings or {},
+            name=config_item.name,
+            description=config_item.description,
+            # -----------------
             is_available=is_available
         ))
         
@@ -891,7 +919,9 @@ async def update_automation(
             detail=f"Функция '{automation_type}' недоступна на вашем тарифе '{current_user.plan}'."
         )
 
-    config_item = next((item for item in AUTOMATIONS_CONFIG if item['id'] == automation_type), None)
+    # --- ИЗМЕНЕНИЕ ---
+    config_item = next((item for item in AUTOMATIONS_CONFIG if item.id == automation_type), None)
+    # -----------------
     if not config_item:
         raise HTTPException(status_code=404, detail="Автоматизация такого типа не найдена.")
 
@@ -907,14 +937,14 @@ async def update_automation(
             user_id=current_user.id,
             automation_type=automation_type,
             is_active=request_data.is_active,
-            settings=request_data.settings or config_item.get('default_settings', {})
+            # --- ИЗМЕНЕНИЕ ---
+            settings=request_data.settings or config_item.default_settings or {}
+            # -----------------
         )
         db.add(automation)
     else:
         automation.is_active = request_data.is_active
         if request_data.settings is not None:
-            # Полностью заменяем настройки, а не обновляем.
-            # Это позволяет фронтенду удалять ключи, отправляя объект без них.
             automation.settings = request_data.settings
     
     await db.commit()
@@ -924,8 +954,10 @@ async def update_automation(
         automation_type=automation.automation_type,
         is_active=automation.is_active,
         settings=automation.settings,
-        name=config_item['name'],
-        description=config_item['description'],
+        # --- ИЗМЕНЕНИЕ ---
+        name=config_item.name,
+        description=config_item.description,
+        # -----------------
         is_available=is_feature_available_for_plan(current_user.plan, automation_type)
     )
 
@@ -952,7 +984,6 @@ log = structlog.get_logger(__name__)
 router = APIRouter()
 
 @router.get("/plans", response_model=AvailablePlansResponse)
-@cache(expire=3600)
 async def get_available_plans():
     """
     Возвращает список всех доступных для покупки тарифных планов.
@@ -1334,7 +1365,7 @@ async def schedule_batch_posts(
             post_id=post.id,
             _defer_until=post.publish_at
         )
-        post.celery_task_id = job.job_id
+        post.arq_job_id = job.job_id
 
     await db.commit()
     
@@ -1342,7 +1373,6 @@ async def schedule_batch_posts(
         await db.refresh(post)
 
     return created_posts_db
-
 
 # --- backend/app\api\endpoints\proxies.py ---
 
@@ -2092,7 +2122,9 @@ async def _enqueue_task(
 
     job = await arq_pool.enqueue_job(task_func_name, **job_kwargs)
 
-    task_history.celery_task_id = job.job_id
+    # --- ИЗМЕНЕНИЕ ---
+    task_history.arq_job_id = job.job_id
+    # ------------------
     await db.commit()
     
     message = f"Задача '{task_display_name}' успешно добавлена в очередь."
@@ -2272,9 +2304,9 @@ async def cancel_task(
     if task.status not in ["PENDING", "STARTED"]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Отменить можно только задачи в очереди или в процессе выполнения.")
 
-    if task.celery_task_id:
+    if task.arq_job_id:
         try:
-            await arq_pool.abort_job(task.celery_task_id)
+            await arq_pool.abort_job(task.arq_job_id)
         except Exception:
             pass
     task.status = "CANCELLED"
@@ -2530,7 +2562,7 @@ from app.services.vk_api import VKAPI, VKAPIError
 from app.core.security import decrypt_data
 from app.repositories.stats import StatsRepository
 from app.core.plans import get_features_for_plan, is_feature_available_for_plan
-from app.api.schemas.users import TaskInfoResponse, FilterPresetCreate, FilterPresetRead
+from app.api.schemas.users import TaskInfoResponse, FilterPresetCreate, FilterPresetRead, ManagedProfileRead
 from app.core.constants import PlanName, FeatureKey
 
 router = APIRouter()
@@ -2711,16 +2743,6 @@ async def delete_filter_preset(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пресет не найден.")
     await db.commit()
 
-
-class ManagedProfileRead(BaseModel):
-    id: int
-    vk_id: int
-    first_name: str
-    last_name: str
-    photo_50: str
-    
-    class Config:
-        from_attributes = True
 
 @router.get("/me/managed-profiles", response_model=List[ManagedProfileRead], summary="Получить список профилей для переключения")
 async def get_managed_profiles(
@@ -3092,6 +3114,7 @@ class PostRead(PostBase):
     status: str
     vk_post_id: Optional[str] = None
     error_message: Optional[str] = None
+    arq_job_id: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
 class UploadedImageResponse(BaseModel): 
@@ -3270,10 +3293,9 @@ class ActionResponse(BaseModel):
     message: str
     task_id: str
 
-# --- Схемы для отображения истории задач ---
 class TaskHistoryRead(BaseModel):
     id: int
-    celery_task_id: Optional[str] = None
+    arq_job_id: Optional[str] = None
     task_name: str
     status: str
     parameters: Optional[Dict[str, Any]] = None
@@ -4107,7 +4129,7 @@ class TaskHistory(Base):
     __tablename__ = "task_history"
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    celery_task_id = Column(String, unique=True, nullable=True, index=True)
+    arq_job_id = Column(String, unique=True, nullable=True, index=True)
     task_name = Column(String, nullable=False, index=True)
     status = Column(String, default="PENDING", nullable=False, index=True)
     parameters = Column(JSON, nullable=True)
@@ -4180,7 +4202,7 @@ class ScheduledPost(Base):
     attachments = Column(JSON, nullable=True)
     publish_at = Column(DateTime(timezone=True), nullable=False, index=True)
     status = Column(Enum(ScheduledPostStatus), nullable=False, default=ScheduledPostStatus.scheduled, index=True)
-    celery_task_id = Column(String, nullable=True, unique=True)
+    arq_job_id = Column(String, nullable=True, unique=True)
     vk_post_id = Column(String, nullable=True)
     error_message = Column(Text, nullable=True)
     user = relationship("User", back_populates="scheduled_posts")
@@ -6725,30 +6747,33 @@ from app.core.exceptions import UserActionException
 from app.services.vk_api import VKAPIError, VKAuthError
 from app.core.constants import TaskKey
 from app.tasks.service_maps import TASK_CONFIG_MAP
+from contextlib import asynccontextmanager
 
 log = structlog.get_logger(__name__)
 
 
 def arq_task_runner(func):
-    """
-    Декоратор-обертка для всех ARQ задач, выполняемых пользователем.
-    (описание без изменений)
-    """
     @functools.wraps(func)
     async def wrapper(ctx, task_history_id: int, **kwargs):
+        session_for_test = kwargs.pop("session_for_test", None)
         emitter_for_test = kwargs.pop("emitter_for_test", None)
 
-        async with AsyncSessionFactory() as session:
+        @asynccontextmanager
+        async def get_session_context():
+            if session_for_test:
+                yield session_for_test
+            else:
+                async with AsyncSessionFactory() as session:
+                    yield session
+        
+        async with get_session_context() as session:
             task_history = None
             emitter = None
-            # --- ИСПРАВЛЕНИЕ: Заранее объявляем переменные для хранения данных ---
-            # Это защитит нас от доступа к "просроченным" атрибутам после commit.
             task_name = "Неизвестная задача"
             created_at = None
             user_id = None
             
             try:
-                # Загружаем все необходимые данные одним запросом ("жадная" загрузка)
                 stmt = select(TaskHistory).where(TaskHistory.id == task_history_id).options(
                     joinedload(TaskHistory.user).selectinload(User.proxies)
                 )
@@ -6758,7 +6783,6 @@ def arq_task_runner(func):
                     log.error("task.runner.not_found_final", task_history_id=task_history_id)
                     return
 
-                # --- ИСПРАВЛЕНИЕ: Считываем все нужные данные в локальные переменные ДО первого commit ---
                 task_name = task_history.task_name
                 created_at = task_history.created_at
                 user_id = task_history.user.id
@@ -6766,17 +6790,11 @@ def arq_task_runner(func):
                 emitter = emitter_for_test or RedisEventEmitter(ctx['redis_pool'])
                 emitter.set_context(user_id, task_history_id)
                 
-                # Обновляем статус и делаем commit
                 task_history.status = "STARTED"
                 await session.commit()
-                # !!! С ЭТОГО МОМЕНТА ОБЪЕКТ task_history "ПРОСРОЧЕН" !!!
                 
-                # Теперь этот вызов абсолютно безопасен, так как мы используем локальные переменные
                 await emitter.send_task_status_update(status="STARTED", task_name=task_name, created_at=created_at)
 
-                # Вызываем основную логику задачи, передавая "просроченные" объекты.
-                # Функция func сама будет работать внутри этой же сессии и SQLAlchemy корректно
-                # подгрузит нужные данные для них.
                 summary_result = await func(session, task_history.user, task_history.parameters or {}, emitter)
 
                 task_history.status = "SUCCESS"
@@ -6812,7 +6830,6 @@ def arq_task_runner(func):
                     await session.commit()
                     
                     if emitter:
-                        # Используем безопасные локальные переменные для финального уведомления
                         await emitter.send_task_status_update(
                             status=final_status,
                             result=final_result,
@@ -7218,7 +7235,7 @@ async def _create_and_run_arq_task(session, arq_pool, user_id, task_name_key, se
     await session.flush()
 
     job = await arq_pool.enqueue_job(task_func_name, task_history_id=task_history.id, **(settings_dict or {}))
-    task_history.celery_task_id = job.job_id
+    task_history.arq_job_id = job.job_id
     await session.commit()
 
 async def _run_daily_automations_async(automation_group: str):

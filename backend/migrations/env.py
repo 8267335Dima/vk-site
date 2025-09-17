@@ -64,7 +64,19 @@ async def run_migrations_online() -> None:
 
 # ----------------- ГЛАВНЫЙ БЛОК ВЫПОЛНЕНИЯ -----------------
 
+
 if context.is_offline_mode():
     run_migrations_offline()
 else:
-    asyncio.run(run_migrations_online())
+    # Проверяем, запущен ли уже цикл событий
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:  # 'RuntimeError: There is no current event loop...'
+        loop = None
+
+    if loop and loop.is_running():
+        # Если мы уже внутри цикла (как в pytest-asyncio), используем его
+        loop.run_until_complete(run_migrations_online())
+    else:
+        # В противном случае (при запуске из консоли) создаем новый
+        asyncio.run(run_migrations_online())

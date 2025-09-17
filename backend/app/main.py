@@ -21,7 +21,7 @@ from app.api.endpoints import (
     scenarios_router, notifications_router, posts_router, teams_router,
     websockets_router, support_router, task_history_router
 )
-
+from fastapi_limiter import FastAPILimiter
 # Вызываем настройку логирования в самом начале
 configure_logging()
 
@@ -31,14 +31,22 @@ async def run_redis_listener(redis_client):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # --- НАЧАЛО ИЗМЕНЕНИЙ ---
     # Код, который выполнится при старте приложения
     
     # Пул для постановки задач в очередь ARQ из API
     arq_pool = await create_pool(redis_settings)
     app.state.arq_pool = arq_pool
     
-    # Клиент для WebSocket
+    # --- ДОБАВЛЕНО: Инициализация Rate Limiter ---
+    # Используем базу Redis №0 для limiter'а
+    limiter_redis = AsyncRedis.from_url(
+        f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/0",
+        decode_responses=True
+    )
+    await FastAPILimiter.init(limiter_redis)
+    # ---------------------------------------------
+    
+    # Клиент для WebSocket (использует базу 1)
     redis_client = AsyncRedis.from_url(
         f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/1", 
         decode_responses=True
@@ -56,11 +64,12 @@ async def lifespan(app: FastAPI):
         await listener_task
     except asyncio.CancelledError:
         pass # Ожидаемое исключение при отмене
+        
     await redis_client.close()
+    await limiter_redis.close() # <--- ДОБАВЛЕНО: Закрываем соединение с Redis для limiter'а
     
     # Закрываем пул ARQ
     await arq_pool.close()
-    # --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
 
 # --- ВАЖНО: Вот тот самый объект 'app', который мы пытаемся импортировать ---

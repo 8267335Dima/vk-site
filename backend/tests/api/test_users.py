@@ -1,0 +1,104 @@
+# tests/api/test_users.py
+
+import pytest
+from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+# --- ДОБАВЛЕНО: Импортируем AsyncMock ---
+from unittest.mock import AsyncMock
+
+from app.db.models import User, DailyStats, FilterPreset
+from app.core.constants import PlanName, FeatureKey
+
+# Все тесты в этом файле должны использовать anyio
+pytestmark = pytest.mark.anyio
+
+
+async def test_read_users_me_success(async_client: AsyncClient, auth_headers: dict, test_user: User, mocker):
+    """
+    Тест успешного получения информации о текущем пользователе (/me).
+    """
+    mock_vk_response = [{
+        "id": test_user.vk_id,
+        "first_name": "Тестовый",
+        "last_name": "Юзер",
+        "photo_200": "https://example.com/photo.jpg",
+        "status": "Тестовый статус",
+        "counters": {"friends": 150}
+    }]
+    
+    # --- НАЧАЛО ИЗМЕНЕНИЯ ---
+    # 1. Патчим класс VKAPI там, где он используется (в эндпоинте users)
+    mock_vk_api_class = mocker.patch('app.api.endpoints.users.VKAPI')
+
+    # 2. Получаем ссылку на мок-экземпляр, который будет создан при вызове VKAPI()
+    mock_instance = mock_vk_api_class.return_value
+
+    # 3. Настраиваем методы на этом мок-экземпляре
+    # Метод 'users.get' должен быть асинхронным и возвращать наши данные
+    mock_instance.users.get = AsyncMock(return_value=mock_vk_response)
+    # Метод 'close' тоже нужно замокать, так как он вызывается в finally
+    mock_instance.close = AsyncMock()
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
+    # Выполняем запрос к нашему API
+    response = await async_client.get("/api/v1/users/me", headers=auth_headers)
+
+    # Проверяем результат
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["id"] == test_user.id
+    assert FeatureKey.PROXY_MANAGEMENT in data["available_features"]
+    assert data["first_name"] == "Тестовый"
+    assert data["counters"]["friends"] == 150
+
+
+async def test_get_daily_limits(async_client: AsyncClient, auth_headers: dict, test_user: User, db_session: AsyncSession):
+    """
+    Тест получения дневных лимитов пользователя (/me/limits).
+    """
+    today_stats = DailyStats(
+        user_id=test_user.id,
+        likes_count=25,
+        friends_added_count=5
+    )
+    db_session.add(today_stats)
+    await db_session.flush()
+
+    response = await async_client.get("/api/v1/users/me/limits", headers=auth_headers)
+
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["likes_limit"] == test_user.daily_likes_limit
+    assert data["likes_today"] == 25
+    assert data["friends_add_limit"] == test_user.daily_add_friends_limit
+    assert data["friends_add_today"] == 5
+
+
+async def test_create_and_get_filter_preset(async_client: AsyncClient, auth_headers: dict, test_user: User, db_session: AsyncSession):
+    """
+    Тест создания и последующего получения пресета фильтров.
+    """
+    preset_data = {
+        "name": "Мои лучшие фильтры",
+        "action_type": "remove_friends",
+        "filters": {"remove_banned": True, "last_seen_days": 30}
+    }
+
+    response_create = await async_client.post("/api/v1/users/me/filter-presets", headers=auth_headers, json=preset_data)
+
+    assert response_create.status_code == 201
+    created_data = response_create.json()
+    assert created_data["name"] == preset_data["name"]
+
+    response_get = await async_client.get(
+        f"/api/v1/users/me/filter-presets?action_type={preset_data['action_type']}",
+        headers=auth_headers
+    )
+
+    assert response_get.status_code == 200
+    presets_list = response_get.json()
+    assert len(presets_list) == 1
+    assert presets_list[0]["id"] == created_data["id"]

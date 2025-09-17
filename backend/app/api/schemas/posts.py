@@ -21,6 +21,7 @@ class PostRead(PostBase):
     status: str
     vk_post_id: Optional[str] = None
     error_message: Optional[str] = None
+    arq_job_id: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
 class UploadedImageResponse(BaseModel): 

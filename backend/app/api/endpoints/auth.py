@@ -124,13 +124,28 @@ async def switch_profile(
     manager: User = Depends(get_current_manager_user),
     db: AsyncSession = Depends(get_db)
 ) -> EnrichedTokenResponse:
-    await db.refresh(manager, attribute_names=["managed_profiles"])
     
-    allowed_profile_ids = {p.profile_user_id for p in manager.managed_profiles}
-    allowed_profile_ids.add(manager.id)
+    # --- НАЧАЛО ИСПРАВЛЕННОЙ ЛОГИКИ ---
+    # Загружаем все необходимые связи для проверки прав
+    await db.refresh(manager, attribute_names=["managed_profiles", "team_membership"])
+    if manager.team_membership:
+        await db.refresh(manager.team_membership, attribute_names=["profile_accesses"])
 
+    # 1. Начинаем собирать все ID профилей, к которым у пользователя есть доступ
+    allowed_profile_ids = {manager.id} # Пользователь всегда может "переключиться" на себя
+
+    # 2. Добавляем профили, которыми он управляет напрямую
+    if manager.managed_profiles:
+        allowed_profile_ids.update({p.profile_user_id for p in manager.managed_profiles})
+
+    # 3. Добавляем профили, к которым ему дали доступ как члену команды
+    if manager.team_membership and manager.team_membership.profile_accesses:
+        allowed_profile_ids.update({p.profile_user_id for p in manager.team_membership.profile_accesses})
+
+    # 4. Проверяем, есть ли желаемый ID в собранном списке
     if request_data.profile_id not in allowed_profile_ids:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступ к этому профилю запрещен.")
+    # --- КОНЕЦ ИСПРАВЛЕННОЙ ЛОГИКИ ---
 
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     token_data = {
