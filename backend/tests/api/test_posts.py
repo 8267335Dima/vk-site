@@ -111,3 +111,42 @@ async def test_upload_image_from_url(async_client: AsyncClient, auth_headers: di
     mock_download.assert_called_once_with("http://example.com/image.jpg")
     # Проверяем, что метод на мок-экземпляре был вызван с правильными данными
     mock_instance.photos.upload_for_wall.assert_awaited_once_with(b"downloaded fake content")
+
+@pytest.mark.parametrize(
+    "json_payload, expected_status_code, expected_detail_substring",
+    [
+        (
+            {"posts": [{"post_text": "My post", "publish_at": "invalid-date-format"}]},
+            422,
+            "Input should be a valid datetime or date",
+        ),
+        (
+            {"posts": []}, # Пустой список постов
+            400,
+            "Список постов для планирования не может быть пустым",
+        ),
+        (
+            {"wrong_key": "some_value"}, # Неправильный ключ в JSON
+            422,
+            "Field required",
+        ),
+    ],
+)
+@pytest.mark.anyio
+async def test_schedule_batch_posts_validation_errors(
+    async_client: AsyncClient, auth_headers: dict,
+    json_payload: dict, expected_status_code: int, expected_detail_substring: str
+):
+    """
+    Тест проверяет, что API возвращает ошибки валидации на некорректные данные.
+    """
+    # Act
+    response = await async_client.post(
+        "/api/v1/posts/schedule-batch", headers=auth_headers, json=json_payload
+    )
+
+    # Assert
+    assert response.status_code == expected_status_code
+    response_data = response.json()
+    # Проверяем, что в тексте ошибки есть ожидаемая фраза
+    assert expected_detail_substring in str(response_data["detail"])

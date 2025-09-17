@@ -92,11 +92,13 @@ async def get_current_active_profile(
 # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
 
 
-async def get_current_user_from_ws(token: str = Query(...)) -> User:
-    async with AsyncSessionFactory() as session:
-        payload = await _get_payload_from_string(token)
-        profile_id = int(payload.get("profile_id") or payload.get("sub"))
-        user = await session.get(User, profile_id)
-        if not user:
-            raise credentials_exception
-        return user
+async def get_current_user_from_ws(
+    token: str = Query(...),
+    db: AsyncSession = Depends(get_db) 
+) -> User:
+    payload = await _get_payload_from_string(token)
+    profile_id = int(payload.get("profile_id") or payload.get("sub"))
+    user = await db.get(User, profile_id)  
+    if not user:
+        raise credentials_exception
+    return user

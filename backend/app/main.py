@@ -65,11 +65,10 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass # Ожидаемое исключение при отмене
         
-    await redis_client.close()
-    await limiter_redis.close() # <--- ДОБАВЛЕНО: Закрываем соединение с Redis для limiter'а
-    
-    # Закрываем пул ARQ
-    await arq_pool.close()
+    # ИСПРАВЛЕНИЕ ЗДЕСЬ
+    await redis_client.aclose()
+    await limiter_redis.aclose()
+    await arq_pool.aclose()
 
 
 # --- ВАЖНО: Вот тот самый объект 'app', который мы пытаемся импортировать ---
@@ -107,6 +106,6 @@ app.include_router(scenarios_router, prefix=f"{api_prefix}/scenarios", tags=["Sc
 app.include_router(notifications_router, prefix=f"{api_prefix}/notifications", tags=["Notifications"])
 app.include_router(posts_router, prefix=f"{api_prefix}/posts", tags=["Posts"])
 app.include_router(teams_router, prefix=f"{api_prefix}/teams", tags=["Teams"])
-app.include_router(websockets_router, tags=["WebSockets"])
+app.include_router(websockets_router, prefix=api_prefix, tags=["WebSockets"])
 app.include_router(tasks_router, prefix=f"{api_prefix}/tasks", tags=["Tasks"])
 app.include_router(task_history_router, prefix=f"{api_prefix}/tasks", tags=["Tasks"])

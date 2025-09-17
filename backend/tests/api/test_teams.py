@@ -172,3 +172,56 @@ async def test_team_member_switches_profile_and_acts_on_behalf(
     assert me_data["vk_id"] == managed_profile_user.vk_id
     assert me_data["first_name"] == "Managed"
     assert me_data["photo_200"] is not None # Проверяем наличие поля
+
+async def test_removed_team_member_loses_access(
+    async_client: AsyncClient, db_session: AsyncSession, manager_user: User, team_member_user: User, managed_profile_user: User, get_auth_headers_for, mocker
+):
+    """
+    Тест: Член команды, удаленный из нее, теряет доступ к управляемым профилям.
+    """
+    # --- 1. Подготовка: Создаем команду, добавляем участника и даем ему доступ ---
+    team = Team(owner_id=manager_user.id, name="Temp Team")
+    db_session.add(team)
+    await db_session.flush()
+    member = TeamMember(team_id=team.id, user_id=team_member_user.id)
+    db_session.add(member)
+    await db_session.flush()
+    access = TeamProfileAccess(team_member_id=member.id, profile_user_id=managed_profile_user.id)
+    db_session.add(access)
+    await db_session.commit()
+
+    # --- 2. Проверка до удаления: Участник может переключиться на профиль ---
+    team_member_headers = get_auth_headers_for(team_member_user)
+    app.dependency_overrides[get_current_active_profile] = lambda: team_member_user
+    
+    response_switch_before = await async_client.post(
+        "/api/v1/auth/switch-profile",
+        headers=team_member_headers,
+        json={"profile_id": managed_profile_user.id}
+    )
+    assert response_switch_before.status_code == 200
+    del app.dependency_overrides[get_current_active_profile]
+
+    # --- 3. Действие: Менеджер удаляет участника из команды ---
+    manager_headers = get_auth_headers_for(manager_user)
+    app.dependency_overrides[get_current_active_profile] = lambda: manager_user
+
+    response_delete = await async_client.delete(
+        f"/api/v1/teams/my-team/members/{member.id}",
+        headers=manager_headers
+    )
+    assert response_delete.status_code == 204
+    del app.dependency_overrides[get_current_active_profile]
+
+    # --- 4. Проверка после удаления: Участник больше не может переключиться на профиль ---
+    app.dependency_overrides[get_current_active_profile] = lambda: team_member_user
+    
+    response_switch_after = await async_client.post(
+        "/api/v1/auth/switch-profile",
+        headers=team_member_headers,
+        json={"profile_id": managed_profile_user.id}
+    )
+    assert response_switch_after.status_code == 403 # Ожидаем ошибку "Доступ запрещен"
+    assert "Доступ к этому профилю запрещен" in response_switch_after.json()["detail"]
+    
+    del app.dependency_overrides[get_current_active_profile]
