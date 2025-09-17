@@ -151,3 +151,35 @@ async def test_removed_team_member_loses_access(
     assert "Доступ к этому профилю запрещен" in response_switch_after.json()["detail"]
     
     del app.dependency_overrides[get_current_active_profile]
+
+async def test_team_member_cannot_switch_to_unauthorized_profile(
+    async_client: AsyncClient, db_session: AsyncSession, manager_user: User, team_member_user: User, managed_profile_user: User, get_auth_headers_for
+):
+    """
+    Тест: Член команды получает ошибку 403 при попытке переключиться на профиль,
+    к которому менеджер не предоставил ему доступ.
+    """
+    # Arrange:
+    # 1. Создаем команду и добавляем участника, но НЕ даем ему доступ к managed_profile_user.
+    team = Team(owner_id=manager_user.id, name=f"Team {manager_user.vk_id}")
+    member = TeamMember(team=team, user_id=team_member_user.id)
+    # Строка с TeamProfileAccess намеренно отсутствует
+    db_session.add_all([team, member])
+    await db_session.commit()
+    
+    # 2. Получаем токен для члена команды.
+    team_member_headers = get_auth_headers_for(team_member_user)
+    app.dependency_overrides[get_current_active_profile] = lambda: team_member_user
+
+    # Act: Пытаемся переключиться на профиль, к которому нет доступа.
+    response_switch = await async_client.post(
+        "/api/v1/auth/switch-profile",
+        headers=team_member_headers,
+        json={"profile_id": managed_profile_user.id} # ID профиля, к которому нет доступа
+    )
+    
+    # Assert: Ожидаем ошибку 403 Forbidden.
+    assert response_switch.status_code == 403
+    assert "Доступ к этому профилю запрещен" in response_switch.json()["detail"]
+
+    del app.dependency_overrides[get_current_active_profile]

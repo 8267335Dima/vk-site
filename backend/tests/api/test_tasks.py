@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 
 from app.db.models import User, TaskHistory
 from app.core.constants import PlanName, TaskKey
+from app.tasks.logic.maintenance_jobs import _check_expired_plans_async
 
 pytestmark = pytest.mark.anyio
 
@@ -105,3 +106,35 @@ async def test_preview_task_audience(
     response = await async_client.post(f"/api/v1/tasks/preview/{task_key.value}", headers=auth_headers, json=preview_params)
     assert response.status_code == 200
     assert response.json() == {"found_count": 3}
+
+async def test_run_task_with_expired_plan(
+    async_client: AsyncClient, test_user: User, db_session: AsyncSession, get_auth_headers_for
+):
+    """
+    Тест: Пользователь с истекшим тарифом получает ошибку при попытке запустить любую задачу.
+    """
+    # Arrange:
+    # 1. Устанавливаем пользователю PRO тариф, который истек вчера.
+    test_user.plan = PlanName.PRO.name
+    test_user.plan_expires_at = datetime.now(UTC) - timedelta(days=1)
+    await db_session.commit()
+    await db_session.refresh(test_user)
+
+    # 2. Запускаем логику cron-задачи, чтобы она "отключила" тариф пользователя.
+    await _check_expired_plans_async(session_for_test=db_session)
+    await db_session.refresh(test_user)
+    
+    # Убедимся, что тариф действительно сменился на Expired
+    assert test_user.plan == "Expired"
+    
+    # 3. Генерируем токен для пользователя с уже истекшим тарифом.
+    headers = get_auth_headers_for(test_user)
+    task_key = TaskKey.LIKE_FEED
+    task_params = {"count": 10, "filters": {}}
+
+    # Act: Пытаемся запустить задачу
+    response = await async_client.post(f"/api/v1/tasks/run/{task_key.value}", headers=headers, json=task_params)
+    
+    # Assert: Ожидаем ошибку 403 Forbidden
+    assert response.status_code == 403
+    assert "Действие недоступно на вашем тарифе 'Expired'" in response.json()["detail"]

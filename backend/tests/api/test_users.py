@@ -132,3 +132,37 @@ async def test_update_and_get_analytics_settings(
     await db_session.refresh(test_user)
     assert test_user.analytics_settings_posts_count == 77
     assert test_user.analytics_settings_photos_count == 177
+
+@pytest.mark.parametrize(
+    "payload, expected_status, expected_detail_substring",
+    [
+        (
+            {"name": "", "action_type": "remove_friends", "filters": {}}, 
+            422, "String should have at least 1 character"
+        ),
+        (
+            {"name": "a"*51, "action_type": "remove_friends", "filters": {}}, 
+            422, "String should have at most 50 characters"
+        ),
+        (
+            {"action_type": "remove_friends", "filters": {}}, 
+            422, "Field required"
+        ),
+    ]
+)
+async def test_create_filter_preset_validation(
+    async_client: AsyncClient, auth_headers: dict, payload, expected_status, expected_detail_substring
+):
+    """
+    Параметризованный тест для проверки ошибок валидации при создании пресета фильтров.
+    """
+    # Act
+    response = await async_client.post(
+        "/api/v1/users/me/filter-presets", 
+        headers=auth_headers, 
+        json=payload
+    )
+
+    # Assert
+    assert response.status_code == expected_status
+    assert expected_detail_substring in str(response.json())
