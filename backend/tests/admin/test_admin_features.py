@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from app.admin.views.user import UserAdmin
 from app.admin.views.support import SupportTicketAdmin
 from app.db.models import User, SupportTicket, TicketStatus, LoginHistory, BannedIP
-from app.core.constants import PlanName
+from app.core.enums import PlanName, TicketStatus
 
 ASYNC_TEST = pytest.mark.asyncio
 

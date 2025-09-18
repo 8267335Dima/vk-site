@@ -15,7 +15,7 @@ from app.core.security import decrypt_data
 from app.repositories.stats import StatsRepository
 from app.core.plans import get_features_for_plan, is_feature_available_for_plan
 from app.api.schemas.users import TaskInfoResponse, FilterPresetCreate, FilterPresetRead, ManagedProfileRead, AnalyticsSettingsRead, AnalyticsSettingsUpdate
-from app.core.constants import PlanName, FeatureKey
+from app.core.enums import PlanName, FeatureKey
 
 router = APIRouter()
 

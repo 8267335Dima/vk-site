@@ -7,7 +7,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 from app.db.base import Base
-from app.db.enums import FriendRequestStatus
+from app.core.enums import FriendRequestStatus
 
 class DailyStats(Base):
     __tablename__ = "daily_stats"

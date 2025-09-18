@@ -11,7 +11,7 @@ from app.admin.views.user import UserAdmin
 
 # Импортируем необходимые модели и Enum'ы для симуляции
 from app.db.models import User
-from app.core.constants import PlanName, AutomationType
+from app.core.enums import PlanName, AutomationType
 
 # Маркер для асинхронных тестов
 ASYNC_TEST = pytest.mark.asyncio

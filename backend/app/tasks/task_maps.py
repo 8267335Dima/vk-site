@@ -24,7 +24,7 @@ from app.api.schemas.actions import (
 )
 
 # --- Ключи задач ---
-from app.core.constants import TaskKey
+from app.core.enums import TaskKey
 
 # 1. Объединенный тип для всех возможных моделей с параметрами задач
 AnyTaskRequest = Union[

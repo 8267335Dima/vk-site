@@ -16,7 +16,7 @@ from app.repositories.stats import StatsRepository
 from app.api.schemas.tasks import ActionResponse, PreviewResponse, TaskConfigResponse, TaskField
 from app.core.plans import get_plan_config, is_feature_available_for_plan
 from app.core.config_loader import AUTOMATIONS_CONFIG
-from app.core.constants import TaskKey
+from app.core.enums import TaskKey
 from app.services.vk_api import VKAPIError
 from app.tasks.service_maps import TASK_CONFIG_MAP
 from app.tasks.task_maps import AnyTaskRequest, TASK_FUNC_MAP, PREVIEW_SERVICE_MAP

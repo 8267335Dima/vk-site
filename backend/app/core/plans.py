@@ -1,7 +1,7 @@
 # backend/app/core/plans.py
 from functools import lru_cache
 from app.core.config_loader import PLAN_CONFIG, AUTOMATIONS_CONFIG
-from app.core.constants import PlanName, FeatureKey, TaskKey
+from app.core.enums import PlanName, FeatureKey
 
 @lru_cache(maxsize=16)
 def get_plan_config(plan_name: PlanName | str) -> dict:

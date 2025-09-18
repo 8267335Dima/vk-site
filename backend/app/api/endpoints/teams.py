@@ -12,7 +12,7 @@ from app.api.schemas.teams import TeamRead, InviteMemberRequest, UpdateAccessReq
 from app.core.plans import is_feature_available_for_plan, get_plan_config
 from app.services.vk_api import VKAPI
 from app.core.security import decrypt_data
-from app.core.constants import FeatureKey
+from app.core.enums import FeatureKey
 import structlog
 
 log = structlog.get_logger(__name__)

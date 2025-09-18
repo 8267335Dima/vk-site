@@ -13,7 +13,7 @@ from app.api.dependencies import get_current_active_profile, get_arq_pool
 from app.db.session import get_db
 from app.api.schemas.tasks import ActionResponse, PaginatedTasksResponse
 from app.core.config_loader import AUTOMATIONS_CONFIG
-from app.core.constants import TaskKey
+from app.core.enums import TaskKey
 
 from .tasks import _enqueue_task
 from app.tasks.task_maps import AnyTaskRequest, PREVIEW_SERVICE_MAP

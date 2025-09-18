@@ -13,7 +13,7 @@ from app.services.vk_api import is_token_valid
 from app.core.security import create_access_token, encrypt_data
 from app.core.config import settings
 from app.core.plans import get_limits_for_plan
-from app.core.constants import PlanName
+from app.core.enums import PlanName
 from app.api.dependencies import get_current_manager_user, limiter
 
 router = APIRouter()
