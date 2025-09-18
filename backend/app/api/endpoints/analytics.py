@@ -1,11 +1,8 @@
-# --- START OF FILE backend/app/api/endpoints/analytics.py ---
+# backend/app/api/endpoints/analytics.py
 
 import datetime
-from unittest.mock import AsyncMock
 from fastapi import APIRouter, Depends, Query
 from fastapi_cache.decorator import cache
-from httpx import AsyncClient
-import pytest
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,8 +14,6 @@ from app.api.schemas.analytics import (
     ProfileSummaryResponse, FriendRequestConversionResponse, PostActivityHeatmapResponse,
     ProfileSummaryData
 )
-from app.services.vk_api import VKAPI
-from app.core.security import decrypt_data
 from app.services.analytics_service import AnalyticsService
 from app.services.event_emitter import SystemLogEmitter 
 
@@ -26,7 +21,7 @@ router = APIRouter()
 
 
 @router.get("/audience", response_model=AudienceAnalyticsResponse)
-@cache(expire=21600)
+@cache(expire=21600) # Кэшируем на 6 часов
 async def get_audience_analytics(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
@@ -40,7 +35,7 @@ async def get_audience_analytics(
             await service.vk_api.close()
 
 @router.get("/profile-summary", response_model=ProfileSummaryResponse)
-@cache(expire=3600)
+@cache(expire=3600) # Кэшируем на 1 час
 async def get_profile_summary(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
@@ -64,7 +59,6 @@ async def get_profile_summary(
     yesterday_metrics = metrics.get(yesterday)
     week_ago_metrics = metrics.get(week_ago)
 
-    # ИСПРАВЛЕНИЕ: Безопасное создание DTO с явным маппингом полей
     if today_metrics:
         current_stats = ProfileSummaryData(
             friends=today_metrics.friends_count,
@@ -82,7 +76,6 @@ async def get_profile_summary(
     growth_daily = {}
     growth_weekly = {}
     
-    # Используем поля схемы для итерации, чтобы ничего не пропустить
     fields_to_compare = ProfileSummaryData.model_fields.keys()
     model_field_map = {
         "friends": "friends_count", "followers": "followers_count", "photos": "photos_count",
@@ -129,7 +122,6 @@ async def get_profile_growth_analytics(
     result = await db.execute(stmt)
     data = result.scalars().all()
     
-    # Используем ProfileGrowthItem для валидации и формирования ответа
     response_data = [ProfileGrowthItem(**row.__dict__) for row in data]
 
     return ProfileGrowthResponse(data=response_data)
@@ -170,60 +162,6 @@ async def get_post_activity_heatmap(
     heatmap_data = result.scalar_one_or_none()
     
     if not heatmap_data:
-        # Возвращаем пустую сетку, если данных еще нет
         return PostActivityHeatmapResponse(data=[[0]*24]*7)
         
     return PostActivityHeatmapResponse(data=heatmap_data.heatmap_data.get("data", [[0]*24]*7))
-
-@pytest.mark.parametrize(
-    "mock_friends_list",
-    [
-        # Случай 1: У друга нет ключа 'city'
-        [{"id": 1, "sex": 1, "bdate": "1.1.2000"}],
-        # Случай 2: У друга нет ключа 'bdate'
-        [{"id": 2, "sex": 2, "city": {"title": "Москва"}}],
-        # Случай 3: Друг деактивирован ("собачка")
-        [{"id": 3, "deactivated": "deleted"}],
-        # Случай 4: Пустой список друзей
-        [],
-    ]
-)
-async def test_get_audience_analytics_robustness(
-    async_client: AsyncClient, auth_headers: dict, mocker, mock_friends_list
-):
-    """
-    Тест проверяет, что эндпоинт /analytics/audience не падает с ошибкой 500,
-    если VK API возвращает друзей с неполными данными.
-    """
-    # Arrange: Мокаем сервис, который вызывается внутри эндпоинта
-    mock_service_class = mocker.patch('app.api.endpoints.analytics.AnalyticsService')
-    mock_instance = mock_service_class.return_value
-    
-    # Мокаем метод, который делает реальную работу, чтобы он вернул нужный нам результат
-    # В данном случае, мы можем просто замокать его так, чтобы он не делал ничего,
-    # а сам эндпоинт протестировать, или полностью замокать его ответ.
-    # Давайте протестируем сам сервис.
-    mock_vk_api = AsyncMock()
-    mock_vk_api.get_user_friends.return_value = mock_friends_list
-    
-    # "Внедряем" мок VK API в реальный экземпляр сервиса
-    mocker.patch('app.services.analytics_service.AnalyticsService._initialize_vk_api', new_callable=AsyncMock)
-    
-    # Act
-    # Мы не можем напрямую вызвать эндпоинт и одновременно мокать сервис внутри него так просто.
-    # Поэтому мы протестируем сам сервис, который является ядром логики эндпоинта.
-    from app.services.analytics_service import AnalyticsService
-    from app.db.session import get_db
-    
-    async for db_session in get_db(): # Получаем сессию для инициализации
-        service = AnalyticsService(db=db_session, user=await db_session.get(User, 1), emitter=AsyncMock())
-        service.vk_api = mock_vk_api # Внедряем мок
-        
-        # Вызываем метод и ожидаем, что он не вызовет исключений
-        try:
-            response_model = await service.get_audience_distribution()
-            # Проверяем, что модель создана корректно
-            assert isinstance(response_model, dict) # get_audience_distribution вернет словарь
-            assert "city_distribution" in response_model
-        except Exception as e:
-            pytest.fail(f"Сервис упал на неполных данных от VK: {e}")
