@@ -22,14 +22,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from redis.asyncio import Redis as AsyncRedis
-# --- ИЗМЕНЕНИЕ: Импортируем необходимое для ARQ ---
-from arq.connections import create_pool, ArqRedis
-from app.arq_config import redis_settings
-# --------------------------------------------------
+from arq.connections import create_pool
+from sqlalchemy.ext.asyncio import AsyncEngine
+from starlette.middleware.sessions import SessionMiddleware
 
+from app.arq_config import redis_settings
 from app.core.config import settings
 from app.core.logging import configure_logging
-from app.db.session import engine
+from app.db.session import engine as main_engine
 from app.admin import init_admin
 from app.services.websocket_manager import redis_listener
 from app.api.endpoints import (
@@ -39,93 +39,104 @@ from app.api.endpoints import (
     websockets_router, support_router, task_history_router
 )
 from fastapi_limiter import FastAPILimiter
-# Вызываем настройку логирования в самом начале
+
+
+# Логирование конфигурируем один раз при импорте
 configure_logging()
 
-# Создаем фоновую задачу для прослушивания Redis Pub/Sub для WebSockets
+
 async def run_redis_listener(redis_client):
     await redis_listener(redis_client)
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Код, который выполнится при старте приложения
-    
-    # Пул для постановки задач в очередь ARQ из API
-    arq_pool = await create_pool(redis_settings)
-    app.state.arq_pool = arq_pool
-    
-    # --- ДОБАВЛЕНО: Инициализация Rate Limiter ---
-    # Используем базу Redis №0 для limiter'а
-    limiter_redis = AsyncRedis.from_url(
-        f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/0",
-        decode_responses=True
+
+def create_app(db_engine: AsyncEngine | None = None) -> FastAPI:
+    """
+    Создает и конфигурирует экземпляр приложения FastAPI.
+    Принимает опциональный db_engine для использования в тестах.
+    """
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        # --- Код, который выполнится при старте ---
+        arq_pool = await create_pool(redis_settings)
+        app.state.arq_pool = arq_pool
+
+        limiter_redis = AsyncRedis.from_url(
+            f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/0",
+            decode_responses=True
+        )
+        await FastAPILimiter.init(limiter_redis)
+
+        redis_client = AsyncRedis.from_url(
+            f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/1",
+            decode_responses=True
+        )
+        app.state.redis_client = redis_client
+
+        listener_task = asyncio.create_task(run_redis_listener(redis_client))
+
+        yield
+
+        # --- Код, который выполнится при остановке ---
+        listener_task.cancel()
+        try:
+            await listener_task
+        except asyncio.CancelledError:
+            pass
+
+        await redis_client.aclose()
+        await limiter_redis.aclose()
+        await arq_pool.aclose()
+
+    # Создаем объект FastAPI внутри фабрики
+    app = FastAPI(
+        title="VK SMM Combine API",
+        description="API для сервиса автоматизации SMM-задач ВКонтакте.",
+        version="1.0.0",
+        lifespan=lifespan,
     )
-    await FastAPILimiter.init(limiter_redis)
-    # ---------------------------------------------
-    
-    # Клиент для WebSocket (использует базу 1)
-    redis_client = AsyncRedis.from_url(
-        f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/1", 
-        decode_responses=True
+
+    # --- Middleware ---
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=settings.SECRET_KEY
     )
-    app.state.redis_client = redis_client
-    
-    # Запускаем listener в фоновом режиме
-    listener_task = asyncio.create_task(run_redis_listener(redis_client))
-    
-    yield
-    
-    # Код, который выполнится при остановке приложения
-    listener_task.cancel()
-    try:
-        await listener_task
-    except asyncio.CancelledError:
-        pass # Ожидаемое исключение при отмене
-        
-    # ИСПРАВЛЕНИЕ ЗДЕСЬ
-    await redis_client.aclose()
-    await limiter_redis.aclose()
-    await arq_pool.aclose()
 
+    origins = [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(",")]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
-# --- ВАЖНО: Вот тот самый объект 'app', который мы пытаемся импортировать ---
-app = FastAPI(
-    title="VK SMM Combine API",
-    description="API для сервиса автоматизации SMM-задач ВКонтакте.",
-    version="1.0.0",
-    lifespan=lifespan
-)
+    # --- Подключаем админку ---
+    # Используем переданный движок для тестов, или основной движок для продакшена
+    engine_to_use = db_engine or main_engine
+    init_admin(app, engine_to_use)
 
-# --- Настройка CORS ---
-origins = [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(',')]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    # --- Подключение всех роутеров API ---
+    api_prefix = "/api/v1"
+    app.include_router(auth_router, prefix=f"{api_prefix}/auth", tags=["Authentication"])
+    app.include_router(users_router, prefix=f"{api_prefix}/users", tags=["Users"])
+    app.include_router(proxies_router, prefix=f"{api_prefix}/proxies", tags=["Proxies"])
+    app.include_router(stats_router, prefix=f"{api_prefix}/stats", tags=["Statistics"])
+    app.include_router(automations_router, prefix=f"{api_prefix}/automations", tags=["Automations"])
+    app.include_router(billing_router, prefix=f"{api_prefix}/billing", tags=["Billing"])
+    app.include_router(analytics_router, prefix=f"{api_prefix}/analytics", tags=["Analytics"])
+    app.include_router(support_router, prefix=f"{api_prefix}/support", tags=["Support"])
+    app.include_router(scenarios_router, prefix=f"{api_prefix}/scenarios", tags=["Scenarios"])
+    app.include_router(notifications_router, prefix=f"{api_prefix}/notifications", tags=["Notifications"])
+    app.include_router(posts_router, prefix=f"{api_prefix}/posts", tags=["Posts"])
+    app.include_router(teams_router, prefix=f"{api_prefix}/teams", tags=["Teams"])
+    app.include_router(websockets_router, prefix=api_prefix, tags=["WebSockets"])
+    app.include_router(tasks_router, prefix=f"{api_prefix}/tasks", tags=["Tasks"])
+    app.include_router(task_history_router, prefix=f"{api_prefix}/tasks", tags=["Tasks"])
 
-# --- Инициализация админ-панели SQLAdmin ---
-init_admin(app, engine)
+    return app
 
-# --- Подключение всех роутеров API ---
-api_prefix = "/api/v1"
-app.include_router(auth_router, prefix=f"{api_prefix}/auth", tags=["Authentication"])
-app.include_router(users_router, prefix=f"{api_prefix}/users", tags=["Users"])
-app.include_router(proxies_router, prefix=f"{api_prefix}/proxies", tags=["Proxies"])
-app.include_router(stats_router, prefix=f"{api_prefix}/stats", tags=["Statistics"])
-app.include_router(automations_router, prefix=f"{api_prefix}/automations", tags=["Automations"])
-app.include_router(billing_router, prefix=f"{api_prefix}/billing", tags=["Billing"])
-app.include_router(analytics_router, prefix=f"{api_prefix}/analytics", tags=["Analytics"])
-app.include_router(support_router, prefix=f"{api_prefix}/support", tags=["Support"])
-app.include_router(scenarios_router, prefix=f"{api_prefix}/scenarios", tags=["Scenarios"])
-app.include_router(notifications_router, prefix=f"{api_prefix}/notifications", tags=["Notifications"])
-app.include_router(posts_router, prefix=f"{api_prefix}/posts", tags=["Posts"])
-app.include_router(teams_router, prefix=f"{api_prefix}/teams", tags=["Teams"])
-app.include_router(websockets_router, prefix=api_prefix, tags=["WebSockets"])
-app.include_router(tasks_router, prefix=f"{api_prefix}/tasks", tags=["Tasks"])
-app.include_router(task_history_router, prefix=f"{api_prefix}/tasks", tags=["Tasks"])
+app = create_app()
 
 # --- backend/app\worker.py ---
 
@@ -182,82 +193,86 @@ class WorkerSettings:
 
 # --- backend/app\admin\auth.py ---
 
-import secrets
-from datetime import timedelta
-from jose import jwt, JWTError
-from fastapi import Request
-from sqladmin.authentication import AuthenticationBackend
+# backend/app/admin/auth.py
 
-from app.db.models import User
+from sqladmin.authentication import AuthenticationBackend
+from fastapi import Request
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+import jwt
+
 from app.core.config import settings
-from app.core.security import create_access_token
-from app.db.session import AsyncSessionFactory
+from app.db.models import User
 
 class AdminAuth(AuthenticationBackend):
+    def __init__(self, secret_key: str):
+        super().__init__(secret_key=secret_key)
+        self.secret_key = secret_key
+
     async def login(self, request: Request) -> bool:
         form = await request.form()
-        username, password = form.get("username"), form.get("password")
+        username = form.get("username")
+        password = form.get("password")
 
-        is_user_correct = secrets.compare_digest(username, settings.ADMIN_USER)
-        is_password_correct = secrets.compare_digest(password, settings.ADMIN_PASSWORD)
+        if username != settings.ADMIN_USER or password != settings.ADMIN_PASSWORD:
+            return False
+        
+        session: AsyncSession = request.state.session
+        
+        stmt = select(User).where(User.vk_id == int(settings.ADMIN_VK_ID))
+        result = await session.execute(stmt)
+        admin_user = result.scalar_one_or_none()
+        
+        if not admin_user or not admin_user.is_admin:
+            return False
 
-        if is_user_correct and is_password_correct:
-            access_token_expires = timedelta(hours=8)
-            token_data = {"sub": username, "scope": "admin_access"}
-            access_token = create_access_token(data=token_data, expires_delta=access_token_expires)
-            request.session.update({"token": access_token})
-            return True
-
-        return False
+        token_payload = {"sub": settings.ADMIN_USER, "scope": "admin_access"}
+        token = jwt.encode(token_payload, self.secret_key, algorithm=settings.ALGORITHM)
+        request.session.update({"token": token})
+        return True
 
     async def logout(self, request: Request) -> bool:
         request.session.clear()
         return True
 
     async def authenticate(self, request: Request) -> bool:
-        if settings.ADMIN_IP_WHITELIST:
-            allowed_ips = [ip.strip() for ip in settings.ADMIN_IP_WHITELIST.split(',')]
-            if request.client and request.client.host not in allowed_ips:
-                return False
-
         token = request.session.get("token")
+
         if not token:
             return False
 
         try:
-            payload = jwt.decode(
-                token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
-            )
+            payload = jwt.decode(token, self.secret_key, algorithms=[settings.ALGORITHM])
             if payload.get("scope") != "admin_access":
                 return False
-            
-            async with AsyncSessionFactory() as session:
-                admin_user = await session.get(User, int(settings.ADMIN_VK_ID))
-                if not admin_user or not admin_user.is_admin:
-                    return False
-
-        except JWTError:
+            return True
+        except jwt.PyJWTError:
             return False
-
-        return True
-
-authentication_backend = AdminAuth(secret_key=settings.SECRET_KEY)
 
 # --- backend/app\admin\__init__.py ---
 
-from sqladmin import Admin
-from .auth import authentication_backend
+# backend/app/admin/__init__.py
 
-# Импортируем все наши представления из модулей
-from .views.user import UserAdmin
-from .views.support import SupportTicketAdmin
-from .views.payment import PaymentAdmin
-from .views.stats import AutomationAdmin, DailyStatsAdmin, ActionLogAdmin
+from sqladmin import Admin
+from app.core.config import settings
+from .auth import AdminAuth
 
 def init_admin(app, engine):
-    admin = Admin(app, engine, authentication_backend=authentication_backend, title="SMM Combine Admin")
+    from .views.user import UserAdmin
+    from .views.support import SupportTicketAdmin
+    from .views.payment import PaymentAdmin
+    from .views.stats import AutomationAdmin, DailyStatsAdmin, ActionLogAdmin
+
+    authentication_backend = AdminAuth(secret_key=settings.SECRET_KEY)
+
     
-    # Регистрируем импортированные представления
+    admin = Admin(
+        app,
+        engine,
+        authentication_backend=authentication_backend,
+        title="SMM Combine Admin",
+    )
+
     admin.add_view(UserAdmin)
     admin.add_view(SupportTicketAdmin)
     admin.add_view(PaymentAdmin)
@@ -265,12 +280,17 @@ def init_admin(app, engine):
     admin.add_view(DailyStatsAdmin)
     admin.add_view(ActionLogAdmin)
 
+    app.state.admin = admin
+
 # --- backend/app\admin\views\payment.py ---
 
+# backend/app/admin/views/payment.py
 from sqladmin import ModelView
-from app.db.models import Payment
+from app.db.models import Payment, PaymentStatus
+from sqladmin.filters import AllUniqueStringValuesFilter
 
 class PaymentAdmin(ModelView, model=Payment):
+    identity = "payment"
     name_plural = "Платежи"
     icon = "fa-solid fa-ruble-sign"
     can_create = False
@@ -279,22 +299,61 @@ class PaymentAdmin(ModelView, model=Payment):
     
     column_list = [Payment.id, Payment.user, Payment.plan_name, Payment.amount, Payment.status, Payment.created_at]
     column_searchable_list = [Payment.user_id, "user.vk_id"]
-    column_filters = [Payment.status, Payment.plan_name]
+    
+    column_filters = [
+        AllUniqueStringValuesFilter(Payment.status),
+        AllUniqueStringValuesFilter(Payment.plan_name),
+    ]
+    
     column_default_sort = ("created_at", True)
 
 # --- backend/app\admin\views\stats.py ---
 
+# backend/app/admin/views/stats.py
 from sqladmin import ModelView
-from app.db.models import Automation, DailyStats, ActionLog
+from app.db.models import (
+    Automation, DailyStats, ActionLog
+)
+from sqladmin.filters import AllUniqueStringValuesFilter, BooleanFilter
+import enum
 
 class AutomationAdmin(ModelView, model=Automation):
+    identity = "automation"
     name_plural = "Автоматизации"
     icon = "fa-solid fa-robot"
-    column_list = [Automation.user, Automation.automation_type, Automation.is_active, Automation.last_run_at]
-    column_searchable_list = [Automation.user_id, "user.vk_id"]
-    column_filters = [Automation.automation_type, Automation.is_active]
+    can_create = False
+    can_edit = True
+    can_delete = False
 
+    # Используем СТРОКУ для имени связи
+    column_list = [
+        Automation.id,
+        "user",
+        Automation.automation_type,
+        Automation.is_active,
+        Automation.last_run_at
+    ]
+
+    # Явно указываем, что для списка нужно ЗАГРУЗИТЬ связь
+    column_joined_list = [Automation.user]
+    
+    column_searchable_list = [Automation.user_id, "user.vk_id"]
+
+    # Используем СТРОКУ в качестве ключа для форматтера
+    column_formatters = {
+        "user": lambda m, a: f"User {m.user.vk_id}" if m.user else "Unknown",
+        Automation.automation_type: lambda m, a: m.automation_type.value if isinstance(m.automation_type, enum.Enum) else (m.automation_type or "Не указан"),
+        Automation.is_active: lambda m, a: "Active" if m.is_active else "Inactive",
+    }
+
+    column_filters = [
+        BooleanFilter(Automation.is_active),
+    ]
+
+
+# !!! ВОЗВРАЩАЕМ НЕДОСТАЮЩИЙ КЛАСС !!!
 class DailyStatsAdmin(ModelView, model=DailyStats):
+    identity = "daily-stats"
     name_plural = "Дневная статистика"
     icon = "fa-solid fa-chart-line"
     can_create = False
@@ -302,130 +361,196 @@ class DailyStatsAdmin(ModelView, model=DailyStats):
     column_list = [c.name for c in DailyStats.__table__.c]
     column_default_sort = ("date", True)
     column_searchable_list = [DailyStats.user_id]
+    
+    column_formatters = {
+        DailyStats.user_id: lambda m, a: f"User {m.user_id}"
+    }
+
 
 class ActionLogAdmin(ModelView, model=ActionLog):
+    identity = "action-log"
     name_plural = "Логи действий"
     icon = "fa-solid fa-clipboard-list"
     can_create = False
     can_edit = False
-    column_list = [ActionLog.id, ActionLog.user, ActionLog.action_type, ActionLog.message, ActionLog.status, ActionLog.timestamp]
+    # Применяем тот же паттерн
+    column_list = [ActionLog.id, "user", ActionLog.action_type, ActionLog.message, ActionLog.status, ActionLog.timestamp]
+    
+    column_joined_list = [ActionLog.user]
+    
     column_searchable_list = [ActionLog.user_id, "user.vk_id"]
-    column_filters = [ActionLog.action_type, ActionLog.status]
+    column_filters = [
+        AllUniqueStringValuesFilter(ActionLog.action_type),
+        AllUniqueStringValuesFilter(ActionLog.status),
+    ]
     column_default_sort = ("timestamp", True)
+    
+    column_formatters = {
+        "user": lambda m, a: f"User {m.user.vk_id}" if m.user else "Unknown"
+    }
 
 # --- backend/app\admin\views\support.py ---
 
+# backend/app/admin/views/support.py
 import datetime
 from fastapi import Request
 from sqladmin import ModelView, action
-from app.db.models import SupportTicket, TicketMessage, TicketStatus, User
-from app.core.config import settings
-from app.db.session import AsyncSessionFactory
+from sqlalchemy.ext.asyncio import AsyncSession
+from datetime import timezone
+
+from app.db.models import SupportTicket, TicketMessage, TicketStatus
+from sqladmin.filters import AllUniqueStringValuesFilter
+
 
 class TicketMessageAdmin(ModelView, model=TicketMessage):
-    """Inline-представление для сообщений внутри тикета."""
+    # Этот класс не используется в списке, но исправляем для консистентности
     can_create = True
     can_edit = False
     can_delete = False
     can_list = False
-    column_list = [TicketMessage.author, TicketMessage.message, TicketMessage.created_at]
-    
-    async def on_model_change(self, data: dict, model: TicketMessage, is_created: bool, request: Request) -> None:
-        if is_created:
-            async with AsyncSessionFactory() as session:
-                admin_user = await session.get(User, int(settings.ADMIN_VK_ID))
-                if admin_user:
-                    model.author_id = admin_user.id
-                    
-                    # Обновляем статус тикета и время
-                    ticket = await session.get(SupportTicket, model.ticket_id)
-                    if ticket:
-                        ticket.status = TicketStatus.IN_PROGRESS
-                        ticket.updated_at = datetime.datetime.utcnow()
+    column_list = ["author", TicketMessage.message, TicketMessage.created_at]
+    column_details_list = [TicketMessage.author] 
+
+    column_formatters = {
+        "author": lambda m, a: f"User {m.author.vk_id}" if m.author else "Unknown"
+    }
+
 
 class SupportTicketAdmin(ModelView, model=SupportTicket):
+    identity = "support-ticket"
     name = "Тикет"
     name_plural = "Техподдержка"
     icon = "fa-solid fa-headset"
-    
-    column_list = [SupportTicket.id, SupportTicket.user, SupportTicket.subject, SupportTicket.status, SupportTicket.updated_at]
+    can_edit = True
+
+    # ИЗМЕНЕНИЕ: Используем строку "user"
+    column_list = [SupportTicket.id, "user", SupportTicket.subject, SupportTicket.status, SupportTicket.updated_at]
+    # ИЗМЕНЕНИЕ: Убираем get_value и добавляем formatters + select_related
+    column_select_related = [SupportTicket.user] # Эффективная загрузка данных
     column_details_list = [SupportTicket.id, SupportTicket.user, SupportTicket.subject, SupportTicket.status, SupportTicket.created_at, SupportTicket.updated_at, SupportTicket.messages]
-    
     column_searchable_list = [SupportTicket.id, SupportTicket.subject, "user.vk_id"]
-    column_filters = [SupportTicket.status]
+    column_filters = [AllUniqueStringValuesFilter(SupportTicket.status)]
     column_default_sort = ("updated_at", True)
-    
-    form_excluded_columns = [SupportTicket.created_at, SupportTicket.updated_at]
-    form_include_related = {"messages": {"model": TicketMessageAdmin}}
+    form_excluded_columns = [SupportTicket.created_at, SupportTicket.updated_at, SupportTicket.messages]
+
+    column_formatters = {
+        "user": lambda m, a: f"User {m.user.vk_id}" if m.user else "Unknown"
+    }
+
+    async def on_model_change(self, data: dict, model: SupportTicket, is_created: bool, request: Request) -> None:
+        if is_created:
+            return
+
+        session: AsyncSession = request.state.session
+        
+        if 'status' in data:
+            try:
+                status_str = data['status'].upper()
+                if status_str in [s.name for s in TicketStatus]:
+                    model.status = TicketStatus[status_str]
+            except (KeyError, AttributeError):
+                pass
+        
+        model.updated_at = datetime.datetime.now(timezone.utc)
+
 
     @action(
         name="close_tickets", label="Закрыть тикет(ы)",
         confirmation_message="Уверены, что хотите закрыть выбранные тикеты?",
         add_in_list=True, add_in_detail=True
     )
-    async def close_tickets_action(self, request: Request, pks: list[int]):
-        async with AsyncSessionFactory() as session:
-            for pk in pks:
-                ticket = await session.get(SupportTicket, pk)
-                if ticket:
-                    ticket.status = TicketStatus.CLOSED
-            await session.commit()
+    async def close_tickets(self, request: Request, pks: list[int]):
+        session: AsyncSession = request.state.session
+        for pk in pks:
+            ticket = await session.get(SupportTicket, pk)
+            if ticket:
+                ticket.status = TicketStatus.CLOSED
+                ticket.updated_at = datetime.datetime.now(timezone.utc)
+        await session.commit()
         return {"message": f"Закрыто тикетов: {len(pks)}"}
 
 # --- backend/app\admin\views\user.py ---
 
-# Содержит UserAdmin
+# backend/app/admin/views/user.py
 from sqladmin import ModelView, action
-from app.db.models import User
-from datetime import timedelta, datetime, timezone
 from fastapi import Request
-from sqladmin import ModelView, action
+from datetime import datetime, timedelta, timezone
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import User
-from app.db.session import AsyncSessionFactory
+from sqladmin.filters import AllUniqueStringValuesFilter, BooleanFilter
 from app.core.plans import get_limits_for_plan
+from app.core.constants import PlanName
 
 class UserAdmin(ModelView, model=User):
+    identity = "user"
     name_plural = "Пользователи"
     icon = "fa-solid fa-users"
-    
+
     column_list = [
-        User.id, User.vk_id, User.plan, User.plan_expires_at,
-        User.is_admin, User.created_at
+        User.id,
+        User.vk_id,
+        User.plan,
+        User.plan_expires_at,
+        User.is_admin,
+        User.created_at,
     ]
-    column_formatters = {
-        User.vk_id: lambda m, a: f'<a href="https://vk.com/id{m.vk_id}" target="_blank">{m.vk_id}</a>'
-    }
-    column_searchable_list = [User.vk_id, User.id]
-    column_filters = [User.plan, User.is_admin]
-    column_default_sort = ("created_at", True)
+    column_searchable_list = [User.id, User.vk_id]
     
-    form_columns = [
-        User.plan, User.plan_expires_at, User.is_admin, User.daily_likes_limit,
-        User.daily_add_friends_limit, User.daily_message_limit, User.daily_posts_limit,
+    column_filters = [
+        AllUniqueStringValuesFilter(User.plan),
+        BooleanFilter(User.is_admin),
     ]
+
+    column_default_sort = ("created_at", True)
+ 
+    form_columns = [
+        User.plan,
+        User.plan_expires_at,
+        User.is_admin,
+        User.daily_likes_limit,
+        User.daily_add_friends_limit,
+        User.daily_message_limit,
+        User.daily_posts_limit,
+    ]
+    
+    # ИЗМЕНЕНИЕ: Заменяем get_value на column_formatters
+    column_formatters = {
+        User.plan: lambda m, a: m.plan or "Не указан",
+        User.plan_expires_at: lambda m, a: m.plan_expires_at.strftime('%Y-%m-%d %H:%M') if m.plan_expires_at else "Не истекает",
+    }
     
     @action(
-        name="extend_subscription", label="Продлить подписку (+30 дней)",
+        name="extend_subscription",
+        label="Продлить подписку (+30 дней)",
         confirmation_message="Уверены, что хотите продлить подписку на 30 дней?",
-        add_in_detail=True, add_in_list=True,
+        add_in_list=True,
+        add_in_detail=True,
     )
-    async def extend_subscription_action(self, request: Request, pks: list[int]):
-        async with AsyncSessionFactory() as session:
-            for pk in pks:
-                user = await session.get(User, pk)
-                if not user: continue
-                
-                start_date = user.plan_expires_at if user.plan_expires_at and user.plan_expires_at > datetime.now(timezone.utc) else datetime.now(timezone.utc)
-                user.plan_expires_at = start_date + timedelta(days=30)
-                
-                if user.plan == "Expired":
-                    user.plan = "Plus"
-                    new_limits = get_limits_for_plan("Plus")
-                    for key, value in new_limits.items():
-                        setattr(user, key, value)
+    async def extend_subscription(self, request: Request, pks: list[int]):
+        session: AsyncSession = request.state.session
 
-            await session.commit()
-        return {"message": f"Подписка продлена для {len(pks)} пользователей."}
+        successful_count = 0
+        for pk_str in pks:
+            user = await session.get(User, int(pk_str))
+            if not user:
+                continue
+
+            now = datetime.now(timezone.utc)
+            start_date = user.plan_expires_at if user.plan_expires_at and user.plan_expires_at > now else now
+            user.plan_expires_at = start_date + timedelta(days=30)
+
+            if user.plan == PlanName.EXPIRED.name:
+                user.plan = PlanName.PLUS.name
+                new_limits = get_limits_for_plan(PlanName.PLUS)
+                for k, v in new_limits.items():
+                    if hasattr(user, k):
+                        setattr(user, k, v)
+            
+            successful_count += 1
+        
+        await session.commit()
+        
+        return {"message": f"Подписка продлена для {successful_count} пользователей."}
 
 # --- backend/app\admin\views\__init__.py ---
 
@@ -547,8 +672,11 @@ async def get_current_user_from_ws(
 # --- START OF FILE backend/app/api/endpoints/analytics.py ---
 
 import datetime
+from unittest.mock import AsyncMock
 from fastapi import APIRouter, Depends, Query
 from fastapi_cache.decorator import cache
+from httpx import AsyncClient
+import pytest
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -717,6 +845,59 @@ async def get_post_activity_heatmap(
         return PostActivityHeatmapResponse(data=[[0]*24]*7)
         
     return PostActivityHeatmapResponse(data=heatmap_data.heatmap_data.get("data", [[0]*24]*7))
+
+@pytest.mark.parametrize(
+    "mock_friends_list",
+    [
+        # Случай 1: У друга нет ключа 'city'
+        [{"id": 1, "sex": 1, "bdate": "1.1.2000"}],
+        # Случай 2: У друга нет ключа 'bdate'
+        [{"id": 2, "sex": 2, "city": {"title": "Москва"}}],
+        # Случай 3: Друг деактивирован ("собачка")
+        [{"id": 3, "deactivated": "deleted"}],
+        # Случай 4: Пустой список друзей
+        [],
+    ]
+)
+async def test_get_audience_analytics_robustness(
+    async_client: AsyncClient, auth_headers: dict, mocker, mock_friends_list
+):
+    """
+    Тест проверяет, что эндпоинт /analytics/audience не падает с ошибкой 500,
+    если VK API возвращает друзей с неполными данными.
+    """
+    # Arrange: Мокаем сервис, который вызывается внутри эндпоинта
+    mock_service_class = mocker.patch('app.api.endpoints.analytics.AnalyticsService')
+    mock_instance = mock_service_class.return_value
+    
+    # Мокаем метод, который делает реальную работу, чтобы он вернул нужный нам результат
+    # В данном случае, мы можем просто замокать его так, чтобы он не делал ничего,
+    # а сам эндпоинт протестировать, или полностью замокать его ответ.
+    # Давайте протестируем сам сервис.
+    mock_vk_api = AsyncMock()
+    mock_vk_api.get_user_friends.return_value = mock_friends_list
+    
+    # "Внедряем" мок VK API в реальный экземпляр сервиса
+    mocker.patch('app.services.analytics_service.AnalyticsService._initialize_vk_api', new_callable=AsyncMock)
+    
+    # Act
+    # Мы не можем напрямую вызвать эндпоинт и одновременно мокать сервис внутри него так просто.
+    # Поэтому мы протестируем сам сервис, который является ядром логики эндпоинта.
+    from app.services.analytics_service import AnalyticsService
+    from app.db.session import get_db
+    
+    async for db_session in get_db(): # Получаем сессию для инициализации
+        service = AnalyticsService(db=db_session, user=await db_session.get(User, 1), emitter=AsyncMock())
+        service.vk_api = mock_vk_api # Внедряем мок
+        
+        # Вызываем метод и ожидаем, что он не вызовет исключений
+        try:
+            response_model = await service.get_audience_distribution()
+            # Проверяем, что модель создана корректно
+            assert isinstance(response_model, dict) # get_audience_distribution вернет словарь
+            assert "city_distribution" in response_model
+        except Exception as e:
+            pytest.fail(f"Сервис упал на неполных данных от VK: {e}")
 
 # --- backend/app\api\endpoints\auth.py ---
 
@@ -1065,6 +1246,14 @@ async def create_payment(
     final_price = base_price * months
 
     period_info = next((p for p in plan_info.periods if p.months == months), None)
+    if months > 1 and not period_info:
+        allowed_periods = ", ".join(str(p.months) for p in plan_info.periods)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Недопустимый период подписки. Доступные периоды (в месяцах): 1, {allowed_periods}"
+        )
+
+        
     if period_info:
         final_price *= (1 - period_info.discount_percent / 100)
     
@@ -1918,9 +2107,7 @@ async def get_friends_analytics(current_user: User = Depends(get_current_active_
             await vk_api.close()
 
     analytics = {"male_count": 0, "female_count": 0, "other_count": 0}
-    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
-    # Проверяем наличие ответа и ключа 'items'
-    if friends_response and friends_response.get('items'):
+    if friends_response and isinstance(friends_response.get('items'), list):
         # Итерируемся по списку друзей, а не по всему словарю
         for friend in friends_response['items']:
             sex = friend.get("sex")
@@ -3636,6 +3823,39 @@ class TaskKey(str, Enum):
     BIRTHDAY_CONGRATULATION = "birthday_congratulation"
     ETERNAL_ONLINE = "eternal_online"
 
+# --- НАЧАЛО ИЗМЕНЕНИЯ: Перенесенные Enums ---
+class AutomationType(str, Enum):
+    ACCEPT_FRIENDS = "accept_friends"
+    LIKE_FEED = "like_feed"
+    ADD_RECOMMENDED = "add_recommended"
+    VIEW_STORIES = "view_stories"
+    REMOVE_FRIENDS = "remove_friends"
+    MASS_MESSAGING = "mass_messaging"
+    LEAVE_GROUPS = "leave_groups"
+    JOIN_GROUPS = "join_groups"
+    BIRTHDAY_CONGRATULATION = "birthday_congratulation"
+    ETERNAL_ONLINE = "eternal_online"
+
+class ActionType(str, Enum):
+    LIKE_FEED = "like_feed"
+    ADD_FRIENDS = "add_recommended"
+    ACCEPT_FRIENDS = "accept_friends"
+    REMOVE_FRIENDS = "remove_friends"
+    VIEW_STORIES = "view_stories"
+    BIRTHDAY_CONGRATULATION = "birthday_congratulation"
+    MASS_MESSAGING = "mass_messaging"
+    ETERNAL_ONLINE = "eternal_online"
+    LEAVE_GROUPS = "leave_groups"
+    JOIN_GROUPS = "join_groups"
+    SYSTEM_NOTIFICATION = "system_notification"
+
+class ActionStatus(str, Enum):
+    SUCCESS = "success"
+    FAILURE = "failure"
+    WARNING = "warning"
+    INFO = "info"
+# --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
 class AutomationGroup(str, Enum):
     STANDARD = "standard"
     ONLINE = "online"
@@ -4120,10 +4340,24 @@ class FriendRequestLog(Base):
 
 # --- backend/app\db\models\payment.py ---
 
+# backend/app/db/models/payment.py
+
 import datetime
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Float
+# --- НАЧАЛО ИСПРАВЛЕНИЯ ---
+import enum
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Float, Enum
+# --- КОНЕЦ ИСПРАВЛЕНИЯ ---
 from sqlalchemy.orm import relationship
 from app.db.base import Base
+
+# --- НАЧАЛО ИСПРАВЛЕНИЯ: Добавлено отсутствующее перечисление ---
+class PaymentStatus(str, enum.Enum):
+    PENDING = "pending"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+# --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+
 
 class Payment(Base):
     __tablename__ = "payments"
@@ -4131,7 +4365,7 @@ class Payment(Base):
     payment_system_id = Column(String, unique=True, index=True, nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     amount = Column(Float, nullable=False)
-    status = Column(String, default="pending", nullable=False)
+    status = Column(Enum(PaymentStatus), default=PaymentStatus.PENDING, nullable=False)
     plan_name = Column(String, nullable=False)
     months = Column(Integer, nullable=False, default=1)
     created_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow)
@@ -4210,6 +4444,8 @@ class TicketMessage(Base):
 
 # --- backend/app\db\models\task.py ---
 
+# backend/app/db/models/task.py
+
 from datetime import datetime, UTC
 import enum
 from sqlalchemy import (
@@ -4219,15 +4455,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 from app.db.base import Base
 from app.db.enums import ScenarioStepType, ScheduledPostStatus
-
-class ScenarioStepType(enum.Enum):
-    action = "action"
-    condition = "condition"
-
-class ScheduledPostStatus(enum.Enum):
-    scheduled = "scheduled"
-    published = "published"
-    failed = "failed"
+from app.core.constants import AutomationType, ActionType, ActionStatus
 
 class TaskHistory(Base):
     __tablename__ = "task_history"
@@ -4247,12 +4475,12 @@ class Automation(Base):
     __tablename__ = "automations"
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    automation_type = Column(String, nullable=False, index=True)
+    automation_type = Column(Enum(AutomationType), nullable=False, index=True) # <-- Используется импортированный Enum
     is_active = Column(Boolean, default=False, nullable=False)
     settings = Column(JSON, nullable=True)
     last_run_at = Column(DateTime(timezone=True), nullable=True)
     user = relationship("User", back_populates="automations")
-    __table_args__ = (UniqueConstraint('user_id', 'automation_type', name='_user_automation_uc'),)
+    __table__args__ = (UniqueConstraint('user_id', 'automation_type', name='_user_automation_uc'),)
 
 class Scenario(Base):
     __tablename__ = "scenarios"
@@ -4263,10 +4491,8 @@ class Scenario(Base):
     schedule = Column(String, nullable=False)
     is_active = Column(Boolean, default=False, nullable=False)
     
-    # --- ИЗМЕНЕНИЕ: Столбец для ID, а не сама связь ---
     first_step_id = Column(Integer, nullable=True)
 
-    # Отношения
     user = relationship("User", back_populates="scenarios")
     steps = relationship(
         "ScenarioStep", 
@@ -4318,15 +4544,15 @@ class SentCongratulation(Base):
     friend_vk_id = Column(BigInteger, nullable=False, index=True)
     year = Column(Integer, nullable=False)
     user = relationship("User")
-    __table_args__ = (UniqueConstraint('user_id', 'friend_vk_id', 'year', name='_user_friend_year_uc'),)
+    __table__args__ = (UniqueConstraint('user_id', 'friend_vk_id', 'year', name='_user_friend_year_uc'),)
 
 class ActionLog(Base):
     __tablename__ = "action_logs"
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    action_type = Column(String, nullable=False, index=True)
+    action_type = Column(Enum(ActionType), nullable=False, index=True) # <-- Используется импортированный Enum
     message = Column(Text, nullable=False)
-    status = Column(String, nullable=False)
+    status = Column(Enum(ActionStatus), nullable=False) # <-- Используется импортированный Enum
     timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
     user = relationship("User")
 
@@ -4341,6 +4567,7 @@ from sqlalchemy.orm import relationship
 from app.db.base import Base
 from app.db.enums import DelayProfile, TeamMemberRole
 from app.core.constants import PlanName
+
 
 class User(Base):
     __tablename__ = "users"
@@ -4360,9 +4587,7 @@ class User(Base):
     delay_profile = Column(Enum(DelayProfile), nullable=False, server_default=DelayProfile.normal.name)
     analytics_settings_posts_count = Column(Integer, nullable=False, server_default=text('100'))
     analytics_settings_photos_count = Column(Integer, nullable=False, server_default=text('200'))
-
-    # Связи остаются такими же
-    proxies = relationship("Proxy", back_populates="user", cascade="all, delete-orphan", lazy="selectin")
+    proxies = relationship("Proxy", back_populates="user", cascade="all, delete-orphan", lazy="select")
     task_history = relationship("TaskHistory", back_populates="user", cascade="all, delete-orphan")
     daily_stats = relationship("DailyStats", back_populates="user", cascade="all, delete-orphan")
     automations = relationship("Automation", back_populates="user", cascade="all, delete-orphan")
@@ -4376,6 +4601,7 @@ class User(Base):
     scheduled_posts = relationship("ScheduledPost", back_populates="user", cascade="all, delete-orphan", foreign_keys="[ScheduledPost.user_id]")
     owned_team = relationship("Team", back_populates="owner", uselist=False, cascade="all, delete-orphan")
     team_membership = relationship("TeamMember", back_populates="user", uselist=False, cascade="all, delete-orphan")
+
 
 class Team(Base):
     __tablename__ = "teams"
@@ -5790,7 +6016,7 @@ class OutgoingRequestService(BaseVKService):
             return " ".join(final_results)
 
         finally:
-            await redis_lock_client.close()
+            await redis_lock_client.aclose()
 
     async def _like_user_content(self, user_id: int, profile: Dict[str, Any], config: LikeAfterAddConfig, stats: DailyStats) -> list[str]:
         # ... (код без изменений)
@@ -6739,6 +6965,9 @@ async def is_token_valid(vk_token: str) -> Optional[int]:
 # --- backend/app\tasks\cron_jobs.py ---
 
 # --- backend/app/tasks/cron_jobs.py ---
+import structlog
+from redis.asyncio import Redis
+
 from app.tasks.logic.analytics_jobs import (
     _aggregate_daily_stats_async,
     _generate_all_heatmaps_async,
@@ -6747,27 +6976,68 @@ from app.tasks.logic.analytics_jobs import (
 )
 from app.tasks.logic.maintenance_jobs import _check_expired_plans_async
 from app.tasks.logic.automation_jobs import _run_daily_automations_async
+from app.db.session import AsyncSessionFactory
+from app.core.config import settings
+from app.core.constants import CronSettings
+
+log = structlog.get_logger(__name__)
+
+# --- ИЗМЕНЕНИЕ: Все функции теперь создают сессию и передают ее в логику ---
 
 async def aggregate_daily_stats_job(ctx):
-    await _aggregate_daily_stats_async()
+    async with AsyncSessionFactory() as session:
+        async with session.begin():
+            await _aggregate_daily_stats_async(session=session)
 
 async def snapshot_all_users_metrics_job(ctx):
-    await _snapshot_all_users_metrics_async()
+    async with AsyncSessionFactory() as session:
+        async with session.begin():
+            await _snapshot_all_users_metrics_async(session=session)
 
 async def check_expired_plans_job(ctx):
-    await _check_expired_plans_async()
+    async with AsyncSessionFactory() as session:
+        async with session.begin():
+            await _check_expired_plans_async(session=session)
 
 async def generate_all_heatmaps_job(ctx):
-    await _generate_all_heatmaps_async()
+    async with AsyncSessionFactory() as session:
+        async with session.begin():
+            await _generate_all_heatmaps_async(session=session)
 
 async def update_friend_request_statuses_job(ctx):
-    await _update_friend_request_statuses_async()
+    async with AsyncSessionFactory() as session:
+        async with session.begin():
+            await _update_friend_request_statuses_async(session=session)
 
 async def run_standard_automations_job(ctx):
-    await _run_daily_automations_async(automation_group='standard')
+    redis_lock_client = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/2", decode_responses=True)
+    lock_key = "lock:task:run_automations:standard"
+    if not await redis_lock_client.set(lock_key, "1", ex=CronSettings.AUTOMATION_JOB_LOCK_EXPIRATION_SECONDS, nx=True):
+        await redis_lock_client.close()
+        return
+
+    try:
+        async with AsyncSessionFactory() as session:
+            async with session.begin():
+                await _run_daily_automations_async(session, ctx['redis_pool'], automation_group='standard')
+    finally:
+        await redis_lock_client.delete(lock_key)
+        await redis_lock_client.close()
 
 async def run_online_automations_job(ctx):
-    await _run_daily_automations_async(automation_group='online')
+    redis_lock_client = Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/2", decode_responses=True)
+    lock_key = "lock:task:run_automations:online"
+    if not await redis_lock_client.set(lock_key, "1", ex=CronSettings.AUTOMATION_JOB_LOCK_EXPIRATION_SECONDS, nx=True):
+        await redis_lock_client.close()
+        return
+
+    try:
+        async with AsyncSessionFactory() as session:
+            async with session.begin():
+                await _run_daily_automations_async(session, ctx['redis_pool'], automation_group='online')
+    finally:
+        await redis_lock_client.delete(lock_key)
+        await redis_lock_client.close()
 
 # --- backend/app\tasks\maintenance.py ---
 
@@ -7257,204 +7527,173 @@ PREVIEW_SERVICE_MAP = {
 
 # --- backend/app\tasks\logic\analytics_jobs.py ---
 
-# --- START OF FILE backend/app/tasks/logic/analytics_jobs.py ---
+# --- backend/app/tasks/logic/analytics_jobs.py ---
 
 import datetime
 import structlog
 import pytz
-from contextlib import asynccontextmanager
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.db.session import AsyncSessionFactory
 from app.db.models import (
     DailyStats, WeeklyStats, MonthlyStats, User, FriendRequestLog, FriendRequestStatus,
     ProfileMetric
 )
-from app.services.event_emitter import SystemLogEmitter
 from app.services.vk_api import VKAPI, VKAuthError
 from app.core.security import decrypt_data
 from app.services.analytics_service import AnalyticsService
 from app.services.profile_analytics_service import ProfileAnalyticsService
+from app.services.event_emitter import SystemLogEmitter
 
 log = structlog.get_logger(__name__)
 
-@asynccontextmanager
-async def get_session(provided_session: AsyncSession | None = None):
-    """
-    Контекстный менеджер для получения сессии БД.
-    Если сессия передана извне (как в тестах), использует ее.
-    Иначе, создает новую сессию (как в production).
-    """
-    if provided_session:
-        yield provided_session
-    else:
-        async with AsyncSessionFactory() as session:
-            yield session
+# --- ИЗМЕНЕНИЕ: Все функции теперь принимают `session` как аргумент ---
 
-async def _aggregate_daily_stats_async():
+async def _aggregate_daily_stats_async(session: AsyncSession):
     """Агрегирует вчерашнюю дневную статистику в недельную и месячную."""
-    async with AsyncSessionFactory() as session:
-        yesterday = datetime.date.today() - datetime.timedelta(days=1)
+    yesterday = datetime.date.today() - datetime.timedelta(days=1)
+    
+    stmt = select(
+        DailyStats.user_id,
+        func.sum(DailyStats.likes_count).label("likes"),
+        func.sum(DailyStats.friends_added_count).label("friends"),
+        func.sum(DailyStats.friend_requests_accepted_count).label("accepted")
+    ).where(DailyStats.date == yesterday).group_by(DailyStats.user_id)
+    
+    daily_sums = (await session.execute(stmt)).all()
+    if not daily_sums:
+        return
+
+    week_id, month_id = yesterday.strftime('%Y-%W'), yesterday.strftime('%Y-%m')
+
+    for stat_type, identifier in [(WeeklyStats, week_id), (MonthlyStats, month_id)]:
+        values_to_upsert = []
+        for r in daily_sums:
+            values_to_upsert.append({
+                "user_id": r.user_id,
+                f"{'weekly_stats'.replace('s', '') if stat_type is WeeklyStats else 'monthly_stats'.replace('s', '')}_identifier": identifier,
+                "likes_count": r.likes,
+                "friends_added_count": r.friends,
+                "friend_requests_accepted_count": r.accepted
+            })
+
+        if not values_to_upsert:
+            continue
         
-        stmt = select(
-            DailyStats.user_id,
-            func.sum(DailyStats.likes_count).label("likes"),
-            func.sum(DailyStats.friends_added_count).label("friends"),
-            func.sum(DailyStats.friend_requests_accepted_count).label("accepted")
-        ).where(DailyStats.date == yesterday).group_by(DailyStats.user_id)
+        from sqlalchemy.dialects.postgresql import insert
         
-        daily_sums = (await session.execute(stmt)).all()
-        if not daily_sums:
-            return
-
-        week_id, month_id = yesterday.strftime('%Y-%W'), yesterday.strftime('%Y-%m')
-
-        for stat_type, identifier in [(WeeklyStats, week_id), (MonthlyStats, month_id)]:
-            values_to_upsert = []
-            for r in daily_sums:
-                values_to_upsert.append({
-                    "user_id": r.user_id,
-                    f"{stat_type.__tablename__.replace('s', '')}_identifier": identifier,
-                    "likes_count": r.likes,
-                    "friends_added_count": r.friends,
-                    "friend_requests_accepted_count": r.accepted
-                })
-
-            if not values_to_upsert:
-                continue
-            
-            # В SQLAlchemy 2.0+ on_conflict_do_update строится немного иначе
-            from sqlalchemy.dialects.postgresql import insert
-            
-            insert_stmt = insert(stat_type).values(values_to_upsert)
-            
-            # Определяем, как обновлять поля при конфликте
-            update_dict = {
-                'likes_count': getattr(stat_type, 'likes_count') + insert_stmt.excluded.likes_count,
-                'friends_added_count': getattr(stat_type, 'friends_added_count') + insert_stmt.excluded.friends_added_count,
-                'friend_requests_accepted_count': getattr(stat_type, 'friend_requests_accepted_count') + insert_stmt.excluded.friend_requests_accepted_count
-            }
-            
-            # Собираем окончательный запрос
-            final_stmt = insert_stmt.on_conflict_do_update(
-                index_elements=['user_id', f"{stat_type.__tablename__.replace('s', '')}_identifier"],
-                set_=update_dict
-            )
-            await session.execute(final_stmt)
+        insert_stmt = insert(stat_type).values(values_to_upsert)
         
-        await session.commit()
-        log.info("analytics.aggregated_daily_stats", count=len(daily_sums), date=yesterday.isoformat())
+        update_dict = {
+            'likes_count': getattr(stat_type, 'likes_count') + insert_stmt.excluded.likes_count,
+            'friends_added_count': getattr(stat_type, 'friends_added_count') + insert_stmt.excluded.friends_added_count,
+            'friend_requests_accepted_count': getattr(stat_type, 'friend_requests_accepted_count') + insert_stmt.excluded.friend_requests_accepted_count
+        }
+        
+        index_elements_key = 'weekly_stats_identifier' if stat_type is WeeklyStats else 'monthly_stats_identifier'
+        final_stmt = insert_stmt.on_conflict_do_update(
+            index_elements=['user_id', index_elements_key],
+            set_=update_dict
+        )
+        await session.execute(final_stmt)
 
-async def _snapshot_all_users_metrics_async(session_for_test: AsyncSession | None = None):
+    log.info("analytics.aggregated_daily_stats", count=len(daily_sums), date=yesterday.isoformat())
+
+
+async def _snapshot_all_users_metrics_async(session: AsyncSession):
     """Создает снимок ключевых метрик профиля для всех активных пользователей."""
-    async with get_session(session_for_test) as session:
-        now = datetime.datetime.now(datetime.UTC)
-        stmt = select(User).where(
-            (User.plan_expires_at == None) | (User.plan_expires_at > now)
-        )
-        result = await session.execute(stmt)
-        active_users = result.scalars().all()
+    now = datetime.datetime.now(pytz.utc)
+    stmt = select(User).where(
+        (User.plan_expires_at == None) | (User.plan_expires_at > now)
+    )
+    result = await session.execute(stmt)
+    active_users = result.scalars().all()
 
-        if not active_users:
-            log.info("snapshot_metrics_task.no_active_users")
-            return
+    if not active_users:
+        log.info("snapshot_metrics_task.no_active_users")
+        return
 
-        log.info("snapshot_metrics_task.start", count=len(active_users))
+    log.info("snapshot_metrics_task.start", count=len(active_users))
 
-        for user in active_users:
-            try:
-                async with session.begin_nested():
-                    # Создаем сервис с той же сессией
-                    service = ProfileAnalyticsService(db=session, user=user, emitter=SystemLogEmitter("snapshot_metrics"))
-                    await service.snapshot_profile_metrics()
-                # begin_nested() автоматически коммитит, если не было ошибок
-            except VKAuthError:
-                log.warn("snapshot_metrics_task.auth_error", user_id=user.id)
-                # Роллбэк для этого пользователя произойдет автоматически при выходе из блока `begin_nested`
-            except Exception as e:
-                log.error("snapshot_metrics_task.user_error", user_id=user.id, error=str(e), exc_info=True)
-
-        if not session_for_test:
-            await session.commit()
-
-        log.info("snapshot_metrics_task.finished")
+    for user in active_users:
+        try:
+            async with session.begin_nested():
+                service = ProfileAnalyticsService(db=session, user=user, emitter=SystemLogEmitter("snapshot_metrics"))
+                await service.snapshot_profile_metrics()
+        except VKAuthError:
+            log.warn("snapshot_metrics_task.auth_error", user_id=user.id)
+        except Exception as e:
+            log.error("snapshot_metrics_task.user_error", user_id=user.id, error=str(e), exc_info=True)
+    log.info("snapshot_metrics_task.finished")
 
 
-async def _generate_all_heatmaps_async():
+async def _generate_all_heatmaps_async(session: AsyncSession):
     """Генерирует тепловые карты активности для всех пользователей с доступом к фиче."""
-    async with AsyncSessionFactory() as session:
-        users = (await session.execute(select(User).where(User.plan.in_(['PLUS', 'PRO', 'AGENCY'])))).scalars().all()
-        if not users: return
-        
-        log.info("analytics.heatmap_generation_started", count=len(users))
-        for user in users:
-            try:
-                async with AsyncSessionFactory() as user_session:
-                    async with user_session.begin():
-                        emitter = SystemLogEmitter(task_name="heatmap_generator")
-                        emitter.set_context(user_id=user.id)
-                        service = AnalyticsService(db=user_session, user=user, emitter=emitter)
-                        await service.generate_post_activity_heatmap()
-            except Exception as e:
-                log.error("analytics.heatmap_generation_user_error", user_id=user.id, error=str(e))
+    users = (await session.execute(select(User).where(User.plan.in_(['PLUS', 'PRO', 'AGENCY'])))).scalars().all()
+    if not users: return
+    
+    log.info("analytics.heatmap_generation_started", count=len(users))
+    for user in users:
+        try:
+            async with session.begin_nested():
+                emitter = SystemLogEmitter(task_name="heatmap_generator")
+                emitter.set_context(user_id=user.id)
+                service = AnalyticsService(db=session, user=user, emitter=emitter)
+                await service.generate_post_activity_heatmap()
+        except Exception as e:
+            log.error("analytics.heatmap_generation_user_error", user_id=user.id, error=str(e))
 
-async def _update_friend_request_statuses_async():
+
+async def _update_friend_request_statuses_async(session: AsyncSession):
     """Проверяет статусы отправленных заявок в друзья (приняты или нет)."""
-    async with AsyncSessionFactory() as session:
-        # Находим пользователей, у которых есть заявки в статусе 'pending'
-        stmt = select(User).options(selectinload(User.friend_requests)).where(
-            User.friend_requests.any(FriendRequestLog.status == FriendRequestStatus.pending)
-        )
-        users_with_pending_reqs = (await session.execute(stmt)).scalars().unique().all()
-        
-        if not users_with_pending_reqs:
-            return
+    stmt = select(User).options(selectinload(User.friend_requests)).where(
+        User.friend_requests.any(FriendRequestLog.status == FriendRequestStatus.pending)
+    )
+    users_with_pending_reqs = (await session.execute(stmt)).scalars().unique().all()
+    
+    if not users_with_pending_reqs:
+        return
 
-        log.info("analytics.conversion_tracker_started", count=len(users_with_pending_reqs))
-        
-        for user in users_with_pending_reqs:
-            pending_reqs = [req for req in user.friend_requests if req.status == FriendRequestStatus.pending]
-            if not pending_reqs:
+    log.info("analytics.conversion_tracker_started", count=len(users_with_pending_reqs))
+    
+    for user in users_with_pending_reqs:
+        pending_reqs = [req for req in user.friend_requests if req.status == FriendRequestStatus.pending]
+        if not pending_reqs:
+            continue
+
+        vk_api = None
+        try:
+            vk_token = decrypt_data(user.encrypted_vk_token)
+            if not vk_token:
+                log.warn("analytics.conversion_tracker_no_token", user_id=user.id)
                 continue
 
-            vk_api = None
-            try:
-                vk_token = decrypt_data(user.encrypted_vk_token)
-                if not vk_token:
-                    log.warn("analytics.conversion_tracker_no_token", user_id=user.id)
-                    continue
+            vk_api = VKAPI(access_token=vk_token)
+            
+            friends_response = await vk_api.get_user_friends(user_id=user.vk_id, fields="")
+            if not friends_response or 'items' not in friends_response:
+                continue
+            
+            friend_ids = set(friends_response['items'])
+            
+            accepted_req_ids = [req.id for req in pending_reqs if req.target_vk_id in friend_ids]
+            
+            if accepted_req_ids:
+                update_stmt = update(FriendRequestLog).where(FriendRequestLog.id.in_(accepted_req_ids)).values(
+                    status=FriendRequestStatus.accepted, 
+                    resolved_at=datetime.datetime.now(pytz.utc)
+                )
+                await session.execute(update_stmt)
+                log.info("analytics.conversion_tracker_updated", user_id=user.id, count=len(accepted_req_ids))
 
-                vk_api = VKAPI(access_token=vk_token)
-                
-                # Получаем актуальный список ID друзей
-                friends_response = await vk_api.get_user_friends(user_id=user.vk_id, fields="")
-                if not friends_response or 'items' not in friends_response:
-                    continue
-                
-                friend_ids = set(friends_response['items'])
-                
-                accepted_req_ids = [req.id for req in pending_reqs if req.target_vk_id in friend_ids]
-                
-                if accepted_req_ids:
-                    update_stmt = update(FriendRequestLog).where(FriendRequestLog.id.in_(accepted_req_ids)).values(
-                        status=FriendRequestStatus.accepted, 
-                        resolved_at=datetime.datetime.now(pytz.utc)
-                    )
-                    await session.execute(update_stmt)
-                    await session.commit()
-                    log.info("analytics.conversion_tracker_updated", user_id=user.id, count=len(accepted_req_ids))
-
-            except VKAuthError:
-                log.warn("analytics.conversion_tracker_auth_error", user_id=user.id)
-            except Exception as e:
-                log.error("analytics.conversion_tracker_user_error", user_id=user.id, error=str(e))
-            finally:
-                if vk_api:
-                    await vk_api.close()
-
-
+        except Exception as e:
+            # Читаем ID до возможной ошибки, чтобы избежать MissingGreenlet
+            user_id_for_log = user.id 
+            log.error("analytics.conversion_tracker_user_error", user_id=user_id_for_log, error=str(e))
+        finally:
+            if vk_api:
+                await vk_api.close()
 
 # --- backend/app\tasks\logic\automation_jobs.py ---
 
@@ -7463,22 +7702,18 @@ import datetime
 import structlog
 import pytz
 import random
-from redis.asyncio import Redis
+from redis.asyncio import Redis 
 from sqlalchemy import select, or_
 from sqlalchemy.orm import selectinload
+from sqlalchemy.ext.asyncio import AsyncSession
+from arq.connections import ArqRedis
 
-# --- ИСПРАВЛЕНИЕ: Добавляем недостающий импорт ---
-from app.core.config import settings
-# -----------------------------------------------
-
-from app.db.session import AsyncSessionFactory
 from app.db.models import Automation, TaskHistory, User
 from app.core.config_loader import AUTOMATIONS_CONFIG
 from app.core.constants import CronSettings
 
 log = structlog.get_logger(__name__)
 
-# Эта карта нужна для постановки ARQ задач из этого модуля
 TASK_FUNC_MAP_ARQ = {
     "accept_friends": "accept_friend_requests_task", "like_feed": "like_feed_task",
     "add_recommended": "add_recommended_friends_task", "view_stories": "view_stories_task",
@@ -7487,8 +7722,7 @@ TASK_FUNC_MAP_ARQ = {
     "birthday_congratulation": "birthday_congratulation_task", "eternal_online": "eternal_online_task",
 }
 
-async def _create_and_run_arq_task(session, arq_pool, user_id, task_name_key, settings_dict):
-    """Вспомогательная функция для создания TaskHistory и постановки задачи в ARQ."""
+async def _create_and_run_arq_task(session: AsyncSession, arq_pool: ArqRedis, user_id: int, task_name_key: str, settings_dict: dict):
     task_func_name = TASK_FUNC_MAP_ARQ.get(task_name_key)
     if not task_func_name:
         log.warn("cron.arq_task_not_found", task_name=task_name_key)
@@ -7503,78 +7737,57 @@ async def _create_and_run_arq_task(session, arq_pool, user_id, task_name_key, se
 
     job = await arq_pool.enqueue_job(task_func_name, task_history_id=task_history.id, **(settings_dict or {}))
     task_history.arq_job_id = job.job_id
-    await session.commit()
 
-async def _run_daily_automations_async(automation_group: str):
-    """
-    Основная логика для запуска автоматизаций. Находит все активные автоматизации
-    в указанной группе, проверяет их расписание и ставит в очередь ARQ.
-    """
-    from app.worker import redis_settings
-    from arq.connections import create_pool
+async def _run_daily_automations_async(session: AsyncSession, arq_pool: ArqRedis, automation_group: str):
+    now_utc = datetime.datetime.now(pytz.utc)
+    moscow_tz = pytz.timezone("Europe/Moscow")
+    now_moscow = now_utc.astimezone(moscow_tz)
 
-    redis_lock_client = await Redis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/2", decode_responses=True)
-    lock_key = f"lock:task:run_automations:{automation_group}"
-
-    lock_acquired = await redis_lock_client.set(lock_key, "1", ex=CronSettings.AUTOMATION_JOB_LOCK_EXPIRATION_SECONDS, nx=True)
-    if not lock_acquired:
-        log.warn("run_daily_automations.already_running", group=automation_group)
-        await redis_lock_client.close()
+    automation_ids = [item.id for item in AUTOMATIONS_CONFIG if item.group == automation_group]
+    if not automation_ids:
         return
 
-    arq_pool = await create_pool(redis_settings)
-    try:
-        async with AsyncSessionFactory() as session:
-            now_utc = datetime.datetime.now(pytz.utc)
-            moscow_tz = pytz.timezone("Europe/Moscow")
-            now_moscow = now_utc.astimezone(moscow_tz)
+    stmt = select(Automation).join(User).where(
+        Automation.is_active == True,
+        Automation.automation_type.in_(automation_ids),
+        or_(User.plan_expires_at.is_(None), User.plan_expires_at > now_utc)
+    ).options(selectinload(Automation.user))
+    
+    automations = (await session.execute(stmt)).scalars().unique().all()
+    if not automations:
+        return
+        
+    log.info("run_daily_automations.start", count=len(automations), group=automation_group)
 
-            automation_ids = [item.id for item in AUTOMATIONS_CONFIG if item.group == automation_group]
-            if not automation_ids:
-                return
+    for automation in automations:
+        if automation.automation_type == 'eternal_online':
+            automation_settings = automation.settings or {}
+            if automation_settings.get('mode', 'schedule') == 'schedule':
+                day_key = str(now_moscow.isoweekday())
+                day_schedule = automation_settings.get('schedule_weekly', {}).get(day_key)
 
-            stmt = select(Automation).join(User).where(
-                Automation.is_active == True,
-                Automation.automation_type.in_(automation_ids),
-                or_(User.plan_expires_at.is_(None), User.plan_expires_at > now_utc)
-            ).options(selectinload(Automation.user))
-            
-            automations = (await session.execute(stmt)).scalars().unique().all()
-            if not automations:
-                return
-                
-            log.info("run_daily_automations.start", count=len(automations), group=automation_group)
+                if not day_schedule or not day_schedule.get('is_active'):
+                    continue
 
-            for automation in automations:
-                if automation.automation_type == 'eternal_online':
-                    automation_settings = automation.settings or {} # Используем другую переменную, чтобы не конфликтовать с глобальным `settings`
-                    if automation_settings.get('mode', 'schedule') == 'schedule':
-                        day_key = str(now_moscow.isoweekday())
-                        day_schedule = automation_settings.get('schedule_weekly', {}).get(day_key)
-
-                        if not day_schedule or not day_schedule.get('is_active'):
-                            continue
-
-                        try:
-                            start = datetime.datetime.strptime(day_schedule.get('start_time', '00:00'), '%H:%M').time()
-                            end = datetime.datetime.strptime(day_schedule.get('end_time', '23:59'), '%H:%M').time()
-                            
-                            if not (start <= now_moscow.time() <= end):
-                                continue
-                            if automation_settings.get('humanize', True) and random.random() < CronSettings.HUMANIZE_ONLINE_SKIP_CHANCE:
-                                log.info("eternal_online.humanizer_skip", user_id=automation.user_id)
-                                continue
-                        except (ValueError, TypeError):
-                            log.warn("eternal_online.invalid_time_format", user_id=automation.user_id, schedule=day_schedule)
-                            continue
-                
-                automation.last_run_at = now_utc
-                await _create_and_run_arq_task(session, arq_pool, automation.user_id, automation.automation_type, automation.settings)
-
-    finally:
-        await redis_lock_client.delete(lock_key)
-        await redis_lock_client.close()
-        await arq_pool.close()
+                try:
+                    start = datetime.datetime.strptime(day_schedule.get('start_time', '00:00'), '%H:%M').time()
+                    end = datetime.datetime.strptime(day_schedule.get('end_time', '23:59'), '%H:%M').time()
+                    
+                    if not (start <= now_moscow.time() <= end):
+                        continue
+                    
+                    if automation_settings.get('humanize', True) and random.random() < CronSettings.HUMANIZE_ONLINE_SKIP_CHANCE:
+                        log.info("eternal_online.humanizer_skip", user_id=automation.user_id)
+                        continue
+                except (ValueError, TypeError) as e:
+                    # Эта ошибка теперь не должна возникать, но оставим защиту
+                    log.error("eternal_online.schedule_parse_error", user_id=automation.user_id, schedule=day_schedule, error=str(e))
+                    continue
+        
+        automation.last_run_at = now_utc
+        # Используем вложенную транзакцию для атомарного создания задачи
+        async with session.begin_nested():
+            await _create_and_run_arq_task(session, arq_pool, automation.user_id, automation.automation_type, automation.settings)
 
 # --- backend/app\tasks\logic\maintenance_jobs.py ---
 

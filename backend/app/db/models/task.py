@@ -1,3 +1,5 @@
+# backend/app/db/models/task.py
+
 from datetime import datetime, UTC
 import enum
 from sqlalchemy import (
@@ -6,16 +8,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 from app.db.base import Base
-from app.db.enums import ScenarioStepType, ScheduledPostStatus
-
-class ScenarioStepType(enum.Enum):
-    action = "action"
-    condition = "condition"
-
-class ScheduledPostStatus(enum.Enum):
-    scheduled = "scheduled"
-    published = "published"
-    failed = "failed"
+from app.core.enums import ScenarioStepType, ScheduledPostStatus, AutomationType, ActionType, ActionStatus
 
 class TaskHistory(Base):
     __tablename__ = "task_history"
@@ -35,12 +28,12 @@ class Automation(Base):
     __tablename__ = "automations"
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    automation_type = Column(String, nullable=False, index=True)
+    automation_type = Column(Enum(AutomationType), nullable=False, index=True)
     is_active = Column(Boolean, default=False, nullable=False)
     settings = Column(JSON, nullable=True)
     last_run_at = Column(DateTime(timezone=True), nullable=True)
     user = relationship("User", back_populates="automations")
-    __table_args__ = (UniqueConstraint('user_id', 'automation_type', name='_user_automation_uc'),)
+    __table__args__ = (UniqueConstraint('user_id', 'automation_type', name='_user_automation_uc'),)
 
 class Scenario(Base):
     __tablename__ = "scenarios"
@@ -51,10 +44,8 @@ class Scenario(Base):
     schedule = Column(String, nullable=False)
     is_active = Column(Boolean, default=False, nullable=False)
     
-    # --- ИЗМЕНЕНИЕ: Столбец для ID, а не сама связь ---
     first_step_id = Column(Integer, nullable=True)
 
-    # Отношения
     user = relationship("User", back_populates="scenarios")
     steps = relationship(
         "ScenarioStep", 
@@ -106,14 +97,14 @@ class SentCongratulation(Base):
     friend_vk_id = Column(BigInteger, nullable=False, index=True)
     year = Column(Integer, nullable=False)
     user = relationship("User")
-    __table_args__ = (UniqueConstraint('user_id', 'friend_vk_id', 'year', name='_user_friend_year_uc'),)
+    __table__args__ = (UniqueConstraint('user_id', 'friend_vk_id', 'year', name='_user_friend_year_uc'),)
 
 class ActionLog(Base):
     __tablename__ = "action_logs"
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    action_type = Column(String, nullable=False, index=True)
+    action_type = Column(Enum(ActionType), nullable=False, index=True)
     message = Column(Text, nullable=False)
-    status = Column(String, nullable=False)
+    status = Column(Enum(ActionStatus), nullable=False)
     timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
     user = relationship("User")

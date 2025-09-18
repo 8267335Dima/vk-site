@@ -41,3 +41,4 @@ cd backend && alembic revision --autogenerate -m "add timezone" && alembic upgra
 
 
 ПОТОМ СДЕЛАТЬ! Фронтенд: Добавить JavaScript-код, который будет слушать событие paste и использовать navigator.clipboard.read() для получения данных изображения.
+

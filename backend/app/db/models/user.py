@@ -1,3 +1,5 @@
+# backend/app/db/models/user.py
+
 from datetime import datetime, UTC
 from sqlalchemy import (
     Column, Integer, String, DateTime, ForeignKey, BigInteger,
@@ -5,8 +7,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 from app.db.base import Base
-from app.db.enums import DelayProfile, TeamMemberRole
-from app.core.constants import PlanName
+from app.core.enums import DelayProfile, TeamMemberRole, PlanName
+
 
 class User(Base):
     __tablename__ = "users"
@@ -26,9 +28,7 @@ class User(Base):
     delay_profile = Column(Enum(DelayProfile), nullable=False, server_default=DelayProfile.normal.name)
     analytics_settings_posts_count = Column(Integer, nullable=False, server_default=text('100'))
     analytics_settings_photos_count = Column(Integer, nullable=False, server_default=text('200'))
-
-    # Связи остаются такими же
-    proxies = relationship("Proxy", back_populates="user", cascade="all, delete-orphan", lazy="selectin")
+    proxies = relationship("Proxy", back_populates="user", cascade="all, delete-orphan", lazy="select")
     task_history = relationship("TaskHistory", back_populates="user", cascade="all, delete-orphan")
     daily_stats = relationship("DailyStats", back_populates="user", cascade="all, delete-orphan")
     automations = relationship("Automation", back_populates="user", cascade="all, delete-orphan")
@@ -42,6 +42,7 @@ class User(Base):
     scheduled_posts = relationship("ScheduledPost", back_populates="user", cascade="all, delete-orphan", foreign_keys="[ScheduledPost.user_id]")
     owned_team = relationship("Team", back_populates="owner", uselist=False, cascade="all, delete-orphan")
     team_membership = relationship("TeamMember", back_populates="user", uselist=False, cascade="all, delete-orphan")
+
 
 class Team(Base):
     __tablename__ = "teams"

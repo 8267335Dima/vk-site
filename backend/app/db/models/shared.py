@@ -1,3 +1,5 @@
+# backend/app/db/models/shared.py
+
 import datetime
 from sqlalchemy import (
     Column, Integer, String, DateTime, ForeignKey, Text,
@@ -5,7 +7,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 from app.db.base import Base
-import enum
+from app.core.enums import TicketStatus
 
 class Proxy(Base):
     __tablename__ = "proxies"
@@ -38,10 +40,6 @@ class FilterPreset(Base):
     user = relationship("User", back_populates="filter_presets")
     __table_args__ = (UniqueConstraint('user_id', 'name', 'action_type', name='_user_name_action_uc'),)
 
-class TicketStatus(str, enum.Enum):
-    OPEN = "open"
-    IN_PROGRESS = "in_progress"
-    CLOSED = "closed"
 
 class SupportTicket(Base):
     __tablename__ = "support_tickets"
@@ -51,6 +49,7 @@ class SupportTicket(Base):
     status = Column(Enum(TicketStatus), default=TicketStatus.OPEN, nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), onupdate=datetime.datetime.utcnow)
+    reopen_count = Column(Integer, default=0, nullable=False)
     
     user = relationship("User")
     messages = relationship("TicketMessage", back_populates="ticket", cascade="all, delete-orphan", order_by="TicketMessage.created_at")
@@ -59,8 +58,9 @@ class TicketMessage(Base):
     __tablename__ = "ticket_messages"
     id = Column(Integer, primary_key=True)
     ticket_id = Column(Integer, ForeignKey("support_tickets.id", ondelete="CASCADE"), nullable=False, index=True)
-    author_id = Column(Integer, ForeignKey("users.id"), nullable=False) # ID автора (юзер или админ)
+    author_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     message = Column(Text, nullable=False)
+    attachment_url = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow)
     
     ticket = relationship("SupportTicket", back_populates="messages")

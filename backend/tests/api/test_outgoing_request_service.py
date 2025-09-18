@@ -10,6 +10,8 @@ from app.api.schemas.actions import AddFriendsRequest
 from app.services.event_emitter import RedisEventEmitter
 from app.core.exceptions import UserLimitReachedError
 from app.db.models import DailyStats
+from redis.asyncio import Redis as AsyncRedis
+from app.core.config import settings
 
 pytestmark = pytest.mark.asyncio
 
@@ -103,3 +105,39 @@ async def test_add_friends_stops_when_limit_is_reached_mid_task(
     # Это доказывает, что логика цикла и проверки лимита работает корректно.
     assert mock_vk_api.add_friend.call_count == 5
     
+async def test_add_friends_redis_lock_prevents_duplicates(
+    db_session: AsyncSession, test_user: User, mock_emitter: RedisEventEmitter, mocker
+):
+    """
+    Тест проверяет, что Redis-блокировка внутри сервиса предотвращает
+    повторную отправку заявки в друзья одному и тому же человеку.
+    """
+    # Arrange
+    service = OutgoingRequestService(db=db_session, user=test_user, emitter=mock_emitter)
+    mock_vk_api = AsyncMock()
+    # VK API возвращает двух одинаковых людей в рекомендациях
+    mock_vk_api.get_recommended_friends.return_value = {
+        "items": [
+            {"id": 123, "first_name": "Duplicate"},
+            {"id": 123, "first_name": "Duplicate"}
+        ]
+    }
+    mock_vk_api.add_friend.return_value = 1
+    service.vk_api = mock_vk_api
+    service.humanizer = AsyncMock()
+    
+    # Мы не будем мокать Redis, а используем реальный тестовый Redis,
+    # чтобы проверить настоящую логику блокировки.
+    # Очистим его на всякий случай.
+    redis_client = AsyncRedis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/2")
+    await redis_client.flushdb()
+    await redis_client.aclose()
+
+    # Act
+    request_params = AddFriendsRequest(count=10)
+    await service._add_recommended_friends_logic(request_params)
+
+    # Assert
+    # Ключевая проверка: несмотря на двух одинаковых людей в ответе VK,
+    # реальный вызов API для отправки заявки должен быть только один.
+    mock_vk_api.add_friend.assert_called_once_with(123, None)

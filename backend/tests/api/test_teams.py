@@ -253,3 +253,35 @@ async def test_full_team_access_lifecycle(
     assert switch_fail_again_response.status_code == 403
 
     del app.dependency_overrides[get_current_active_profile]
+
+async def test_cannot_invite_user_already_in_a_team(
+    async_client: AsyncClient, db_session: AsyncSession, manager_user: User, team_member_user: User, get_auth_headers_for
+):
+    """
+    Тест проверяет, что API вернет ошибку 409 Conflict, если менеджер
+    пытается пригласить пользователя, который уже является членом другой команды.
+    """
+    # Arrange:
+    # 1. Создаем "другого" менеджера и его команду.
+    another_manager = User(vk_id=999, encrypted_vk_token="another_manager", plan="AGENCY")
+    db_session.add(another_manager)
+    await db_session.flush()
+    
+    another_team = Team(owner_id=another_manager.id, name="Another Team")
+    # 2. Добавляем нашего `team_member_user` в команду "другого" менеджера.
+    membership = TeamMember(team=another_team, user_id=team_member_user.id)
+    db_session.add_all([another_team, membership])
+    await db_session.commit()
+
+    # Act:
+    # 3. Наш основной `manager_user` пытается пригласить того же самого `team_member_user`.
+    manager_headers = get_auth_headers_for(manager_user)
+    response = await async_client.post(
+        "/api/v1/teams/my-team/members",
+        headers=manager_headers,
+        json={"user_vk_id": team_member_user.vk_id}
+    )
+
+    # Assert:
+    assert response.status_code == 409
+    assert "Этот пользователь уже состоит в команде" in response.json()["detail"]

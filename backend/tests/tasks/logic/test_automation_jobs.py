@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from unittest.mock import AsyncMock, patch
 from datetime import datetime
 import pytz
-
+from datetime import datetime as real_datetime
 from app.db.models import User, Automation
 from app.tasks.logic.automation_jobs import _run_daily_automations_async
 
@@ -24,16 +24,11 @@ ETERNAL_ONLINE_SETTINGS = {
 @pytest.mark.parametrize(
     "mock_now_str, mock_random_val, should_run",
     [
-        # Случай 1: Понедельник, 12:00. Внутри активного окна. Задача должна запуститься.
         ("2025-09-22 12:00:00", 0.5, True),
-        # Случай 2: Понедельник, 08:00. Слишком рано. Задача НЕ должна запускаться.
         ("2025-09-22 08:00:00", 0.5, False),
-        # Случай 3: Понедельник, 19:00. Слишком поздно. Задача НЕ должна запускаться.
         ("2025-09-22 19:00:00", 0.5, False),
-        # Случай 4: Вторник, 12:00. День неактивен. Задача НЕ должна запускаться.
         ("2025-09-23 12:00:00", 0.5, False),
-        # Случай 5: Понедельник, 12:00, но сработал "humanize skip". Задача НЕ должна запускаться.
-        ("2025-09-22 12:00:00", 0.1, False), # random.random() вернет 0.1, что < 0.15
+        ("2025-09-22 12:00:00", 0.1, False),
     ]
 )
 @patch('app.tasks.logic.automation_jobs._create_and_run_arq_task', new_callable=AsyncMock)
@@ -51,7 +46,6 @@ async def test_eternal_online_schedule_logic(
     в зависимости от времени, дня недели и 'гуманизации'.
     """
     # Arrange:
-    # 1. Создаем пользователя с активной автоматизацией 'eternal_online'
     automation = Automation(
         user_id=test_user.id,
         automation_type="eternal_online",
@@ -61,27 +55,29 @@ async def test_eternal_online_schedule_logic(
     db_session.add(automation)
     await db_session.commit()
 
-    # 2. Мокаем системные зависимости: время и случайность
+    # --- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+    # Мы мокируем только метод now(), а не весь класс datetime.
+    # Это позволяет datetime.strptime() работать корректно.
     moscow_tz = pytz.timezone("Europe/Moscow")
-    mock_now = moscow_tz.localize(datetime.strptime(mock_now_str, "%Y-%m-%d %H:%M:%S"))
-    mocker.patch('app.tasks.logic.automation_jobs.datetime.datetime').now.return_value = mock_now
+    mock_now_in_moscow = moscow_tz.localize(datetime.strptime(mock_now_str, "%Y-%m-%d %H:%M:%S"))
+    mock_now_in_utc = mock_now_in_moscow.astimezone(pytz.utc)
+    
+    mock_dt_module = mocker.patch('app.tasks.logic.automation_jobs.datetime')
+    mock_dt_module.datetime.now.return_value = mock_now_in_utc
+    mock_dt_module.datetime.strptime = real_datetime.strptime # Возвращаем настоящий strptime
+    
     mocker.patch('app.tasks.logic.automation_jobs.random.random', return_value=mock_random_val)
-    
-    # Мокаем Redis lock, чтобы он всегда "захватывался"
-    mock_redis_client = AsyncMock()
-    mock_redis_client.set.return_value = True
-    mocker.patch('app.tasks.logic.automation_jobs.Redis.from_url', return_value=mock_redis_client)
-    
-    # Мокаем ARQ pool
-    mocker.patch('app.tasks.logic.automation_jobs.create_pool', return_value=AsyncMock())
-    
+    mock_arq_pool = AsyncMock()
+
     # Act:
-    await _run_daily_automations_async(automation_group='online')
+    await _run_daily_automations_async(
+        session=db_session,
+        arq_pool=mock_arq_pool,
+        automation_group='online'
+    )
 
     # Assert:
     if should_run:
-        # Проверяем, что функция постановки задачи в очередь была вызвана
         mock_create_task.assert_awaited_once()
     else:
-        # Проверяем, что функция постановки задачи в очередь НЕ была вызвана
         mock_create_task.assert_not_awaited()
