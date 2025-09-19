@@ -24,7 +24,10 @@ from app.main import create_app
 from app.db.base import Base
 from app.db.models import User
 from app.core.config import settings
-from app.core.constants import PlanName
+
+# --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+# Импортируем Enum из правильного места
+from app.core.enums import PlanName
 from app.core.plans import get_limits_for_plan
 from app.core.security import create_access_token, encrypt_data
 from app.api.dependencies import get_db, get_arq_pool
@@ -33,11 +36,6 @@ from app.api.dependencies import get_db, get_arq_pool
 
 @pytest_asyncio.fixture(scope="function")
 async def db_engine() -> AsyncGenerator[AsyncEngine, None]:
-    """
-    Создает движок для каждого теста.
-    Для SQLite in-memory использует StaticPool, чтобы все сессии в рамках одного
-    теста (и в фикстурах, и в обработчиках запросов) обращались к одной и той же БД.
-    """
     is_sqlite = "sqlite" in settings.database_url
     
     engine = create_async_engine(
@@ -57,14 +55,12 @@ async def db_engine() -> AsyncGenerator[AsyncEngine, None]:
 
 @pytest_asyncio.fixture(scope="function")
 async def db_session(db_engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
-    """Создает сессию для теста."""
     async with AsyncSession(db_engine, expire_on_commit=False) as session:
         yield session
 
 
 @pytest_asyncio.fixture(scope="function")
 async def mock_arq_pool(mocker) -> AsyncMock:
-    """Мок для фоновых задач Arq."""
     mock_pool = AsyncMock()
     def create_mock_job(*args, **kwargs):
         mock_job = AsyncMock()
@@ -76,7 +72,6 @@ async def mock_arq_pool(mocker) -> AsyncMock:
 
 @pytest.fixture(scope="function")
 def test_app(db_engine: AsyncEngine, db_session: AsyncSession, mock_arq_pool: AsyncMock) -> FastAPI:
-    """Создает приложение для теста."""
     app = create_app(db_engine=db_engine)
 
     class SQLAdminTestSessionMiddleware(BaseHTTPMiddleware):
@@ -98,13 +93,12 @@ def test_app(db_engine: AsyncEngine, db_session: AsyncSession, mock_arq_pool: As
 
 @pytest_asyncio.fixture(scope="function")
 async def async_client(test_app: FastAPI) -> AsyncGenerator[AsyncClient, None]:
-    """Создает HTTP-клиент."""
     transport = ASGITransport(app=test_app)
     async with AsyncClient(transport=transport, base_url="http://test", follow_redirects=True) as client:
         yield client
 
-# --- ОСТАЛЬНАЯ ЧАСТЬ ФАЙЛА БЕЗ ИЗМЕНЕНИЙ ---
-# ...
+# --- ФИКСТУРЫ ДАННЫХ ---
+
 @pytest_asyncio.fixture(scope="function")
 async def test_user(db_session: AsyncSession) -> User:
     user_data = { "vk_id": 12345678, "encrypted_vk_token": encrypt_data("test_vk_token"), "plan": PlanName.PRO.name }

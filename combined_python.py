@@ -262,15 +262,12 @@ def init_admin(app, engine):
     from .views.support import SupportTicketAdmin
     from .views.payment import PaymentAdmin
     from .views.stats import AutomationAdmin, DailyStatsAdmin, ActionLogAdmin
-
+    from .views.system import GlobalSettingsAdmin, BannedIPAdmin
+    
     authentication_backend = AdminAuth(secret_key=settings.SECRET_KEY)
-
     
     admin = Admin(
-        app,
-        engine,
-        authentication_backend=authentication_backend,
-        title="SMM Combine Admin",
+        app, engine, authentication_backend=authentication_backend, title="SMM Combine Admin",
     )
 
     admin.add_view(UserAdmin)
@@ -279,6 +276,8 @@ def init_admin(app, engine):
     admin.add_view(AutomationAdmin)
     admin.add_view(DailyStatsAdmin)
     admin.add_view(ActionLogAdmin)
+    admin.add_view(GlobalSettingsAdmin)
+    admin.add_view(BannedIPAdmin)
 
     app.state.admin = admin
 
@@ -403,7 +402,6 @@ from sqladmin.filters import AllUniqueStringValuesFilter
 
 
 class TicketMessageAdmin(ModelView, model=TicketMessage):
-    # Этот класс не используется в списке, но исправляем для консистентности
     can_create = True
     can_edit = False
     can_delete = False
@@ -423,15 +421,13 @@ class SupportTicketAdmin(ModelView, model=SupportTicket):
     icon = "fa-solid fa-headset"
     can_edit = True
 
-    # ИЗМЕНЕНИЕ: Используем строку "user"
-    column_list = [SupportTicket.id, "user", SupportTicket.subject, SupportTicket.status, SupportTicket.updated_at]
-    # ИЗМЕНЕНИЕ: Убираем get_value и добавляем formatters + select_related
-    column_select_related = [SupportTicket.user] # Эффективная загрузка данных
-    column_details_list = [SupportTicket.id, SupportTicket.user, SupportTicket.subject, SupportTicket.status, SupportTicket.created_at, SupportTicket.updated_at, SupportTicket.messages]
+    column_list = [SupportTicket.id, "user", SupportTicket.subject, SupportTicket.status, SupportTicket.reopen_count, SupportTicket.updated_at]
+    column_select_related = [SupportTicket.user]
+    column_details_list = [SupportTicket.id, SupportTicket.user, SupportTicket.subject, SupportTicket.status, SupportTicket.reopen_count, SupportTicket.created_at, SupportTicket.updated_at, SupportTicket.messages]
     column_searchable_list = [SupportTicket.id, SupportTicket.subject, "user.vk_id"]
     column_filters = [AllUniqueStringValuesFilter(SupportTicket.status)]
     column_default_sort = ("updated_at", True)
-    form_excluded_columns = [SupportTicket.created_at, SupportTicket.updated_at, SupportTicket.messages]
+    form_excluded_columns = [SupportTicket.created_at, SupportTicket.updated_at, SupportTicket.messages, SupportTicket.reopen_count]
 
     column_formatters = {
         "user": lambda m, a: f"User {m.user.vk_id}" if m.user else "Unknown"
@@ -453,87 +449,142 @@ class SupportTicketAdmin(ModelView, model=SupportTicket):
         
         model.updated_at = datetime.datetime.now(timezone.utc)
 
-
     @action(
-        name="close_tickets", label="Закрыть тикет(ы)",
-        confirmation_message="Уверены, что хотите закрыть выбранные тикеты?",
+        name="resolve_tickets", label="✅ Решить и закрыть (можно переоткрыть)",
+        confirmation_message="Уверены? Пользователь сможет переоткрыть тикет.",
         add_in_list=True, add_in_detail=True
     )
-    async def close_tickets(self, request: Request, pks: list[int]):
+    async def resolve_tickets(self, request: Request, pks: list[int]):
         session: AsyncSession = request.state.session
         for pk in pks:
             ticket = await session.get(SupportTicket, pk)
             if ticket:
-                ticket.status = TicketStatus.CLOSED
+                ticket.status = TicketStatus.RESOLVED # --- ИЗМЕНЕНИЕ ---
                 ticket.updated_at = datetime.datetime.now(timezone.utc)
         await session.commit()
-        return {"message": f"Закрыто тикетов: {len(pks)}"}
+        return {"message": f"Решено тикетов: {len(pks)}"}
+
+    @action(
+        name="close_permanently", label="🔒 Закрыть навсегда",
+        confirmation_message="ВНИМАНИЕ: Пользователь НЕ сможет переоткрыть этот тикет!",
+        add_in_list=True, add_in_detail=True
+    )
+    async def close_permanently(self, request: Request, pks: list[int]):
+        session: AsyncSession = request.state.session
+        for pk in pks:
+            ticket = await session.get(SupportTicket, pk)
+            if ticket:
+                ticket.status = TicketStatus.CLOSED # --- НОВОЕ ДЕЙСТВИЕ ---
+                ticket.updated_at = datetime.datetime.now(timezone.utc)
+        await session.commit()
+        return {"message": f"Закрыто навсегда тикетов: {len(pks)}"}
+
+# --- backend/app\admin\views\system.py ---
+
+# backend/app/admin/views/system.py
+from sqladmin import ModelView
+from app.db.models.system import GlobalSetting, BannedIP
+
+class GlobalSettingsAdmin(ModelView, model=GlobalSetting):
+    identity = "global-settings"
+    name = "Настройка"
+    name_plural = "Глобальные настройки"
+    icon = "fa-solid fa-cogs"
+    
+    can_create = True
+    can_delete = True
+    can_edit = True
+    
+    column_list = [GlobalSetting.key, GlobalSetting.value, GlobalSetting.is_enabled, GlobalSetting.description]
+    form_columns = [GlobalSetting.key, GlobalSetting.value, GlobalSetting.is_enabled, GlobalSetting.description]
+
+class BannedIPAdmin(ModelView, model=BannedIP):
+    identity = "banned-ips"
+    name = "Блокировка"
+    name_plural = "Заблокированные IP"
+    icon = "fa-solid fa-gavel"
+    
+    can_create = True
+    can_delete = True
+    can_edit = True
+    
+    column_list = [BannedIP.ip_address, BannedIP.reason, BannedIP.banned_at, BannedIP.admin]
+    column_searchable_list = [BannedIP.ip_address]
+    column_default_sort = ("banned_at", True)
 
 # --- backend/app\admin\views\user.py ---
 
-# backend/app/admin/views/user.py
+#backend/app/admin/views/user.py
 from sqladmin import ModelView, action
-from fastapi import Request
+from fastapi import Request, HTTPException, status
+from fastapi.responses import JSONResponse, HTMLResponse
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.db.models import User
+from sqlalchemy import select
+
+# --- ИСПРАВЛЕНИЕ: Добавлен импорт ---
+from app.core.config import settings
+from app.db.models import User, LoginHistory, BannedIP, TaskHistory
 from sqladmin.filters import AllUniqueStringValuesFilter, BooleanFilter
 from app.core.plans import get_limits_for_plan
-from app.core.constants import PlanName
+from app.core.enums import PlanName
+from app.core.security import decrypt_data, create_access_token
 
 class UserAdmin(ModelView, model=User):
     identity = "user"
     name_plural = "Пользователи"
     icon = "fa-solid fa-users"
+    can_edit = True
 
     column_list = [
-        User.id,
-        User.vk_id,
-        User.plan,
-        User.plan_expires_at,
-        User.is_admin,
-        User.created_at,
+        User.id, User.vk_id, User.plan, User.plan_expires_at, User.is_admin, User.created_at,
     ]
     column_searchable_list = [User.id, User.vk_id]
-    
-    column_filters = [
-        AllUniqueStringValuesFilter(User.plan),
-        BooleanFilter(User.is_admin),
-    ]
-
+    column_filters = [AllUniqueStringValuesFilter(User.plan), BooleanFilter(User.is_admin)]
     column_default_sort = ("created_at", True)
  
     form_columns = [
-        User.plan,
-        User.plan_expires_at,
-        User.is_admin,
-        User.daily_likes_limit,
-        User.daily_add_friends_limit,
-        User.daily_message_limit,
-        User.daily_posts_limit,
+        User.plan, User.plan_expires_at, User.is_admin,
+        User.daily_likes_limit, User.daily_add_friends_limit, User.daily_message_limit, User.daily_posts_limit,
     ]
     
-    # ИЗМЕНЕНИЕ: Заменяем get_value на column_formatters
     column_formatters = {
         User.plan: lambda m, a: m.plan or "Не указан",
         User.plan_expires_at: lambda m, a: m.plan_expires_at.strftime('%Y-%m-%d %H:%M') if m.plan_expires_at else "Не истекает",
     }
-    
-    @action(
-        name="extend_subscription",
-        label="Продлить подписку (+30 дней)",
-        confirmation_message="Уверены, что хотите продлить подписку на 30 дней?",
-        add_in_list=True,
-        add_in_detail=True,
-    )
+
+    async def on_model_change(self, data: dict, model: User, is_created: bool, request: Request):
+        if 'plan' in data and not is_created:
+            original_plan = model.plan
+            if data['plan'] != original_plan:
+                new_limits = get_limits_for_plan(PlanName(data['plan']))
+                for key, value in new_limits.items():
+                    if hasattr(model, key):
+                        setattr(model, key, value)
+
+    @action(name="impersonate", label="👤 Войти как пользователь", add_in_detail=True, add_in_list=True)
+    async def impersonate(self, request: Request, pks: list[int]):
+        if len(pks) != 1:
+            return JSONResponse({"status": "error", "message": "Выберите одного пользователя."}, status_code=400)
+        
+        session: AsyncSession = request.state.session
+        admin_user_stmt = select(User).where(User.vk_id == int(settings.ADMIN_VK_ID))
+        admin = (await session.execute(admin_user_stmt)).scalar_one()
+        target_user_id = int(pks[0])
+
+        token_data = {"sub": str(admin.id), "profile_id": str(target_user_id), "scope": "impersonate"}
+        access_token = create_access_token(data=token_data, expires_delta=timedelta(minutes=15))
+        
+        message = f"Токен для входа от имени пользователя ID {target_user_id} создан. Действует 15 минут."
+        return JSONResponse({"status": "success", "message": message, "access_token": access_token})
+
+    @action(name="extend_subscription", label="✅ Продлить подписку (+30 дней)", add_in_list=True, add_in_detail=True)
     async def extend_subscription(self, request: Request, pks: list[int]):
         session: AsyncSession = request.state.session
-
         successful_count = 0
         for pk_str in pks:
             user = await session.get(User, int(pk_str))
-            if not user:
-                continue
+            if not user: continue
 
             now = datetime.now(timezone.utc)
             start_date = user.plan_expires_at if user.plan_expires_at and user.plan_expires_at > now else now
@@ -543,14 +594,46 @@ class UserAdmin(ModelView, model=User):
                 user.plan = PlanName.PLUS.name
                 new_limits = get_limits_for_plan(PlanName.PLUS)
                 for k, v in new_limits.items():
-                    if hasattr(user, k):
-                        setattr(user, k, v)
-            
+                    if hasattr(user, k): setattr(user, k, v)
             successful_count += 1
+        await session.commit()
+        return {"message": f"Подписка продлена для {successful_count} пользователей."}
+
+    @action(name="ban_user_ip", label="🚫 Забанить по IP", confirmation_message="Уверены? Пользователь потеряет доступ к сайту с этого IP.", add_in_list=True, add_in_detail=True)
+    async def ban_user_ip(self, request: Request, pks: list[int]):
+        session: AsyncSession = request.state.session
+        banned_count = 0
+        
+        # --- УЛУЧШЕНИЕ: Получаем реального админа ---
+        admin_user_stmt = select(User).where(User.vk_id == int(settings.ADMIN_VK_ID))
+        admin = (await session.execute(admin_user_stmt)).scalar_one()
+
+        for pk in pks:
+            stmt = select(LoginHistory.ip_address).where(LoginHistory.user_id == int(pk)).order_by(LoginHistory.timestamp.desc()).limit(1)
+            last_ip = (await session.execute(stmt)).scalar_one_or_none()
+            if not last_ip or last_ip == "unknown": continue
+            
+            exists_stmt = select(BannedIP).where(BannedIP.ip_address == last_ip)
+            if (await session.execute(exists_stmt)).scalar_one_or_none(): continue
+                
+            new_ban = BannedIP(ip_address=last_ip, reason=f"Блокировка пользователя ID {pk}", admin_id=admin.id)
+            session.add(new_ban)
+            banned_count += 1
         
         await session.commit()
-        
-        return {"message": f"Подписка продлена для {successful_count} пользователей."}
+        return {"message": f"Заблокировано IP-адресов: {banned_count}"}
+
+    @action(name="delete_account", label="❌ Удалить аккаунт", confirmation_message="ВНИМАНИЕ: Это действие необратимо и удалит ВСЕ данные пользователя!", add_in_list=True, add_in_detail=True)
+    async def delete_account(self, request: Request, pks: list[int]):
+        session: AsyncSession = request.state.session
+        deleted_count = 0
+        for pk in pks:
+            user = await session.get(User, int(pk))
+            if user:
+                await session.delete(user)
+                deleted_count += 1
+        await session.commit()
+        return {"message": f"Удалено аккаунтов: {deleted_count}"}
 
 # --- backend/app\admin\views\__init__.py ---
 
@@ -669,14 +752,11 @@ async def get_current_user_from_ws(
 
 # --- backend/app\api\endpoints\analytics.py ---
 
-# --- START OF FILE backend/app/api/endpoints/analytics.py ---
+# backend/app/api/endpoints/analytics.py
 
 import datetime
-from unittest.mock import AsyncMock
 from fastapi import APIRouter, Depends, Query
 from fastapi_cache.decorator import cache
-from httpx import AsyncClient
-import pytest
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -688,8 +768,6 @@ from app.api.schemas.analytics import (
     ProfileSummaryResponse, FriendRequestConversionResponse, PostActivityHeatmapResponse,
     ProfileSummaryData
 )
-from app.services.vk_api import VKAPI
-from app.core.security import decrypt_data
 from app.services.analytics_service import AnalyticsService
 from app.services.event_emitter import SystemLogEmitter 
 
@@ -697,7 +775,7 @@ router = APIRouter()
 
 
 @router.get("/audience", response_model=AudienceAnalyticsResponse)
-@cache(expire=21600)
+@cache(expire=21600) # Кэшируем на 6 часов
 async def get_audience_analytics(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
@@ -711,7 +789,7 @@ async def get_audience_analytics(
             await service.vk_api.close()
 
 @router.get("/profile-summary", response_model=ProfileSummaryResponse)
-@cache(expire=3600)
+@cache(expire=3600) # Кэшируем на 1 час
 async def get_profile_summary(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
@@ -735,7 +813,6 @@ async def get_profile_summary(
     yesterday_metrics = metrics.get(yesterday)
     week_ago_metrics = metrics.get(week_ago)
 
-    # ИСПРАВЛЕНИЕ: Безопасное создание DTO с явным маппингом полей
     if today_metrics:
         current_stats = ProfileSummaryData(
             friends=today_metrics.friends_count,
@@ -753,7 +830,6 @@ async def get_profile_summary(
     growth_daily = {}
     growth_weekly = {}
     
-    # Используем поля схемы для итерации, чтобы ничего не пропустить
     fields_to_compare = ProfileSummaryData.model_fields.keys()
     model_field_map = {
         "friends": "friends_count", "followers": "followers_count", "photos": "photos_count",
@@ -800,7 +876,6 @@ async def get_profile_growth_analytics(
     result = await db.execute(stmt)
     data = result.scalars().all()
     
-    # Используем ProfileGrowthItem для валидации и формирования ответа
     response_data = [ProfileGrowthItem(**row.__dict__) for row in data]
 
     return ProfileGrowthResponse(data=response_data)
@@ -841,63 +916,9 @@ async def get_post_activity_heatmap(
     heatmap_data = result.scalar_one_or_none()
     
     if not heatmap_data:
-        # Возвращаем пустую сетку, если данных еще нет
         return PostActivityHeatmapResponse(data=[[0]*24]*7)
         
     return PostActivityHeatmapResponse(data=heatmap_data.heatmap_data.get("data", [[0]*24]*7))
-
-@pytest.mark.parametrize(
-    "mock_friends_list",
-    [
-        # Случай 1: У друга нет ключа 'city'
-        [{"id": 1, "sex": 1, "bdate": "1.1.2000"}],
-        # Случай 2: У друга нет ключа 'bdate'
-        [{"id": 2, "sex": 2, "city": {"title": "Москва"}}],
-        # Случай 3: Друг деактивирован ("собачка")
-        [{"id": 3, "deactivated": "deleted"}],
-        # Случай 4: Пустой список друзей
-        [],
-    ]
-)
-async def test_get_audience_analytics_robustness(
-    async_client: AsyncClient, auth_headers: dict, mocker, mock_friends_list
-):
-    """
-    Тест проверяет, что эндпоинт /analytics/audience не падает с ошибкой 500,
-    если VK API возвращает друзей с неполными данными.
-    """
-    # Arrange: Мокаем сервис, который вызывается внутри эндпоинта
-    mock_service_class = mocker.patch('app.api.endpoints.analytics.AnalyticsService')
-    mock_instance = mock_service_class.return_value
-    
-    # Мокаем метод, который делает реальную работу, чтобы он вернул нужный нам результат
-    # В данном случае, мы можем просто замокать его так, чтобы он не делал ничего,
-    # а сам эндпоинт протестировать, или полностью замокать его ответ.
-    # Давайте протестируем сам сервис.
-    mock_vk_api = AsyncMock()
-    mock_vk_api.get_user_friends.return_value = mock_friends_list
-    
-    # "Внедряем" мок VK API в реальный экземпляр сервиса
-    mocker.patch('app.services.analytics_service.AnalyticsService._initialize_vk_api', new_callable=AsyncMock)
-    
-    # Act
-    # Мы не можем напрямую вызвать эндпоинт и одновременно мокать сервис внутри него так просто.
-    # Поэтому мы протестируем сам сервис, который является ядром логики эндпоинта.
-    from app.services.analytics_service import AnalyticsService
-    from app.db.session import get_db
-    
-    async for db_session in get_db(): # Получаем сессию для инициализации
-        service = AnalyticsService(db=db_session, user=await db_session.get(User, 1), emitter=AsyncMock())
-        service.vk_api = mock_vk_api # Внедряем мок
-        
-        # Вызываем метод и ожидаем, что он не вызовет исключений
-        try:
-            response_model = await service.get_audience_distribution()
-            # Проверяем, что модель создана корректно
-            assert isinstance(response_model, dict) # get_audience_distribution вернет словарь
-            assert "city_distribution" in response_model
-        except Exception as e:
-            pytest.fail(f"Сервис упал на неполных данных от VK: {e}")
 
 # --- backend/app\api\endpoints\auth.py ---
 
@@ -916,7 +937,7 @@ from app.services.vk_api import is_token_valid
 from app.core.security import create_access_token, encrypt_data
 from app.core.config import settings
 from app.core.plans import get_limits_for_plan
-from app.core.constants import PlanName
+from app.core.enums import PlanName
 from app.api.dependencies import get_current_manager_user, limiter
 
 router = APIRouter()
@@ -2287,7 +2308,7 @@ from app.repositories.stats import StatsRepository
 from app.api.schemas.tasks import ActionResponse, PreviewResponse, TaskConfigResponse, TaskField
 from app.core.plans import get_plan_config, is_feature_available_for_plan
 from app.core.config_loader import AUTOMATIONS_CONFIG
-from app.core.constants import TaskKey
+from app.core.enums import TaskKey
 from app.services.vk_api import VKAPIError
 from app.tasks.service_maps import TASK_CONFIG_MAP
 from app.tasks.task_maps import AnyTaskRequest, TASK_FUNC_MAP, PREVIEW_SERVICE_MAP
@@ -2497,7 +2518,7 @@ from app.api.dependencies import get_current_active_profile, get_arq_pool
 from app.db.session import get_db
 from app.api.schemas.tasks import ActionResponse, PaginatedTasksResponse
 from app.core.config_loader import AUTOMATIONS_CONFIG
-from app.core.constants import TaskKey
+from app.core.enums import TaskKey
 
 from .tasks import _enqueue_task
 from app.tasks.task_maps import AnyTaskRequest, PREVIEW_SERVICE_MAP
@@ -2591,7 +2612,7 @@ from app.api.schemas.teams import TeamRead, InviteMemberRequest, UpdateAccessReq
 from app.core.plans import is_feature_available_for_plan, get_plan_config
 from app.services.vk_api import VKAPI
 from app.core.security import decrypt_data
-from app.core.constants import FeatureKey
+from app.core.enums import FeatureKey
 import structlog
 
 log = structlog.get_logger(__name__)
@@ -2798,7 +2819,7 @@ from app.core.security import decrypt_data
 from app.repositories.stats import StatsRepository
 from app.core.plans import get_features_for_plan, is_feature_available_for_plan
 from app.api.schemas.users import TaskInfoResponse, FilterPresetCreate, FilterPresetRead, ManagedProfileRead, AnalyticsSettingsRead, AnalyticsSettingsUpdate
-from app.core.constants import PlanName, FeatureKey
+from app.core.enums import PlanName, FeatureKey
 
 router = APIRouter()
 
@@ -3793,16 +3814,29 @@ except (FileNotFoundError, Exception) as e:
 # --- backend/app\core\constants.py ---
 
 # backend/app/core/constants.py
-from enum import Enum
 
-class PlanName(str, Enum):
+# Этот файл содержит классы-контейнеры для констант и настроек.
+# Все перечисления (Enums) были вынесены в `app/core/enums.py`.
+
+class CronSettings:
+    AUTOMATION_JOB_LOCK_EXPIRATION_SECONDS: int = 240
+    HUMANIZE_ONLINE_SKIP_CHANCE: float = 0.15
+    TASK_HISTORY_RETENTION_DAYS_PRO: int = 90
+    TASK_HISTORY_RETENTION_DAYS_BASE: int = 30
+
+# --- backend/app\core\enums.py ---
+
+# backend/app/core/enums.py
+import enum
+
+class PlanName(str, enum.Enum):
     BASE = "BASE"
     PLUS = "PLUS"
     PRO = "PRO"
     AGENCY = "AGENCY"
     EXPIRED = "EXPIRED"
 
-class FeatureKey(str, Enum):
+class FeatureKey(str, enum.Enum):
     PROXY_MANAGEMENT = "proxy_management"
     SCENARIOS = "scenarios"
     PROFILE_GROWTH_ANALYTICS = "profile_growth_analytics"
@@ -3811,7 +3845,7 @@ class FeatureKey(str, Enum):
     AGENCY_MODE = "agency_mode"
     POST_SCHEDULER = "post_scheduler"
 
-class TaskKey(str, Enum):
+class TaskKey(str, enum.Enum):
     ACCEPT_FRIENDS = "accept_friends"
     LIKE_FEED = "like_feed"
     ADD_RECOMMENDED = "add_recommended"
@@ -3823,8 +3857,7 @@ class TaskKey(str, Enum):
     BIRTHDAY_CONGRATULATION = "birthday_congratulation"
     ETERNAL_ONLINE = "eternal_online"
 
-# --- НАЧАЛО ИЗМЕНЕНИЯ: Перенесенные Enums ---
-class AutomationType(str, Enum):
+class AutomationType(str, enum.Enum):
     ACCEPT_FRIENDS = "accept_friends"
     LIKE_FEED = "like_feed"
     ADD_RECOMMENDED = "add_recommended"
@@ -3836,7 +3869,7 @@ class AutomationType(str, Enum):
     BIRTHDAY_CONGRATULATION = "birthday_congratulation"
     ETERNAL_ONLINE = "eternal_online"
 
-class ActionType(str, Enum):
+class ActionType(str, enum.Enum):
     LIKE_FEED = "like_feed"
     ADD_FRIENDS = "add_recommended"
     ACCEPT_FRIENDS = "accept_friends"
@@ -3849,32 +3882,39 @@ class ActionType(str, Enum):
     JOIN_GROUPS = "join_groups"
     SYSTEM_NOTIFICATION = "system_notification"
 
-class ActionStatus(str, Enum):
+class ActionStatus(str, enum.Enum):
     SUCCESS = "success"
     FAILURE = "failure"
     WARNING = "warning"
     INFO = "info"
-# --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
-class AutomationGroup(str, Enum):
-    STANDARD = "standard"
-    ONLINE = "online"
-    CONTENT = "content"
+class TicketStatus(str, enum.Enum):
+    OPEN = "open"
+    IN_PROGRESS = "in_progress"
+    RESOLVED = "resolved"
+    CLOSED = "closed"
 
-class CronSettings:
-    # Время в секундах, на которое блокируется запуск однотипных cron-задач,
-    # чтобы избежать двойного выполнения при высокой нагрузке. 4 минуты.
-    AUTOMATION_JOB_LOCK_EXPIRATION_SECONDS: int = 240
+class DelayProfile(enum.Enum):
+    slow = "slow"
+    normal = "normal"
+    fast = "fast"
 
-    # Шанс (от 0.0 до 1.0), с которым "Интеллектуальное присутствие"
-    # пропустит 10-минутный цикл для имитации человеческого перерыва.
-    HUMANIZE_ONLINE_SKIP_CHANCE: float = 0.15
+class TeamMemberRole(enum.Enum):
+    admin = "admin"
+    member = "member"
 
-    # Записи в истории задач старше этого количества дней будут удалены для PRO/Agency тарифов.
-    TASK_HISTORY_RETENTION_DAYS_PRO: int = 90
+class ScenarioStepType(enum.Enum):
+    action = "action"
+    condition = "condition"
 
-    # Записи в истории задач старше этого количества дней будут удалены для бесплатных тарифов.
-    TASK_HISTORY_RETENTION_DAYS_BASE: int = 30
+class ScheduledPostStatus(enum.Enum):
+    scheduled = "scheduled"
+    published = "published"
+    failed = "failed"
+
+class FriendRequestStatus(enum.Enum):
+    pending = "pending"
+    accepted = "accepted"
 
 # --- backend/app\core\exceptions.py ---
 
@@ -3963,7 +4003,7 @@ def configure_logging():
 # backend/app/core/plans.py
 from functools import lru_cache
 from app.core.config_loader import PLAN_CONFIG, AUTOMATIONS_CONFIG
-from app.core.constants import PlanName, FeatureKey, TaskKey
+from app.core.enums import PlanName, FeatureKey
 
 @lru_cache(maxsize=16)
 def get_plan_config(plan_name: PlanName | str) -> dict:
@@ -4238,7 +4278,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 from app.db.base import Base
-from app.db.enums import FriendRequestStatus
+from app.core.enums import FriendRequestStatus
 
 class DailyStats(Base):
     __tablename__ = "daily_stats"
@@ -4374,6 +4414,8 @@ class Payment(Base):
 
 # --- backend/app\db\models\shared.py ---
 
+# backend/app/db/models/shared.py
+
 import datetime
 from sqlalchemy import (
     Column, Integer, String, DateTime, ForeignKey, Text,
@@ -4381,7 +4423,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 from app.db.base import Base
-import enum
+from app.core.enums import TicketStatus
 
 class Proxy(Base):
     __tablename__ = "proxies"
@@ -4414,10 +4456,6 @@ class FilterPreset(Base):
     user = relationship("User", back_populates="filter_presets")
     __table_args__ = (UniqueConstraint('user_id', 'name', 'action_type', name='_user_name_action_uc'),)
 
-class TicketStatus(str, enum.Enum):
-    OPEN = "open"
-    IN_PROGRESS = "in_progress"
-    CLOSED = "closed"
 
 class SupportTicket(Base):
     __tablename__ = "support_tickets"
@@ -4427,6 +4465,7 @@ class SupportTicket(Base):
     status = Column(Enum(TicketStatus), default=TicketStatus.OPEN, nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), onupdate=datetime.datetime.utcnow)
+    reopen_count = Column(Integer, default=0, nullable=False)
     
     user = relationship("User")
     messages = relationship("TicketMessage", back_populates="ticket", cascade="all, delete-orphan", order_by="TicketMessage.created_at")
@@ -4435,12 +4474,39 @@ class TicketMessage(Base):
     __tablename__ = "ticket_messages"
     id = Column(Integer, primary_key=True)
     ticket_id = Column(Integer, ForeignKey("support_tickets.id", ondelete="CASCADE"), nullable=False, index=True)
-    author_id = Column(Integer, ForeignKey("users.id"), nullable=False) # ID автора (юзер или админ)
+    author_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     message = Column(Text, nullable=False)
+    attachment_url = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow)
     
     ticket = relationship("SupportTicket", back_populates="messages")
     author = relationship("User")
+
+# --- backend/app\db\models\system.py ---
+
+# backend/app/db/models/system.py
+import datetime
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, JSON, Text, Boolean
+from sqlalchemy.orm import relationship
+from app.db.base import Base
+
+class GlobalSetting(Base):
+    """Модель для хранения глобальных настроек ключ-значение."""
+    __tablename__ = "global_settings"
+    key = Column(String, primary_key=True, index=True)
+    value = Column(JSON, nullable=False)
+    description = Column(Text, nullable=True)
+    is_enabled = Column(Boolean, default=True, nullable=False)
+
+class BannedIP(Base):
+    """Модель для хранения заблокированных IP-адресов."""
+    __tablename__ = "banned_ips"
+    id = Column(Integer, primary_key=True)
+    ip_address = Column(String, unique=True, index=True, nullable=False)
+    reason = Column(String, nullable=True)
+    banned_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow)
+    admin_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    admin = relationship("User")
 
 # --- backend/app\db\models\task.py ---
 
@@ -4454,8 +4520,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 from app.db.base import Base
-from app.db.enums import ScenarioStepType, ScheduledPostStatus
-from app.core.constants import AutomationType, ActionType, ActionStatus
+from app.core.enums import ScenarioStepType, ScheduledPostStatus, AutomationType, ActionType, ActionStatus
 
 class TaskHistory(Base):
     __tablename__ = "task_history"
@@ -4475,7 +4540,7 @@ class Automation(Base):
     __tablename__ = "automations"
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    automation_type = Column(Enum(AutomationType), nullable=False, index=True) # <-- Используется импортированный Enum
+    automation_type = Column(Enum(AutomationType), nullable=False, index=True)
     is_active = Column(Boolean, default=False, nullable=False)
     settings = Column(JSON, nullable=True)
     last_run_at = Column(DateTime(timezone=True), nullable=True)
@@ -4550,13 +4615,15 @@ class ActionLog(Base):
     __tablename__ = "action_logs"
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    action_type = Column(Enum(ActionType), nullable=False, index=True) # <-- Используется импортированный Enum
+    action_type = Column(Enum(ActionType), nullable=False, index=True)
     message = Column(Text, nullable=False)
-    status = Column(Enum(ActionStatus), nullable=False) # <-- Используется импортированный Enum
+    status = Column(Enum(ActionStatus), nullable=False)
     timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
     user = relationship("User")
 
 # --- backend/app\db\models\user.py ---
+
+# backend/app/db/models/user.py
 
 from datetime import datetime, UTC
 from sqlalchemy import (
@@ -4565,8 +4632,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 from app.db.base import Base
-from app.db.enums import DelayProfile, TeamMemberRole
-from app.core.constants import PlanName
+from app.core.enums import DelayProfile, TeamMemberRole, PlanName
 
 
 class User(Base):
@@ -4660,6 +4726,7 @@ from .payment import *
 from .shared import *
 from .task import *
 from .user import *
+from .system import *
 
 # --- backend/app\repositories\base.py ---
 
@@ -6373,6 +6440,64 @@ class StoryService(BaseVKService):
         await self._increment_stat(stats, 'stories_viewed_count', total_stories_count)
         await self.emitter.send_log(f"Успешно просмотрено {total_stories_count} историй.", "success")
 
+# --- backend/app\services\system_service.py ---
+
+# backend/app/services/system_service.py
+from functools import lru_cache
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.db.models.system import GlobalSetting
+from app.db.session import AsyncSessionFactory
+
+class SystemService:
+    _settings_cache = {}
+
+    @classmethod
+    async def _load_settings(cls):
+        """Загружает все настройки из БД в кэш."""
+        async with AsyncSessionFactory() as session:
+            result = await session.execute(select(GlobalSetting))
+            settings = result.scalars().all()
+            cls._settings_cache = {s.key: {"value": s.value, "is_enabled": s.is_enabled} for s in settings}
+
+    @classmethod
+    @lru_cache(maxsize=128)
+    def _get_setting_sync(cls, key: str, default: any):
+        """Синхронный метод для получения значения из кэша. Используется lru_cache."""
+        return cls._settings_cache.get(key, default)
+
+    @classmethod
+    async def get_setting(cls, key: str, default: any = None):
+        """Асинхронный метод для получения настройки. При необходимости обновляет кэш."""
+        if not cls._settings_cache:
+            await cls._load_settings()
+        return cls._get_setting_sync(key, default)
+
+    @classmethod
+    async def is_feature_enabled(cls, feature_key: str) -> bool:
+        """Проверяет, включена ли глобально определенная функция."""
+        setting = await cls.get_setting(f"feature:{feature_key}")
+        if setting:
+            return setting.get("is_enabled", True)
+        # Если настройки нет, по умолчанию считаем фичу включенной
+        return True
+
+    @classmethod
+    async def get_ticket_reopen_limit(cls) -> int:
+        """Получает лимит на переоткрытие тикетов."""
+        setting = await cls.get_setting("tickets:reopen_limit")
+        if setting and isinstance(setting.get("value"), int):
+            return setting["value"]
+        return 3 # Значение по умолчанию
+
+    @classmethod
+    async def get_daily_ticket_creation_limit(cls) -> int:
+        """Получает дневной лимит на создание тикетов."""
+        setting = await cls.get_setting("tickets:daily_creation_limit")
+        if setting and isinstance(setting.get("value"), int):
+            return setting["value"]
+        return 5 # Значение по умолчанию
+
 # --- backend/app\services\vk_user_filter.py ---
 
 # backend/app/services/vk_user_filter.py
@@ -7145,6 +7270,7 @@ async def snapshot_all_users_metrics_job(ctx):
 # --- backend/app\tasks\service_maps.py ---
 
 # backend/app/tasks/service_maps.py
+
 # Этот файл разрывает циклическую зависимость между runner.py и scenario_service.py
 # Он является центральным местом для сопоставления задач с их исполнителями (сервисами).
 
@@ -7157,7 +7283,8 @@ from app.services.story_service import StoryService
 from app.services.automation_service import AutomationService
 from app.services.message_service import MessageService
 from app.services.group_management_service import GroupManagementService
-from app.core.constants import TaskKey
+# --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+from app.core.enums import TaskKey
 from app.api.schemas import actions as ActionSchemas
 
 # Карта для исполнителя сценариев (Service, method_name)
@@ -7175,7 +7302,6 @@ TASK_SERVICE_MAP = {
 }
 
 # Полная карта для runner.py (Service, method_name, ParamsModel)
-# Теперь она живет здесь, а не в runner.py
 TASK_CONFIG_MAP = {
     TaskKey.LIKE_FEED: (FeedService, "like_newsfeed", ActionSchemas.LikeFeedRequest),
     TaskKey.ADD_RECOMMENDED: (OutgoingRequestService, "add_recommended_friends", ActionSchemas.AddFriendsRequest),
@@ -7196,15 +7322,15 @@ TASK_CONFIG_MAP = {
 import functools
 import structlog
 from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload, joinedload
+from sqlalchemy.orm import joinedload
 
 from app.db.models import User, TaskHistory, Automation
 from app.db.session import AsyncSessionFactory
 from app.services.event_emitter import RedisEventEmitter
 from app.core.exceptions import UserActionException
 from app.services.vk_api import VKAPIError, VKAuthError
-from app.core.constants import TaskKey
+# --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+from app.core.enums import TaskKey 
 from app.tasks.service_maps import TASK_CONFIG_MAP
 from contextlib import asynccontextmanager
 
@@ -7233,6 +7359,7 @@ def arq_task_runner(func):
             user_id = None
             
             try:
+                # --- УЛУЧШЕНИЕ: Используем selectinload для прокси ---
                 stmt = select(TaskHistory).where(TaskHistory.id == task_history_id).options(
                     joinedload(TaskHistory.user).selectinload(User.proxies)
                 )
@@ -7299,7 +7426,6 @@ def arq_task_runner(func):
 
 
 async def _run_service_method(session, user, params, emitter, task_key: TaskKey):
-    """Вспомогательная функция: находит нужный сервис и метод по ключу и выполняет его."""
     ServiceClass, method_name, ParamsModel = TASK_CONFIG_MAP[task_key]
     validated_params = ParamsModel(**params)
     service_instance = ServiceClass(db=session, user=user, emitter=emitter)
@@ -7462,14 +7588,8 @@ async def run_scenario_from_scheduler_task(ctx, scenario_id: int, user_id: int, 
 # --- backend/app\tasks\task_maps.py ---
 
 # backend/app/tasks/task_maps.py
-
-"""
-Централизованный модуль для хранения карт и определений, связанных с задачами.
-Это помогает избежать циклических зависимостей и упрощает добавление новых задач.
-"""
 from typing import Union
 
-# --- Сервисы, используемые для выполнения задач ---
 from app.services.feed_service import FeedService
 from app.services.incoming_request_service import IncomingRequestService
 from app.services.outgoing_request_service import OutgoingRequestService
@@ -7479,24 +7599,21 @@ from app.services.automation_service import AutomationService
 from app.services.message_service import MessageService
 from app.services.group_management_service import GroupManagementService
 
-# --- Схемы данных (параметры) для каждой задачи ---
 from app.api.schemas.actions import (
     AcceptFriendsRequest, LikeFeedRequest, AddFriendsRequest, EmptyRequest,
     RemoveFriendsRequest, MassMessagingRequest, JoinGroupsRequest, LeaveGroupsRequest,
     BirthdayCongratulationRequest, EternalOnlineRequest
 )
 
-# --- Ключи задач ---
-from app.core.constants import TaskKey
+from app.core.enums import TaskKey
 
-# 1. Объединенный тип для всех возможных моделей с параметрами задач
 AnyTaskRequest = Union[
     AcceptFriendsRequest, LikeFeedRequest, AddFriendsRequest, EmptyRequest,
     RemoveFriendsRequest, MassMessagingRequest, JoinGroupsRequest, LeaveGroupsRequest,
     BirthdayCongratulationRequest, EternalOnlineRequest
 ]
 
-# 2. Карта, связывающая ключ задачи с именем функции-исполнителя в ARQ
+# --- ЕДИНЫЙ ИСТОЧНИК ИСТИНЫ ДЛЯ ВСЕХ ЗАДАЧ ARQ ---
 TASK_FUNC_MAP = {
     TaskKey.ACCEPT_FRIENDS: "accept_friend_requests_task",
     TaskKey.LIKE_FEED: "like_feed_task",
@@ -7510,7 +7627,6 @@ TASK_FUNC_MAP = {
     TaskKey.ETERNAL_ONLINE: "eternal_online_task",
 }
 
-# 3. Карта для функции предпросмотра, связывающая ключ задачи с сервисным методом
 PREVIEW_SERVICE_MAP = {
     TaskKey.ADD_RECOMMENDED: (OutgoingRequestService, "get_add_recommended_targets", AddFriendsRequest),
     TaskKey.ACCEPT_FRIENDS: (IncomingRequestService, "get_accept_friends_targets", AcceptFriendsRequest),
@@ -7527,173 +7643,100 @@ PREVIEW_SERVICE_MAP = {
 
 # --- backend/app\tasks\logic\analytics_jobs.py ---
 
-# --- backend/app/tasks/logic/analytics_jobs.py ---
-
+# backend/app/tasks/logic/automation_jobs.py
 import datetime
 import structlog
 import pytz
-from sqlalchemy import func, select, update
-from sqlalchemy.ext.asyncio import AsyncSession
+import random
+from sqlalchemy import select, or_
 from sqlalchemy.orm import selectinload
+from sqlalchemy.ext.asyncio import AsyncSession
+from arq.connections import ArqRedis
 
-from app.db.models import (
-    DailyStats, WeeklyStats, MonthlyStats, User, FriendRequestLog, FriendRequestStatus,
-    ProfileMetric
-)
-from app.services.vk_api import VKAPI, VKAuthError
-from app.core.security import decrypt_data
-from app.services.analytics_service import AnalyticsService
-from app.services.profile_analytics_service import ProfileAnalyticsService
-from app.services.event_emitter import SystemLogEmitter
+from app.db.models import Automation, TaskHistory, User
+from app.core.config_loader import AUTOMATIONS_CONFIG
+from app.core.constants import CronSettings
+from app.core.enums import TaskKey, AutomationType
+from app.tasks.task_maps import TASK_FUNC_MAP
 
 log = structlog.get_logger(__name__)
 
-# --- ИЗМЕНЕНИЕ: Все функции теперь принимают `session` как аргумент ---
 
-async def _aggregate_daily_stats_async(session: AsyncSession):
-    """Агрегирует вчерашнюю дневную статистику в недельную и месячную."""
-    yesterday = datetime.date.today() - datetime.timedelta(days=1)
-    
-    stmt = select(
-        DailyStats.user_id,
-        func.sum(DailyStats.likes_count).label("likes"),
-        func.sum(DailyStats.friends_added_count).label("friends"),
-        func.sum(DailyStats.friend_requests_accepted_count).label("accepted")
-    ).where(DailyStats.date == yesterday).group_by(DailyStats.user_id)
-    
-    daily_sums = (await session.execute(stmt)).all()
-    if not daily_sums:
+
+async def _create_and_run_arq_task(session: AsyncSession, arq_pool: ArqRedis, user_id: int, task_name_key: str, settings_dict: dict):
+    try:
+        task_key_enum = TaskKey(task_name_key)
+        task_func_name = TASK_FUNC_MAP.get(task_key_enum)
+    except ValueError:
+        log.warn("cron.invalid_task_key", task_name=task_name_key)
         return
 
-    week_id, month_id = yesterday.strftime('%Y-%W'), yesterday.strftime('%Y-%m')
-
-    for stat_type, identifier in [(WeeklyStats, week_id), (MonthlyStats, month_id)]:
-        values_to_upsert = []
-        for r in daily_sums:
-            values_to_upsert.append({
-                "user_id": r.user_id,
-                f"{'weekly_stats'.replace('s', '') if stat_type is WeeklyStats else 'monthly_stats'.replace('s', '')}_identifier": identifier,
-                "likes_count": r.likes,
-                "friends_added_count": r.friends,
-                "friend_requests_accepted_count": r.accepted
-            })
-
-        if not values_to_upsert:
-            continue
-        
-        from sqlalchemy.dialects.postgresql import insert
-        
-        insert_stmt = insert(stat_type).values(values_to_upsert)
-        
-        update_dict = {
-            'likes_count': getattr(stat_type, 'likes_count') + insert_stmt.excluded.likes_count,
-            'friends_added_count': getattr(stat_type, 'friends_added_count') + insert_stmt.excluded.friends_added_count,
-            'friend_requests_accepted_count': getattr(stat_type, 'friend_requests_accepted_count') + insert_stmt.excluded.friend_requests_accepted_count
-        }
-        
-        index_elements_key = 'weekly_stats_identifier' if stat_type is WeeklyStats else 'monthly_stats_identifier'
-        final_stmt = insert_stmt.on_conflict_do_update(
-            index_elements=['user_id', index_elements_key],
-            set_=update_dict
-        )
-        await session.execute(final_stmt)
-
-    log.info("analytics.aggregated_daily_stats", count=len(daily_sums), date=yesterday.isoformat())
-
-
-async def _snapshot_all_users_metrics_async(session: AsyncSession):
-    """Создает снимок ключевых метрик профиля для всех активных пользователей."""
-    now = datetime.datetime.now(pytz.utc)
-    stmt = select(User).where(
-        (User.plan_expires_at == None) | (User.plan_expires_at > now)
-    )
-    result = await session.execute(stmt)
-    active_users = result.scalars().all()
-
-    if not active_users:
-        log.info("snapshot_metrics_task.no_active_users")
+    if not task_func_name:
+        log.warn("cron.arq_task_not_found", task_name=task_name_key)
         return
 
-    log.info("snapshot_metrics_task.start", count=len(active_users))
+    task_config = next((item for item in AUTOMATIONS_CONFIG if item.id == task_name_key), None)
+    display_name = task_config.name if task_config else "Автоматическая задача"
 
-    for user in active_users:
-        try:
-            async with session.begin_nested():
-                service = ProfileAnalyticsService(db=session, user=user, emitter=SystemLogEmitter("snapshot_metrics"))
-                await service.snapshot_profile_metrics()
-        except VKAuthError:
-            log.warn("snapshot_metrics_task.auth_error", user_id=user.id)
-        except Exception as e:
-            log.error("snapshot_metrics_task.user_error", user_id=user.id, error=str(e), exc_info=True)
-    log.info("snapshot_metrics_task.finished")
+    task_history = TaskHistory(user_id=user_id, task_name=display_name, status="PENDING", parameters=settings_dict)
+    session.add(task_history)
+    await session.flush()
 
+    job = await arq_pool.enqueue_job(task_func_name, task_history_id=task_history.id, **(settings_dict or {}))
+    task_history.arq_job_id = job.job_id
 
-async def _generate_all_heatmaps_async(session: AsyncSession):
-    """Генерирует тепловые карты активности для всех пользователей с доступом к фиче."""
-    users = (await session.execute(select(User).where(User.plan.in_(['PLUS', 'PRO', 'AGENCY'])))).scalars().all()
-    if not users: return
-    
-    log.info("analytics.heatmap_generation_started", count=len(users))
-    for user in users:
-        try:
-            async with session.begin_nested():
-                emitter = SystemLogEmitter(task_name="heatmap_generator")
-                emitter.set_context(user_id=user.id)
-                service = AnalyticsService(db=session, user=user, emitter=emitter)
-                await service.generate_post_activity_heatmap()
-        except Exception as e:
-            log.error("analytics.heatmap_generation_user_error", user_id=user.id, error=str(e))
+async def _run_daily_automations_async(session: AsyncSession, arq_pool: ArqRedis, automation_group: str):
+    now_utc = datetime.datetime.now(pytz.utc)
+    moscow_tz = pytz.timezone("Europe/Moscow")
+    now_moscow = now_utc.astimezone(moscow_tz)
 
-
-async def _update_friend_request_statuses_async(session: AsyncSession):
-    """Проверяет статусы отправленных заявок в друзья (приняты или нет)."""
-    stmt = select(User).options(selectinload(User.friend_requests)).where(
-        User.friend_requests.any(FriendRequestLog.status == FriendRequestStatus.pending)
-    )
-    users_with_pending_reqs = (await session.execute(stmt)).scalars().unique().all()
-    
-    if not users_with_pending_reqs:
+    automation_ids = [item.id for item in AUTOMATIONS_CONFIG if item.group == automation_group]
+    if not automation_ids:
         return
+        
+    automation_enums = [AutomationType(aid) for aid in automation_ids]
 
-    log.info("analytics.conversion_tracker_started", count=len(users_with_pending_reqs))
+    stmt = select(Automation).join(User).where(
+        Automation.is_active == True,
+        Automation.automation_type.in_(automation_enums),
+        or_(User.plan_expires_at.is_(None), User.plan_expires_at > now_utc)
+    ).options(selectinload(Automation.user))
     
-    for user in users_with_pending_reqs:
-        pending_reqs = [req for req in user.friend_requests if req.status == FriendRequestStatus.pending]
-        if not pending_reqs:
-            continue
+    automations = (await session.execute(stmt)).scalars().unique().all()
+    if not automations:
+        return
+        
+    log.info("run_daily_automations.start", count=len(automations), group=automation_group)
 
-        vk_api = None
-        try:
-            vk_token = decrypt_data(user.encrypted_vk_token)
-            if not vk_token:
-                log.warn("analytics.conversion_tracker_no_token", user_id=user.id)
-                continue
+    for automation in automations:
+        automation_type_value = automation.automation_type.value
 
-            vk_api = VKAPI(access_token=vk_token)
-            
-            friends_response = await vk_api.get_user_friends(user_id=user.vk_id, fields="")
-            if not friends_response or 'items' not in friends_response:
-                continue
-            
-            friend_ids = set(friends_response['items'])
-            
-            accepted_req_ids = [req.id for req in pending_reqs if req.target_vk_id in friend_ids]
-            
-            if accepted_req_ids:
-                update_stmt = update(FriendRequestLog).where(FriendRequestLog.id.in_(accepted_req_ids)).values(
-                    status=FriendRequestStatus.accepted, 
-                    resolved_at=datetime.datetime.now(pytz.utc)
-                )
-                await session.execute(update_stmt)
-                log.info("analytics.conversion_tracker_updated", user_id=user.id, count=len(accepted_req_ids))
+        if automation_type_value == 'eternal_online':
+            automation_settings = automation.settings or {}
+            if automation_settings.get('mode', 'schedule') == 'schedule':
+                day_key = str(now_moscow.isoweekday())
+                day_schedule = automation_settings.get('schedule_weekly', {}).get(day_key)
 
-        except Exception as e:
-            # Читаем ID до возможной ошибки, чтобы избежать MissingGreenlet
-            user_id_for_log = user.id 
-            log.error("analytics.conversion_tracker_user_error", user_id=user_id_for_log, error=str(e))
-        finally:
-            if vk_api:
-                await vk_api.close()
+                if not day_schedule or not day_schedule.get('is_active'):
+                    continue
+
+                try:
+                    start = datetime.datetime.strptime(day_schedule.get('start_time', '00:00'), '%H:%M').time()
+                    end = datetime.datetime.strptime(day_schedule.get('end_time', '23:59'), '%H:%M').time()
+                    
+                    if not (start <= now_moscow.time() <= end):
+                        continue
+                    
+                    if automation_settings.get('humanize', True) and random.random() < CronSettings.HUMANIZE_ONLINE_SKIP_CHANCE:
+                        log.info("eternal_online.humanizer_skip", user_id=automation.user_id)
+                        continue
+                except (ValueError, TypeError):
+                    log.error("eternal_online.schedule_parse_error", user_id=automation.user_id, schedule=day_schedule)
+                    continue
+        
+        automation.last_run_at = now_utc
+        async with session.begin_nested():
+            await _create_and_run_arq_task(session, arq_pool, automation.user_id, automation_type_value, automation.settings)
 
 # --- backend/app\tasks\logic\automation_jobs.py ---
 
@@ -7794,14 +7837,16 @@ async def _run_daily_automations_async(session: AsyncSession, arq_pool: ArqRedis
 # app/tasks/logic/maintenance_jobs.py
 import datetime
 import structlog
-from sqlalchemy import delete, select, update, or_
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from contextlib import asynccontextmanager
 
 from app.db.session import AsyncSessionFactory
 from app.db.models import TaskHistory, User, Automation, Notification
 from app.core.plans import get_limits_for_plan
-from app.core.constants import CronSettings, PlanName
+from app.core.enums import PlanName
+from app.core.constants import CronSettings
+
 
 log = structlog.get_logger(__name__)
 
@@ -7817,13 +7862,13 @@ async def get_session(provided_session: AsyncSession | None = None):
 async def _clear_old_task_history_async():
     """Удаляет старые записи из TaskHistory согласно настройкам хранения."""
     async with AsyncSessionFactory() as session:
-        # (код этой функции остается без изменений)
         pro_cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=CronSettings.TASK_HISTORY_RETENTION_DAYS_PRO)
         stmt_pro = delete(TaskHistory).where(
-            TaskHistory.user_id.in_(select(User.id).filter(User.plan.in_(['PRO', 'Plus', 'Agency']))),
+            TaskHistory.user_id.in_(select(User.id).filter(User.plan.in_(['PRO', 'PLUS', 'AGENCY']))),
             TaskHistory.created_at < pro_cutoff
         )
         pro_result = await session.execute(stmt_pro)
+        
         base_cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=CronSettings.TASK_HISTORY_RETENTION_DAYS_BASE)
         stmt_base = delete(TaskHistory).where(
             TaskHistory.user_id.in_(
@@ -7832,6 +7877,7 @@ async def _clear_old_task_history_async():
             TaskHistory.created_at < base_cutoff
         )
         base_result = await session.execute(stmt_base)
+        
         await session.commit()
         total_deleted = pro_result.rowcount + base_result.rowcount
         if total_deleted > 0:
@@ -7839,7 +7885,6 @@ async def _clear_old_task_history_async():
 
 async def _check_expired_plans_async(session_for_test: AsyncSession | None = None):
     """Проверяет и деактивирует истекшие тарифные планы пользователей."""
-    # --- ИСПРАВЛЕНИЕ: Используем контекстный менеджер ---
     async with get_session(session_for_test) as session:
         now = datetime.datetime.now(datetime.UTC)
         stmt = select(User).where(User.plan != 'Expired', User.plan_expires_at != None, User.plan_expires_at < now)
@@ -7849,7 +7894,7 @@ async def _check_expired_plans_async(session_for_test: AsyncSession | None = Non
             return
 
         log.info("maintenance.expired_plans_found", count=len(expired_users))
-        expired_plan_limits = get_limits_for_plan("Expired")
+        expired_plan_limits = get_limits_for_plan(PlanName.EXPIRED)
         user_ids_to_deactivate = [user.id for user in expired_users]
 
         notifications = [Notification(user_id=user.id, message=f"Срок действия тарифа '{user.plan}' истек.", level="error") for user in expired_users]
@@ -7858,16 +7903,10 @@ async def _check_expired_plans_async(session_for_test: AsyncSession | None = Non
         await session.execute(update(Automation).where(Automation.user_id.in_(user_ids_to_deactivate)).values(is_active=False))
         
         await session.execute(update(User).where(User.id.in_(user_ids_to_deactivate)).values(
-            plan="Expired",
-            daily_likes_limit=expired_plan_limits["daily_likes_limit"],
-            daily_add_friends_limit=expired_plan_limits["daily_add_friends_limit"],
-            daily_message_limit=expired_plan_limits["daily_message_limit"],
-            daily_posts_limit=expired_plan_limits["daily_posts_limit"],
-            daily_join_groups_limit=expired_plan_limits["daily_join_groups_limit"],
-            daily_leave_groups_limit=expired_plan_limits["daily_leave_groups_limit"]
+            plan=PlanName.EXPIRED.name,
+            **{k: v for k, v in expired_plan_limits.items() if hasattr(User, k)}
         ))
         
-        # Коммит делается, только если мы не в тесте
         if not session_for_test:
             await session.commit()
         else:

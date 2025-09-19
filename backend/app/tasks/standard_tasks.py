@@ -3,15 +3,15 @@
 import functools
 import structlog
 from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload, joinedload
+from sqlalchemy.orm import joinedload
 
 from app.db.models import User, TaskHistory, Automation
 from app.db.session import AsyncSessionFactory
 from app.services.event_emitter import RedisEventEmitter
 from app.core.exceptions import UserActionException
 from app.services.vk_api import VKAPIError, VKAuthError
-from app.core.constants import TaskKey
+# --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+from app.core.enums import TaskKey 
 from app.tasks.service_maps import TASK_CONFIG_MAP
 from contextlib import asynccontextmanager
 
@@ -40,6 +40,7 @@ def arq_task_runner(func):
             user_id = None
             
             try:
+                # --- УЛУЧШЕНИЕ: Используем selectinload для прокси ---
                 stmt = select(TaskHistory).where(TaskHistory.id == task_history_id).options(
                     joinedload(TaskHistory.user).selectinload(User.proxies)
                 )
@@ -106,7 +107,6 @@ def arq_task_runner(func):
 
 
 async def _run_service_method(session, user, params, emitter, task_key: TaskKey):
-    """Вспомогательная функция: находит нужный сервис и метод по ключу и выполняет его."""
     ServiceClass, method_name, ParamsModel = TASK_CONFIG_MAP[task_key]
     validated_params = ParamsModel(**params)
     service_instance = ServiceClass(db=session, user=user, emitter=emitter)
