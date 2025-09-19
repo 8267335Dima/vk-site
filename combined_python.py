@@ -545,8 +545,12 @@ class UserAdmin(ModelView, model=User):
         plus_plan = None
         successful_count = 0
         for user in users:
+            if user.plan_expires_at is None:
+                continue
+            # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+
             now = datetime.now(timezone.utc)
-            start_date = user.plan_expires_at if user.plan_expires_at and user.plan_expires_at > now else now
+            start_date = user.plan_expires_at if user.plan_expires_at > now else now
             user.plan_expires_at = start_date + timedelta(days=30)
 
             if user.plan.name_id == PlanName.EXPIRED.name:
@@ -571,19 +575,24 @@ class UserAdmin(ModelView, model=User):
         session: AsyncSession = request.state.session
         pks_int = [int(pk) for pk in pks]
         
-        # --- НОВАЯ ЗАЩИТА ---
+        # --- Защита от удаления главного админа ---
         admin_user_stmt = select(User).where(User.vk_id == int(settings.ADMIN_VK_ID))
-        admin_id = (await session.execute(admin_user_stmt)).scalar_one().id
-        if admin_id in pks_int:
+        admin_id_result = await session.execute(admin_user_stmt)
+        admin_user = admin_id_result.scalar_one_or_none()
+        if admin_user and admin_user.id in pks_int:
             return JSONResponse(status_code=400, content={"message": "Нельзя удалить главного администратора."})
-        # --- КОНЕЦ ЗАЩИТЫ ---
+        # --- Конец защиты ---
 
         if pks_int:
             result = await session.execute(select(User).where(User.id.in_(pks_int)))
             for user in result.scalars().all():
-                user.is_deleted=True
-                user.deleted_at=datetime.now(timezone.utc)
-                user.is_frozen=True
+                # --- НАЧАЛО ИСПРАВЛЕНИЯ ---
+                # Обновляем пользователя, только если он еще не был удален.
+                if not user.is_deleted:
+                    user.is_deleted = True
+                    user.deleted_at = datetime.now(timezone.utc)
+                    user.is_frozen = True
+                # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
             await session.commit()
         return JSONResponse(content={"message": "Аккаунты помечены как удаленные."})
 
@@ -1439,7 +1448,7 @@ from pydantic import BaseModel
 from typing import List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.db.session import get_db
 from app.db.models import User, Automation
 from app.api.dependencies import get_current_active_profile
@@ -1474,7 +1483,7 @@ async def get_automations_status(
         auto_type = config_item.id
         db_item = user_automations_db.get(auto_type)
         
-        is_available = await is_feature_available_for_plan(current_user.plan.name_id, auto_type, user=current_user)
+        is_available = await is_feature_available_for_plan(current_user.plan.name_id, auto_type, db=db, user=current_user)
         
         response_list.append(AutomationStatus(
             automation_type=auto_type,
@@ -1494,7 +1503,7 @@ async def update_automation(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    if request_data.is_active and not await is_feature_available_for_plan(current_user.plan.name_id, automation_type, user=current_user):
+    if request_data.is_active and not await is_feature_available_for_plan(current_user.plan.name_id, automation_type, db=db, user=current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Функция '{automation_type}' недоступна на вашем тарифе '{current_user.plan.display_name}'."
@@ -1504,36 +1513,33 @@ async def update_automation(
     if not config_item:
         raise HTTPException(status_code=404, detail="Автоматизация такого типа не найдена.")
 
-    query = select(Automation).where(
-        Automation.user_id == current_user.id,
-        Automation.automation_type == automation_type
-    )
-    result = await db.execute(query)
-    automation = result.scalar_one_or_none()
+    values_to_set = {
+        "is_active": request_data.is_active,
+        "settings": request_data.settings if request_data.settings is not None else config_item.default_settings or {}
+    }
 
-    if not automation:
-        automation = Automation(
-            user_id=current_user.id,
-            automation_type=automation_type,
-            is_active=request_data.is_active,
-            settings=request_data.settings or config_item.default_settings or {}
-        )
-        db.add(automation)
-    else:
-        automation.is_active = request_data.is_active
-        if request_data.settings is not None:
-            automation.settings = request_data.settings
+    stmt = pg_insert(Automation).values(
+        user_id=current_user.id,
+        automation_type=automation_type,
+        **values_to_set
+    ).on_conflict_do_update(
+        index_elements=['user_id', 'automation_type'],
+        set_=values_to_set
+    ).returning(Automation) # .returning() чтобы получить объект после вставки/обновления
+
+    result = await db.execute(stmt)
+    automation = result.scalar_one()
     
     await db.commit()
-    await db.refresh(automation)
+    # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
     
     return AutomationStatus(
-        automation_type=automation.automation_type,
+        automation_type=automation.automation_type.value, # Используем .value для Enum
         is_active=automation.is_active,
         settings=automation.settings,
         name=config_item.name,
         description=config_item.description,
-        is_available=await is_feature_available_for_plan(current_user.plan.name_id, automation_type, user=current_user)
+        is_available=await is_feature_available_for_plan(current_user.plan.name_id, automation_type, db=db, user=current_user)
     )
 
 # --- backend/app\api\endpoints\billing.py ---
@@ -1984,8 +1990,11 @@ from app.core.plans import is_feature_available_for_plan
 
 router = APIRouter()
 
-async def check_proxy_feature_access(current_user: User = Depends(get_current_active_profile)):
-    if not await is_feature_available_for_plan(current_user.plan.name_id, "proxy_management", user=current_user):
+async def check_proxy_feature_access(
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db) # <--- ДОБАВЛЯЕМ ЗАВИСИМОСТЬ
+):
+    if not await is_feature_available_for_plan(current_user.plan.name_id, "proxy_management", db=db, user=current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Управление прокси доступно только на PRO-тарифе."
@@ -2695,7 +2704,7 @@ async def _enqueue_task(
                 detail=f"Достигнут лимит на одновременное выполнение задач ({max_concurrent}). Дождитесь завершения текущих."
             )
 
-    if not await is_feature_available_for_plan(user.plan, task_key):
+    if not await is_feature_available_for_plan(user.plan.name_id, task_key, db=db, user=user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Действие недоступно на вашем тарифе '{user.plan}'.")
 
     task_func_name = TASK_FUNC_MAP.get(TaskKey(task_key))
@@ -2959,7 +2968,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, joinedload
 from sqlalchemy import select, delete
 from typing import List
-
+from app.services.vk_api import VKAPIError
 from app.db.session import get_db
 from app.db.models import User, Team, TeamMember, ManagedProfile, TeamProfileAccess
 from app.api.dependencies import get_current_manager_user
@@ -2973,13 +2982,17 @@ import structlog
 log = structlog.get_logger(__name__)
 router = APIRouter()
 
-async def check_agency_plan(manager: User = Depends(get_current_manager_user)):
-    if not is_feature_available_for_plan(manager.plan, FeatureKey.AGENCY_MODE):
+async def check_agency_plan(
+    manager: User = Depends(get_current_manager_user),
+    db: AsyncSession = Depends(get_db) 
+):
+    if not await is_feature_available_for_plan(manager.plan.name_id, FeatureKey.AGENCY_MODE, db=db, user=manager):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Управление командой доступно только на тарифе 'Agency'."
         )
     return manager
+
 
 async def get_team_owner(manager: User = Depends(check_agency_plan), db: AsyncSession = Depends(get_db)):
     stmt = select(Team).where(Team.owner_id == manager.id)
@@ -3026,16 +3039,18 @@ async def get_my_team(
     # Добавляем VK ID самого менеджера
     all_vk_ids_to_fetch.add(manager.vk_id)
 
-    # --- ШАГ 3: Делаем ОДИН пакетный запрос к VK API ---
+    # --- НАЧАЛО ИСПРАВЛЕНИЯ ---
     vk_info_map = {}
     if all_vk_ids_to_fetch:
         vk_api = VKAPI(decrypt_data(manager.encrypted_vk_token))
         try:
             vk_ids_str = ",".join(map(str, all_vk_ids_to_fetch))
-            # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
             user_infos = await vk_api.users.get(user_ids=vk_ids_str, fields="photo_50")
             if user_infos:
                 vk_info_map = {info['id']: info for info in user_infos}
+        except VKAPIError as e: # Добавляем блок except
+            log.warn("get_my_team.vk_api_error", error=str(e))
+            # При ошибке vk_info_map останется пустым, и код ниже отработает с заглушками
         finally:
             await vk_api.close()
 
@@ -3134,12 +3149,11 @@ async def update_member_access(
     if not member:
         raise HTTPException(status_code=404, detail="Участник команды не найден.")
 
-    # Проверяем, что все profile_user_id принадлежат менеджеру
     managed_profiles_stmt = select(ManagedProfile.profile_user_id).where(ManagedProfile.manager_user_id == manager.id)
     managed_ids = (await db.execute(managed_profiles_stmt)).scalars().all()
     
     for access in access_data:
-        if access.profile_user_id not in managed_ids and access.profile_user_id != manager.id:
+        if access.profile_user_id not in managed_ids:
             raise HTTPException(status_code=403, detail=f"Доступ к профилю {access.profile_user_id} не может быть предоставлен.")
 
     await db.execute(delete(TeamProfileAccess).where(TeamProfileAccess.team_member_id == member_id))
@@ -3268,7 +3282,7 @@ async def update_user_delay_profile(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    if request_data.delay_profile != DelayProfile.normal and not await is_feature_available_for_plan(current_user.plan.name_id, FeatureKey.FAST_SLOW_DELAY_PROFILE, user=current_user):
+    if request_data.delay_profile != DelayProfile.normal and not await is_feature_available_for_plan(current_user.plan.name_id, FeatureKey.FAST_SLOW_DELAY_PROFILE, db=db, user=current_user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Смена скорости доступна только на PRO тарифе.")
         
     current_user.delay_profile = request_data.delay_profile
@@ -4341,7 +4355,7 @@ from functools import lru_cache
 # --- ДОБАВЬТЕ ЭТИ ИМПОРТЫ ---
 from typing import Optional
 from app.db.models import User
-# --- КОНЕЦ ДОБАВЛЕНИЙ ---
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config_loader import PLAN_CONFIG, AUTOMATIONS_CONFIG
 from app.core.enums import PlanName, FeatureKey
 from app.services.system_service import SystemService # <--- ДОБАВЬТЕ ЭТОТ ИМПОРТ
@@ -4377,27 +4391,29 @@ def get_all_feature_keys() -> list[str]:
     return list(set(automation_ids + [f.value for f in other_features]))
 
 
-async def is_feature_available_for_plan(plan_name: PlanName | str, feature_id: str, user: Optional[User] = None) -> bool:
+async def is_feature_available_for_plan(
+    plan_name: PlanName | str,
+    feature_id: str,
+    db: AsyncSession, # <--- ПРИНИМАЕТ СЕССИЮ
+    user: Optional[User] = None
+    ) -> bool:
     """
     Проверяет, доступна ли фича для тарифа, с учетом глобальных настроек и прав администратора.
     """
-    # 1. Администратор имеет доступ ко всему, всегда.
     if user and user.is_admin:
         return True
-
-    # 2. Проверяем, не отключена ли фича глобально.
-    if not await SystemService.is_feature_enabled(feature_id):
+    # --- ИСПРАВЛЕНИЕ: передаем сессию дальше ---
+    if not await SystemService.is_feature_enabled(feature_id, session=db):
         return False
 
-    # 3. Проверяем доступность по тарифному плану.
     key = plan_name if isinstance(plan_name, str) else plan_name.name_id
     plan_model = PLAN_CONFIG.get(key, PLAN_CONFIG[PlanName.EXPIRED.name])
-    
+
     available_features = plan_model.available_features
-    
+
     if available_features == "*":
         return True
-    
+
     return feature_id in available_features
 
 
@@ -4729,7 +4745,7 @@ class FriendRequestLog(Base):
 # --- backend/app\db\models\payment.py ---
 
 # backend/app/db/models/payment.py
-import datetime
+from datetime import datetime, UTC
 import enum
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Float, Enum, JSON, Boolean, Text
 from sqlalchemy.orm import relationship
@@ -4759,13 +4775,13 @@ class Payment(Base):
     __tablename__ = "payments"
     id = Column(Integer, primary_key=True)
     payment_system_id = Column(String, unique=True, index=True, nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     amount = Column(Float, nullable=False)
     status = Column(Enum(PaymentStatus, native_enum=False), default=PaymentStatus.PENDING, nullable=False)
     plan_name = Column(String, nullable=False)
     months = Column(Integer, nullable=False, default=1)
-    created_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow)
-    updated_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
     error_message = Column(Text, nullable=True)
     user = relationship("User")
 
@@ -6823,12 +6839,11 @@ class SystemService:
     _settings_cache = {}
 
     @classmethod
-    async def _load_settings(cls):
+    async def _load_settings(cls, session: AsyncSession): # <--- ПРИНИМАЕТ СЕССИЮ
         """Загружает все настройки из БД в кэш."""
-        async with AsyncSessionFactory() as session:
-            result = await session.execute(select(GlobalSetting))
-            settings = result.scalars().all()
-            cls._settings_cache = {s.key: {"value": s.value, "is_enabled": s.is_enabled} for s in settings}
+        result = await session.execute(select(GlobalSetting))
+        settings = result.scalars().all()
+        cls._settings_cache = {s.key: {"value": s.value, "is_enabled": s.is_enabled} for s in settings}
 
     @classmethod
     @lru_cache(maxsize=128)
@@ -6837,36 +6852,35 @@ class SystemService:
         return cls._settings_cache.get(key, default)
 
     @classmethod
-    async def get_setting(cls, key: str, default: any = None):
+    async def get_setting(cls, key: str, session: AsyncSession, default: any = None): # <--- ПРИНИМАЕТ СЕССИЮ
         """Асинхронный метод для получения настройки. При необходимости обновляет кэш."""
         if not cls._settings_cache:
-            await cls._load_settings()
+            await cls._load_settings(session)
         return cls._get_setting_sync(key, default)
 
     @classmethod
-    async def is_feature_enabled(cls, feature_key: str) -> bool:
+    async def is_feature_enabled(cls, feature_key: str, session: AsyncSession) -> bool: # <--- ПРИНИМАЕТ СЕССИЮ
         """Проверяет, включена ли глобально определенная функция."""
-        setting = await cls.get_setting(f"feature:{feature_key}")
+        setting = await cls.get_setting(f"feature:{feature_key}", session)
         if setting:
             return setting.get("is_enabled", True)
-        # Если настройки нет, по умолчанию считаем фичу включенной
         return True
 
     @classmethod
-    async def get_ticket_reopen_limit(cls) -> int:
+    async def get_ticket_reopen_limit(cls, session: AsyncSession) -> int: # <--- ПРИНИМАЕТ СЕССИЮ
         """Получает лимит на переоткрытие тикетов."""
-        setting = await cls.get_setting("tickets:reopen_limit")
+        setting = await cls.get_setting("tickets:reopen_limit", session)
         if setting and isinstance(setting.get("value"), int):
             return setting["value"]
-        return 3 # Значение по умолчанию
+        return 3
 
     @classmethod
-    async def get_daily_ticket_creation_limit(cls) -> int:
+    async def get_daily_ticket_creation_limit(cls, session: AsyncSession) -> int: # <--- ПРИНИМАЕТ СЕССИЮ
         """Получает дневной лимит на создание тикетов."""
-        setting = await cls.get_setting("tickets:daily_creation_limit")
+        setting = await cls.get_setting("tickets:daily_creation_limit", session)
         if setting and isinstance(setting.get("value"), int):
             return setting["value"]
-        return 5 # Значение по умолчанию
+        return 5
 
 # --- backend/app\services\vk_user_filter.py ---
 

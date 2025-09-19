@@ -55,10 +55,11 @@ async def test_is_feature_available_for_plan(
     
     user = mock_user_factory(is_admin=user_is_admin, plan_name=plan_name)
     feature_id = "automations_center"
+    mock_db_session = AsyncMock() # <--- СОЗДАЕМ МОК ДЛЯ СЕССИИ
 
     # Act
-    # ▼▼▼ ИЗМЕНЕНИЕ 3: Передаем в функцию строку plan_name, а не объект user.plan ▼▼▼
-    result = await is_feature_available_for_plan(plan_name, feature_id, user=user)
+    # <--- ПЕРЕДАЕМ МОК СЕССИИ В ВЫЗОВ
+    result = await is_feature_available_for_plan(plan_name, feature_id, db=mock_db_session, user=user)
 
     # Assert
     assert result == expected_result
