@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, joinedload
 from sqlalchemy import select, delete
 from typing import List
-
+from app.services.vk_api import VKAPIError
 from app.db.session import get_db
 from app.db.models import User, Team, TeamMember, ManagedProfile, TeamProfileAccess
 from app.api.dependencies import get_current_manager_user
@@ -18,13 +18,17 @@ import structlog
 log = structlog.get_logger(__name__)
 router = APIRouter()
 
-async def check_agency_plan(manager: User = Depends(get_current_manager_user)):
-    if not is_feature_available_for_plan(manager.plan, FeatureKey.AGENCY_MODE):
+async def check_agency_plan(
+    manager: User = Depends(get_current_manager_user),
+    db: AsyncSession = Depends(get_db) 
+):
+    if not await is_feature_available_for_plan(manager.plan.name_id, FeatureKey.AGENCY_MODE, db=db, user=manager):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Управление командой доступно только на тарифе 'Agency'."
         )
     return manager
+
 
 async def get_team_owner(manager: User = Depends(check_agency_plan), db: AsyncSession = Depends(get_db)):
     stmt = select(Team).where(Team.owner_id == manager.id)
@@ -71,16 +75,18 @@ async def get_my_team(
     # Добавляем VK ID самого менеджера
     all_vk_ids_to_fetch.add(manager.vk_id)
 
-    # --- ШАГ 3: Делаем ОДИН пакетный запрос к VK API ---
+    # --- НАЧАЛО ИСПРАВЛЕНИЯ ---
     vk_info_map = {}
     if all_vk_ids_to_fetch:
         vk_api = VKAPI(decrypt_data(manager.encrypted_vk_token))
         try:
             vk_ids_str = ",".join(map(str, all_vk_ids_to_fetch))
-            # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
             user_infos = await vk_api.users.get(user_ids=vk_ids_str, fields="photo_50")
             if user_infos:
                 vk_info_map = {info['id']: info for info in user_infos}
+        except VKAPIError as e: # Добавляем блок except
+            log.warn("get_my_team.vk_api_error", error=str(e))
+            # При ошибке vk_info_map останется пустым, и код ниже отработает с заглушками
         finally:
             await vk_api.close()
 
@@ -179,12 +185,11 @@ async def update_member_access(
     if not member:
         raise HTTPException(status_code=404, detail="Участник команды не найден.")
 
-    # Проверяем, что все profile_user_id принадлежат менеджеру
     managed_profiles_stmt = select(ManagedProfile.profile_user_id).where(ManagedProfile.manager_user_id == manager.id)
     managed_ids = (await db.execute(managed_profiles_stmt)).scalars().all()
     
     for access in access_data:
-        if access.profile_user_id not in managed_ids and access.profile_user_id != manager.id:
+        if access.profile_user_id not in managed_ids:
             raise HTTPException(status_code=403, detail=f"Доступ к профилю {access.profile_user_id} не может быть предоставлен.")
 
     await db.execute(delete(TeamProfileAccess).where(TeamProfileAccess.team_member_id == member_id))

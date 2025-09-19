@@ -12,6 +12,7 @@ from app.db.models import User, Team, TeamMember, ManagedProfile, TeamProfileAcc
 from app.api.dependencies import get_current_active_profile
 from app.core.enums import PlanName
 from app.db.models.payment import Plan
+from app.services.vk_api.base import VKAPIError
 
 pytestmark = pytest.mark.anyio
 
@@ -289,3 +290,65 @@ async def test_cannot_invite_user_already_in_a_team(
     # Assert:
     assert response.status_code == 409
     assert "Этот пользователь уже состоит в команде" in response.json()["detail"]
+
+async def test_manager_cannot_manage_access_to_own_profile(
+    async_client: AsyncClient, db_session: AsyncSession, manager_user: User, team_member_user: User, get_auth_headers_for
+):
+    """
+    Тест безопасности: Менеджер не может выдать права на управление своим собственным профилем,
+    так как это не 'управляемый' профиль.
+    """
+    # Arrange: Создаем команду и участника
+    team = Team(owner_id=manager_user.id, name="Test Team")
+    member = TeamMember(team=team, user_id=team_member_user.id)
+    db_session.add_all([team, member])
+    await db_session.commit()
+
+    manager_headers = get_auth_headers_for(manager_user)
+    
+    # Act: Пытаемся выдать доступ к ID самого менеджера
+    access_payload = [{"profile_user_id": manager_user.id, "has_access": True}]
+    response = await async_client.put(
+        f"/api/v1/teams/my-team/members/{member.id}/access",
+        headers=manager_headers,
+        json=access_payload
+    )
+
+    # Assert: Ожидаем ошибку, так как профиль менеджера не в списке управляемых
+    assert response.status_code == 403
+    assert "Доступ к профилю" in response.json()["detail"]
+
+async def test_get_my_team_handles_vk_api_error_gracefully(
+    async_client: AsyncClient, db_session: AsyncSession, manager_user: User, team_member_user: User, get_auth_headers_for, mocker
+):
+    """
+    Тест отказоустойчивости: эндпоинт /my-team должен вернуть данные из БД,
+    даже если VK API недоступен, подставив заглушки вместо имен и фото.
+    """
+    # Arrange: Создаем команду, чтобы она была в БД
+    team = Team(owner_id=manager_user.id, name="Resilient Team")
+    member = TeamMember(team=team, user_id=team_member_user.id)
+    db_session.add_all([team, member])
+    await db_session.commit()
+
+    # Мокаем VK API, чтобы он выбрасывал ошибку
+    mock_vk_api_class = mocker.patch('app.api.endpoints.teams.VKAPI')
+    mock_instance = mock_vk_api_class.return_value
+    mock_instance.users.get.side_effect = VKAPIError("VK is down", 0)
+    mock_instance.close = AsyncMock()
+
+    manager_headers = get_auth_headers_for(manager_user)
+
+    # Act
+    response = await async_client.get("/api/v1/teams/my-team", headers=manager_headers)
+
+    # Assert
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["members"]) == 1
+    
+    # Ключевая проверка: информация о пользователе взята из заглушек
+    member_info = data["members"][0]["user_info"]
+    assert member_info["vk_id"] == team_member_user.vk_id
+    assert member_info["first_name"] == "N/A"
+    assert member_info["photo_50"] == ""

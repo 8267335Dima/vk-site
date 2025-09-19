@@ -15,8 +15,11 @@ from app.core.plans import is_feature_available_for_plan
 
 router = APIRouter()
 
-async def check_proxy_feature_access(current_user: User = Depends(get_current_active_profile)):
-    if not await is_feature_available_for_plan(current_user.plan.name_id, "proxy_management", user=current_user):
+async def check_proxy_feature_access(
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db) # <--- ДОБАВЛЯЕМ ЗАВИСИМОСТЬ
+):
+    if not await is_feature_available_for_plan(current_user.plan.name_id, "proxy_management", db=db, user=current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Управление прокси доступно только на PRO-тарифе."

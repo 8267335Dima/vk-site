@@ -196,3 +196,90 @@ async def test_create_payment_for_invalid_period_fails(
     # Assert
     assert response.status_code == 400
     assert "Недопустимый период подписки" in response.json()["detail"]
+
+async def test_payment_webhook_handles_deleted_user_logic(
+    db_session: AsyncSession, mock_webhook_request: MagicMock
+):
+    """
+    Тест: что произойдет, если пользователь удалил аккаунт, а вебхук об оплате
+    пришел после этого. Платеж должен быть помечен как ошибочный.
+    """
+    # Arrange
+    # Создаем пользователя и платеж, а затем удаляем пользователя
+    temp_user = User(vk_id=999, encrypted_vk_token="temp", plan_id=1)
+    db_session.add(temp_user)
+    await db_session.flush()
+    
+    payment = Payment(
+        user_id=temp_user.id, payment_system_id="test_payment_123", amount=799.0,
+        status="pending", plan_name=PlanName.PRO.name, months=1
+    )
+    db_session.add(payment)
+    await db_session.commit()
+    
+    await db_session.delete(temp_user)
+    await db_session.commit()
+    
+    # Act
+    await payment_webhook(request=mock_webhook_request, db=db_session)
+    
+    # Assert
+    await db_session.refresh(payment)
+    assert payment.status == "failed"
+    assert payment.error_message == "User not found"
+
+async def test_payment_webhook_handles_missing_plan_in_db_logic(
+    test_user: User, db_session: AsyncSession, mock_webhook_request: MagicMock
+):
+    """
+    Тест: что произойдет, если в платеже указан тариф, который был удален из БД.
+    Платеж должен быть помечен как ошибочный.
+    """
+    # Arrange
+    # Удаляем PRO тариф из БД
+    pro_plan = (await db_session.execute(select(Plan).where(Plan.name_id == PlanName.PRO.name))).scalar_one()
+    await db_session.delete(pro_plan)
+    
+    payment = Payment(
+        user_id=test_user.id, payment_system_id="test_payment_123", amount=799.0,
+        status="pending", plan_name=PlanName.PRO.name, months=1
+    )
+    db_session.add(payment)
+    await db_session.commit()
+
+    # Act
+    await payment_webhook(request=mock_webhook_request, db=db_session)
+    
+    # Assert
+    await db_session.refresh(payment)
+    assert payment.status == "failed"
+    assert "not found" in payment.error_message.lower()
+
+async def test_payment_webhook_idempotency(
+    test_user: User, db_session: AsyncSession, mock_webhook_request: MagicMock
+):
+    """
+    Тест на идемпотентность: повторная обработка успешного вебхука
+    не должна начислять подписку дважды.
+    """
+    # Arrange
+    pro_plan = (await db_session.execute(select(Plan).where(Plan.name_id == PlanName.PRO.name))).scalar_one()
+    test_user.plan_id = pro_plan.id
+    test_user.plan_expires_at = datetime.now(UTC) + timedelta(days=30)
+    
+    payment = Payment(
+        user_id=test_user.id, payment_system_id="test_payment_123", amount=799.0,
+        status="succeeded", plan_name=PlanName.PRO.name, months=1 # Платеж уже успешный
+    )
+    db_session.add_all([test_user, payment])
+    await db_session.commit()
+    
+    initial_expiry_date = test_user.plan_expires_at
+    
+    # Act
+    await payment_webhook(request=mock_webhook_request, db=db_session)
+    
+    # Assert
+    await db_session.refresh(test_user)
+    # Дата окончания подписки не должна была измениться
+    assert test_user.plan_expires_at == initial_expiry_date

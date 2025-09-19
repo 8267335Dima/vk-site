@@ -105,8 +105,12 @@ class UserAdmin(ModelView, model=User):
         plus_plan = None
         successful_count = 0
         for user in users:
+            if user.plan_expires_at is None:
+                continue
+            # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+
             now = datetime.now(timezone.utc)
-            start_date = user.plan_expires_at if user.plan_expires_at and user.plan_expires_at > now else now
+            start_date = user.plan_expires_at if user.plan_expires_at > now else now
             user.plan_expires_at = start_date + timedelta(days=30)
 
             if user.plan.name_id == PlanName.EXPIRED.name:
@@ -131,19 +135,24 @@ class UserAdmin(ModelView, model=User):
         session: AsyncSession = request.state.session
         pks_int = [int(pk) for pk in pks]
         
-        # --- НОВАЯ ЗАЩИТА ---
+        # --- Защита от удаления главного админа ---
         admin_user_stmt = select(User).where(User.vk_id == int(settings.ADMIN_VK_ID))
-        admin_id = (await session.execute(admin_user_stmt)).scalar_one().id
-        if admin_id in pks_int:
+        admin_id_result = await session.execute(admin_user_stmt)
+        admin_user = admin_id_result.scalar_one_or_none()
+        if admin_user and admin_user.id in pks_int:
             return JSONResponse(status_code=400, content={"message": "Нельзя удалить главного администратора."})
-        # --- КОНЕЦ ЗАЩИТЫ ---
+        # --- Конец защиты ---
 
         if pks_int:
             result = await session.execute(select(User).where(User.id.in_(pks_int)))
             for user in result.scalars().all():
-                user.is_deleted=True
-                user.deleted_at=datetime.now(timezone.utc)
-                user.is_frozen=True
+                # --- НАЧАЛО ИСПРАВЛЕНИЯ ---
+                # Обновляем пользователя, только если он еще не был удален.
+                if not user.is_deleted:
+                    user.is_deleted = True
+                    user.deleted_at = datetime.now(timezone.utc)
+                    user.is_frozen = True
+                # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
             await session.commit()
         return JSONResponse(content={"message": "Аккаунты помечены как удаленные."})
 

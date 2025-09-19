@@ -4,7 +4,7 @@ from functools import lru_cache
 # --- ДОБАВЬТЕ ЭТИ ИМПОРТЫ ---
 from typing import Optional
 from app.db.models import User
-# --- КОНЕЦ ДОБАВЛЕНИЙ ---
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config_loader import PLAN_CONFIG, AUTOMATIONS_CONFIG
 from app.core.enums import PlanName, FeatureKey
 from app.services.system_service import SystemService # <--- ДОБАВЬТЕ ЭТОТ ИМПОРТ
@@ -40,27 +40,29 @@ def get_all_feature_keys() -> list[str]:
     return list(set(automation_ids + [f.value for f in other_features]))
 
 
-async def is_feature_available_for_plan(plan_name: PlanName | str, feature_id: str, user: Optional[User] = None) -> bool:
+async def is_feature_available_for_plan(
+    plan_name: PlanName | str,
+    feature_id: str,
+    db: AsyncSession, # <--- ПРИНИМАЕТ СЕССИЮ
+    user: Optional[User] = None
+    ) -> bool:
     """
     Проверяет, доступна ли фича для тарифа, с учетом глобальных настроек и прав администратора.
     """
-    # 1. Администратор имеет доступ ко всему, всегда.
     if user and user.is_admin:
         return True
-
-    # 2. Проверяем, не отключена ли фича глобально.
-    if not await SystemService.is_feature_enabled(feature_id):
+    # --- ИСПРАВЛЕНИЕ: передаем сессию дальше ---
+    if not await SystemService.is_feature_enabled(feature_id, session=db):
         return False
 
-    # 3. Проверяем доступность по тарифному плану.
     key = plan_name if isinstance(plan_name, str) else plan_name.name_id
     plan_model = PLAN_CONFIG.get(key, PLAN_CONFIG[PlanName.EXPIRED.name])
-    
+
     available_features = plan_model.available_features
-    
+
     if available_features == "*":
         return True
-    
+
     return feature_id in available_features
 
 

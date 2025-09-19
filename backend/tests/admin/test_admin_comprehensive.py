@@ -29,12 +29,10 @@ class TestUserAdminComprehensive:
         assert test_user.encrypted_vk_token == initial_encrypted_token
 
     @ASYNC_TEST
-    async def test_actions_with_empty_pks_list(self, db_session: AsyncSession, mocker): # <--- Добавлен mocker
+    # <--- ИСПРАВЛЕНИЕ ЗДЕСЬ
+    async def test_actions_with_empty_pks_list(self, db_session: AsyncSession, mocker, admin_user: User):
         """Проверяет, что действия не падают и ничего не делают, если список pks пуст."""
-        # --- НАЧАЛО ИСПРАВЛЕНИЯ ---
-        # Заменяем реальный метод commit на мок, чтобы отследить его вызовы
         commit_mock = mocker.patch.object(db_session, "commit", new_callable=AsyncMock)
-        # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
 
         mock_request = MagicMock(state=MagicMock(session=db_session))
         admin_view = UserAdmin()
@@ -43,8 +41,7 @@ class TestUserAdminComprehensive:
         await admin_view.restore.__wrapped__(admin_view, mock_request, pks=[])
         await admin_view.toggle_freeze.__wrapped__(admin_view, mock_request, pks=[])
         await admin_view.toggle_shadow_ban.__wrapped__(admin_view, mock_request, pks=[])
-        
-        # Проверяем, что мок-объект commit не был вызван (ожиден) ни разу
+
         commit_mock.assert_not_awaited()
 
 class TestPaymentAdminComprehensive:

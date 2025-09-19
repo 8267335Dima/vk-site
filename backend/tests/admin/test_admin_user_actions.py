@@ -3,7 +3,7 @@ import json
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 from unittest.mock import MagicMock
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.admin.views.management.user import UserAdmin
 from app.db.models import User
@@ -36,7 +36,7 @@ class TestUserAdminComplexActions:
         # Сначала "удаляем" пользователя
         test_user.is_deleted = True
         test_user.is_frozen = True
-        test_user.deleted_at = datetime.utcnow()
+        test_user.deleted_at = datetime.now(timezone.utc)
         db_session.add(test_user)
         await db_session.commit()
 

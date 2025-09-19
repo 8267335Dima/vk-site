@@ -29,7 +29,7 @@ from datetime import datetime, UTC
 from app.arq_config import redis_settings
 from app.core.config import settings
 from app.core.logging import configure_logging
-from app.db.session import engine as main_engine, get_db as get_db_session, get_db
+from app.db.session import engine as main_engine, get_db as get_db_session, AsyncSessionFactory
 from app.db.models import User
 from app.admin import init_admin
 from app.services.websocket_manager import redis_listener
@@ -48,6 +48,35 @@ configure_logging()
 
 async def run_redis_listener(redis_client):
     await redis_listener(redis_client)
+
+async def _check_user_status_and_proceed(db: AsyncSession, request: Request, call_next, token: str):
+    """
+    Вспомогательная функция, содержащая логику проверки статуса пользователя.
+    """
+    try:
+        payload = await get_token_payload(token.split(" ")[1])
+        user = await get_current_active_profile(payload=payload, db=db)
+
+        if user.is_deleted:
+            return JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content={"detail": "Аккаунт был удален."})
+        if user.is_frozen:
+            return JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content={"detail": "Ваш аккаунт временно заморожен администратором."})
+
+        # Логика обновления last_active_at остается
+        activity_redis = request.app.state.activity_redis
+        last_update = await activity_redis.get(f"last_active:{user.id}")
+        now_ts = datetime.now(UTC).timestamp()
+        if not last_update or (now_ts - float(last_update)) > 60:
+            await db.execute(update(User).where(User.id == user.id).values(last_active_at=datetime.now(UTC)))
+            await db.commit() # Этот коммит теперь будет частью тестовой транзакции
+            await activity_redis.set(f"last_active:{user.id}", now_ts, ex=65)
+
+    except HTTPException:
+        # Пропускаем исключения, такие как невалидный токен. FastAPI обработает их
+        # и вернет корректный ответ 401 на защищенных эндпоинтах.
+        pass
+
+    return await call_next(request)   
 
 def create_app(db_engine: AsyncEngine | None = None) -> FastAPI:
     @asynccontextmanager
@@ -117,30 +146,16 @@ def create_app(db_engine: AsyncEngine | None = None) -> FastAPI:
         if not token or "bearer" not in token.lower():
             return await call_next(request)
         
-        # ▼▼▼ ИЗМЕНЕНИЕ ЗДЕСЬ ▼▼▼
-        db_generator = get_db()
-        db: AsyncSession = await anext(db_generator)
-        try:
-            payload = await get_token_payload(token.split(" ")[1])
-            # Мы ожидаем, что get_current_active_profile вернет пользователя или выбросит HTTPException
-            user = await get_current_active_profile(payload=payload, db=db)
-            
-            if user.is_deleted:
-                return JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content={"detail": "Аккаунт был удален."})
-            if user.is_frozen:
-                return JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content={"detail": "Ваш аккаунт временно заморожен администратором."})
-
-            # Логика обновления last_active_at остается
-            activity_redis = request.app.state.activity_redis
-            last_update = await activity_redis.get(f"last_active:{user.id}")
-            now_ts = datetime.now(UTC).timestamp()
-            if not last_update or (now_ts - float(last_update)) > 60:
-                await db.execute(update(User).where(User.id == user.id).values(last_active_at=datetime.now(UTC)))
-                await db.commit()
-                await activity_redis.set(f"last_active:{user.id}", now_ts, ex=65)
-        except HTTPException as e:
-            pass
-        return await call_next(request)
+        # Эта логика теперь корректно обрабатывает и тесты, и продакшн.
+        # В тестах сессия внедряется в request.state через middleware в conftest.py.
+        if hasattr(request.state, "session"):
+            db_session = request.state.session
+            # В тестах сессия управляется фикстурой, мы ее здесь не закрываем.
+            return await _check_user_status_and_proceed(db_session, request, call_next, token)
+        else:
+            # В продакшене мы создаем сессию для каждого запроса и гарантируем ее закрытие.
+            async with AsyncSessionFactory() as session:
+                return await _check_user_status_and_proceed(session, request, call_next, token)
 
 
     engine_to_use = db_engine or main_engine

@@ -9,12 +9,11 @@ class SystemService:
     _settings_cache = {}
 
     @classmethod
-    async def _load_settings(cls):
+    async def _load_settings(cls, session: AsyncSession): # <--- ПРИНИМАЕТ СЕССИЮ
         """Загружает все настройки из БД в кэш."""
-        async with AsyncSessionFactory() as session:
-            result = await session.execute(select(GlobalSetting))
-            settings = result.scalars().all()
-            cls._settings_cache = {s.key: {"value": s.value, "is_enabled": s.is_enabled} for s in settings}
+        result = await session.execute(select(GlobalSetting))
+        settings = result.scalars().all()
+        cls._settings_cache = {s.key: {"value": s.value, "is_enabled": s.is_enabled} for s in settings}
 
     @classmethod
     @lru_cache(maxsize=128)
@@ -23,33 +22,32 @@ class SystemService:
         return cls._settings_cache.get(key, default)
 
     @classmethod
-    async def get_setting(cls, key: str, default: any = None):
+    async def get_setting(cls, key: str, session: AsyncSession, default: any = None): # <--- ПРИНИМАЕТ СЕССИЮ
         """Асинхронный метод для получения настройки. При необходимости обновляет кэш."""
         if not cls._settings_cache:
-            await cls._load_settings()
+            await cls._load_settings(session)
         return cls._get_setting_sync(key, default)
 
     @classmethod
-    async def is_feature_enabled(cls, feature_key: str) -> bool:
+    async def is_feature_enabled(cls, feature_key: str, session: AsyncSession) -> bool: # <--- ПРИНИМАЕТ СЕССИЮ
         """Проверяет, включена ли глобально определенная функция."""
-        setting = await cls.get_setting(f"feature:{feature_key}")
+        setting = await cls.get_setting(f"feature:{feature_key}", session)
         if setting:
             return setting.get("is_enabled", True)
-        # Если настройки нет, по умолчанию считаем фичу включенной
         return True
 
     @classmethod
-    async def get_ticket_reopen_limit(cls) -> int:
+    async def get_ticket_reopen_limit(cls, session: AsyncSession) -> int: # <--- ПРИНИМАЕТ СЕССИЮ
         """Получает лимит на переоткрытие тикетов."""
-        setting = await cls.get_setting("tickets:reopen_limit")
+        setting = await cls.get_setting("tickets:reopen_limit", session)
         if setting and isinstance(setting.get("value"), int):
             return setting["value"]
-        return 3 # Значение по умолчанию
+        return 3
 
     @classmethod
-    async def get_daily_ticket_creation_limit(cls) -> int:
+    async def get_daily_ticket_creation_limit(cls, session: AsyncSession) -> int: # <--- ПРИНИМАЕТ СЕССИЮ
         """Получает дневной лимит на создание тикетов."""
-        setting = await cls.get_setting("tickets:daily_creation_limit")
+        setting = await cls.get_setting("tickets:daily_creation_limit", session)
         if setting and isinstance(setting.get("value"), int):
             return setting["value"]
-        return 5 # Значение по умолчанию
+        return 5

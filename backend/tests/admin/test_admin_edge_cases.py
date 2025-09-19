@@ -28,7 +28,7 @@ class TestUserAdminEdgeCases:
             await db_session.delete(plus_plan)
             await db_session.commit()
 
-        # ИСПРАВЛЕННЫЙ ЗАПРОС
+        # Создаем пользователя с истекшим тарифом
         stmt_expired = select(Plan).where(Plan.name_id == PlanName.EXPIRED.name)
         expired_plan = (await db_session.execute(stmt_expired)).scalar_one()
         test_user = User(
@@ -45,7 +45,7 @@ class TestUserAdminEdgeCases:
         with pytest.raises(Exception) as excinfo:
             await admin_view.extend_subscription.__wrapped__(admin_view, mock_request, pks=[test_user.id])
         
-        # ИСПРАВЛЕННАЯ СТРОКА
+        # Проверяем, что это именно ошибка "не найдена строка, когда ожидалась одна"
         assert "No row was found when one was required" in str(excinfo.value)
 
     @ASYNC_TEST

@@ -109,7 +109,7 @@ async def update_user_delay_profile(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    if request_data.delay_profile != DelayProfile.normal and not await is_feature_available_for_plan(current_user.plan.name_id, FeatureKey.FAST_SLOW_DELAY_PROFILE, user=current_user):
+    if request_data.delay_profile != DelayProfile.normal and not await is_feature_available_for_plan(current_user.plan.name_id, FeatureKey.FAST_SLOW_DELAY_PROFILE, db=db, user=current_user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Смена скорости доступна только на PRO тарифе.")
         
     current_user.delay_profile = request_data.delay_profile

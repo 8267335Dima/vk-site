@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from typing import List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.db.session import get_db
 from app.db.models import User, Automation
 from app.api.dependencies import get_current_active_profile
@@ -39,7 +39,7 @@ async def get_automations_status(
         auto_type = config_item.id
         db_item = user_automations_db.get(auto_type)
         
-        is_available = await is_feature_available_for_plan(current_user.plan.name_id, auto_type, user=current_user)
+        is_available = await is_feature_available_for_plan(current_user.plan.name_id, auto_type, db=db, user=current_user)
         
         response_list.append(AutomationStatus(
             automation_type=auto_type,
@@ -59,7 +59,7 @@ async def update_automation(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    if request_data.is_active and not await is_feature_available_for_plan(current_user.plan.name_id, automation_type, user=current_user):
+    if request_data.is_active and not await is_feature_available_for_plan(current_user.plan.name_id, automation_type, db=db, user=current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Функция '{automation_type}' недоступна на вашем тарифе '{current_user.plan.display_name}'."
@@ -69,34 +69,31 @@ async def update_automation(
     if not config_item:
         raise HTTPException(status_code=404, detail="Автоматизация такого типа не найдена.")
 
-    query = select(Automation).where(
-        Automation.user_id == current_user.id,
-        Automation.automation_type == automation_type
-    )
-    result = await db.execute(query)
-    automation = result.scalar_one_or_none()
+    values_to_set = {
+        "is_active": request_data.is_active,
+        "settings": request_data.settings if request_data.settings is not None else config_item.default_settings or {}
+    }
 
-    if not automation:
-        automation = Automation(
-            user_id=current_user.id,
-            automation_type=automation_type,
-            is_active=request_data.is_active,
-            settings=request_data.settings or config_item.default_settings or {}
-        )
-        db.add(automation)
-    else:
-        automation.is_active = request_data.is_active
-        if request_data.settings is not None:
-            automation.settings = request_data.settings
+    stmt = pg_insert(Automation).values(
+        user_id=current_user.id,
+        automation_type=automation_type,
+        **values_to_set
+    ).on_conflict_do_update(
+        index_elements=['user_id', 'automation_type'],
+        set_=values_to_set
+    ).returning(Automation) # .returning() чтобы получить объект после вставки/обновления
+
+    result = await db.execute(stmt)
+    automation = result.scalar_one()
     
     await db.commit()
-    await db.refresh(automation)
+    # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
     
     return AutomationStatus(
-        automation_type=automation.automation_type,
+        automation_type=automation.automation_type.value, # Используем .value для Enum
         is_active=automation.is_active,
         settings=automation.settings,
         name=config_item.name,
         description=config_item.description,
-        is_available=await is_feature_available_for_plan(current_user.plan.name_id, automation_type, user=current_user)
+        is_available=await is_feature_available_for_plan(current_user.plan.name_id, automation_type, db=db, user=current_user)
     )
