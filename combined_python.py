@@ -425,7 +425,7 @@ class PlanAdmin(ModelView, model=Plan):
 # backend/app/admin/views/management/user.py
 
 from sqladmin import ModelView, action
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -474,6 +474,8 @@ class UserAdmin(ModelView, model=User):
     }
 
     async def on_model_change(self, data: dict, model: User, is_created: bool, request: Request):
+        if model.vk_id == int(settings.ADMIN_VK_ID) and not data.get("is_admin", True):
+             raise HTTPException(status_code=400, detail="Нельзя снять права с главного администратора.")
         if data.get("encrypted_vk_token_clear"):
             model.encrypted_vk_token = encrypt_data(data["encrypted_vk_token_clear"])
 
@@ -491,8 +493,9 @@ class UserAdmin(ModelView, model=User):
 
         target_user_id = int(pks[0])
         target_user = await session.get(User, target_user_id)
-        if not target_user:
+        if not target_user or target_user.is_deleted:
             return JSONResponse({"status": "error", "message": "Целевой пользователь не найден."}, status_code=404)
+     
         
         token_data = {"sub": str(admin.id), "profile_id": str(target_user.id), "scope": "impersonate"}
         impersonation_token = create_access_token(data=token_data)
@@ -551,6 +554,14 @@ class UserAdmin(ModelView, model=User):
     async def soft_delete(self, request: Request, pks: list[int]) -> JSONResponse:
         session: AsyncSession = request.state.session
         pks_int = [int(pk) for pk in pks]
+        
+        # --- НОВАЯ ЗАЩИТА ---
+        admin_user_stmt = select(User).where(User.vk_id == int(settings.ADMIN_VK_ID))
+        admin_id = (await session.execute(admin_user_stmt)).scalar_one().id
+        if admin_id in pks_int:
+            return JSONResponse(status_code=400, content={"message": "Нельзя удалить главного администратора."})
+        # --- КОНЕЦ ЗАЩИТЫ ---
+
         if pks_int:
             result = await session.execute(select(User).where(User.id.in_(pks_int)))
             for user in result.scalars().all():
@@ -829,9 +840,9 @@ class AdminActionsView(BaseView):
                 await session.commit()
                 message = f"РЕЖИМ ПАНИКИ АКТИВИРОВАН: Отменено {aborted_count} задач, все автоматизации и пользователи заморожены."
             
-            return await self.templates.TemplateResponse("admin/actions.html", {"request": request, "message": message})
+            return self.templates.TemplateResponse("admin/actions.html", {"request": request, "message": message})
         
-        return await self.templates.TemplateResponse("admin/actions.html", {"request": request})
+        return self.templates.TemplateResponse("admin/actions.html", {"request": request})
 
 # --- backend/app\admin\views\system\banned_ip.py ---
 
@@ -1444,21 +1455,17 @@ async def get_automations_status(
     
     response_list = []
     for config_item in AUTOMATIONS_CONFIG:
-        # --- ИЗМЕНЕНИЕ ---
         auto_type = config_item.id
-        # -----------------
         db_item = user_automations_db.get(auto_type)
         
-        is_available = is_feature_available_for_plan(current_user.plan, auto_type)
+        is_available = await is_feature_available_for_plan(current_user.plan.name_id, auto_type, user=current_user)
         
         response_list.append(AutomationStatus(
             automation_type=auto_type,
             is_active=db_item.is_active if db_item else False,
-            # --- ИЗМЕНЕНИЕ ---
             settings=db_item.settings if db_item else config_item.default_settings or {},
             name=config_item.name,
             description=config_item.description,
-            # -----------------
             is_available=is_available
         ))
         
@@ -1471,15 +1478,13 @@ async def update_automation(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    if request_data.is_active and not is_feature_available_for_plan(current_user.plan, automation_type):
+    if request_data.is_active and not await is_feature_available_for_plan(current_user.plan.name_id, automation_type, user=current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Функция '{automation_type}' недоступна на вашем тарифе '{current_user.plan}'."
+            detail=f"Функция '{automation_type}' недоступна на вашем тарифе '{current_user.plan.display_name}'."
         )
 
-    # --- ИЗМЕНЕНИЕ ---
     config_item = next((item for item in AUTOMATIONS_CONFIG if item.id == automation_type), None)
-    # -----------------
     if not config_item:
         raise HTTPException(status_code=404, detail="Автоматизация такого типа не найдена.")
 
@@ -1495,9 +1500,7 @@ async def update_automation(
             user_id=current_user.id,
             automation_type=automation_type,
             is_active=request_data.is_active,
-            # --- ИЗМЕНЕНИЕ ---
             settings=request_data.settings or config_item.default_settings or {}
-            # -----------------
         )
         db.add(automation)
     else:
@@ -1512,11 +1515,9 @@ async def update_automation(
         automation_type=automation.automation_type,
         is_active=automation.is_active,
         settings=automation.settings,
-        # --- ИЗМЕНЕНИЕ ---
         name=config_item.name,
         description=config_item.description,
-        # -----------------
-        is_available=is_feature_available_for_plan(current_user.plan, automation_type)
+        is_available=await is_feature_available_for_plan(current_user.plan.name_id, automation_type, user=current_user)
     )
 
 # --- backend/app\api\endpoints\billing.py ---
@@ -1531,13 +1532,13 @@ from sqlalchemy import select
 from fastapi_cache.decorator import cache
 
 from app.db.session import get_db
-from app.db.models import User, Payment
+# --- ИЗМЕНЕНИЕ: Добавляем импорт модели Plan ---
+from app.db.models import User, Payment, Plan
 from app.api.dependencies import get_current_active_profile
 from app.api.schemas.billing import CreatePaymentRequest, CreatePaymentResponse, AvailablePlansResponse, PlanDetail
 from app.core.config_loader import PLAN_CONFIG
 import structlog
 
-from app.core.plans import get_limits_for_plan
 
 log = structlog.get_logger(__name__)
 router = APIRouter()
@@ -1650,7 +1651,10 @@ async def payment_webhook(request: Request, db: AsyncSession = Depends(get_db)):
             log.info("webhook.already_processed", payment_id=payment.id)
             return {"status": "ok"}
         
+        # --- НАЧАЛО ИСПРАВЛЕНИЯ 1: Меняем способ загрузки и блокировки пользователя ---
         user = await db.get(User, payment.user_id, with_for_update=True)
+        # --- КОНЕЦ ИСПРАВЛЕНИЯ 1 ---
+        
         if not user:
             log.error("webhook.user_not_found", user_id=payment.user_id)
             payment.status = "failed"
@@ -1665,27 +1669,36 @@ async def payment_webhook(request: Request, db: AsyncSession = Depends(get_db)):
             log.error("webhook.amount_mismatch", payment_id=payment.id, expected=payment.amount, got=received_amount)
             await db.commit()
             return {"status": "ok"}
+        
+        # --- НАЧАЛО ИСПРАВЛЕНИЯ 2: Исправляем логику обновления тарифа ---
+        new_plan_stmt = select(Plan).where(Plan.name_id == payment.plan_name)
+        new_plan = (await db.execute(new_plan_stmt)).scalar_one_or_none()
+
+        if not new_plan:
+            log.error("webhook.plan_not_found", payment_id=payment.id, plan_name=payment.plan_name)
+            payment.status = "failed"
+            payment.error_message = f"Plan '{payment.plan_name}' not found."
+            await db.commit()
+            return {"status": "ok"}
 
         start_date = user.plan_expires_at if user.plan_expires_at and user.plan_expires_at > datetime.datetime.now(datetime.UTC) else datetime.datetime.now(datetime.UTC)
         
-        user.plan = payment.plan_name
+        user.plan_id = new_plan.id
         user.plan_expires_at = start_date + datetime.timedelta(days=30 * payment.months)
         
-        new_limits = get_limits_for_plan(user.plan)
+        new_limits = new_plan.limits
         for key, value in new_limits.items():
             if hasattr(user, key):
                 setattr(user, key, value)
+        # --- КОНЕЦ ИСПРАВЛЕНИЯ 2 ---
 
         payment.status = "succeeded"
         
-        log.info("webhook.success", user_id=user.id, plan=user.plan, expires_at=user.plan_expires_at)
+        log.info("webhook.success", user_id=user.id, plan=new_plan.name_id, expires_at=user.plan_expires_at)
         
-        # --- ИСПРАВЛЕНИЕ: Сохраняем все изменения в БД ---
         await db.commit()
         
     return {"status": "ok"}
-
-
 
 # --- backend/app\api\endpoints\notifications.py ---
 
@@ -1951,14 +1964,12 @@ from app.api.dependencies import get_current_active_profile
 from app.api.schemas.proxies import ProxyCreate, ProxyRead
 from app.core.security import encrypt_data, decrypt_data
 from app.services.proxy_service import ProxyService
-# --- НОВЫЙ ИМПОРТ ---
 from app.core.plans import is_feature_available_for_plan
 
 router = APIRouter()
 
-# --- НОВАЯ ЗАВИСИМОСТЬ ДЛЯ ПРОВЕРКИ ПРАВ ---
 async def check_proxy_feature_access(current_user: User = Depends(get_current_active_profile)):
-    if not is_feature_available_for_plan(current_user.plan, "proxy_management"):
+    if not await is_feature_available_for_plan(current_user.plan.name_id, "proxy_management", user=current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Управление прокси доступно только на PRO-тарифе."
@@ -1968,7 +1979,7 @@ async def check_proxy_feature_access(current_user: User = Depends(get_current_ac
 @router.post("", response_model=ProxyRead, status_code=status.HTTP_201_CREATED)
 async def add_proxy(
     proxy_data: ProxyCreate,
-    current_user: User = Depends(check_proxy_feature_access), # <-- ПРОВЕРКА ПРАВ
+    current_user: User = Depends(check_proxy_feature_access),
     db: AsyncSession = Depends(get_db)
 ):
     """Добавляет новый прокси для пользователя и сразу проверяет его."""
@@ -1986,7 +1997,7 @@ async def add_proxy(
         encrypted_proxy_url=encrypted_url,
         is_working=is_working,
         check_status_message=status_message,
-        last_checked_at=datetime.datetime.utcnow()
+        last_checked_at=datetime.datetime.now(datetime.UTC)
     )
     db.add(new_proxy)
     await db.commit()
@@ -2002,9 +2013,12 @@ async def add_proxy(
 
 @router.get("", response_model=List[ProxyRead])
 async def get_user_proxies(
-    current_user: User = Depends(check_proxy_feature_access) # <-- ПРОВЕРКА ПРАВ
+    current_user: User = Depends(check_proxy_feature_access),
+    db: AsyncSession = Depends(get_db)  # <--- ИЗМЕНЕНИЕ 1: Добавлена зависимость
 ):
     """Возвращает список всех прокси пользователя."""
+    await db.refresh(current_user, attribute_names=['proxies'])
+    
     return [
         ProxyRead(
             id=p.id,
@@ -2018,7 +2032,7 @@ async def get_user_proxies(
 @router.delete("/{proxy_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_proxy(
     proxy_id: int,
-    current_user: User = Depends(check_proxy_feature_access), # <-- ПРОВЕРКА ПРАВ
+    current_user: User = Depends(check_proxy_feature_access),
     db: AsyncSession = Depends(get_db)
 ):
     """Удаляет прокси по ID."""
@@ -2445,7 +2459,6 @@ async def get_friends_analytics(current_user: User = Depends(get_current_active_
 
     analytics = {"male_count": 0, "female_count": 0, "other_count": 0}
     if friends_response and isinstance(friends_response.get('items'), list):
-        # Итерируемся по списку друзей, а не по всему словарю
         for friend in friends_response['items']:
             sex = friend.get("sex")
             if sex == 1:
@@ -2454,7 +2467,7 @@ async def get_friends_analytics(current_user: User = Depends(get_current_active_
                 analytics["male_count"] += 1
             else:
                 analytics["other_count"] += 1
-    return FriendsAnalyticsResponse(**analytics)
+    return analytics
 
 @router.get("/activity", response_model=ActivityStatsResponse)
 async def get_activity_stats(
@@ -2666,7 +2679,7 @@ async def _enqueue_task(
                 detail=f"Достигнут лимит на одновременное выполнение задач ({max_concurrent}). Дождитесь завершения текущих."
             )
 
-    if not is_feature_available_for_plan(user.plan, task_key):
+    if not await is_feature_available_for_plan(user.plan, task_key):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Действие недоступно на вашем тарифе '{user.plan}'.")
 
     task_func_name = TASK_FUNC_MAP.get(TaskKey(task_key))
@@ -3055,12 +3068,12 @@ async def invite_member(
 ):
     manager, team = manager_and_team
     
-    # Загружаем актуальное количество участников
     await db.refresh(team, attribute_names=['members'])
 
-    plan_config = get_plan_config(manager.plan)
-    max_members = plan_config.get("limits", {}).get("max_team_members", 1)
-    if len(team.members) >= max_members:
+    plan_config = get_plan_config(manager.plan.name_id) 
+    max_members = plan_config.get("limits", {}).get("max_team_members")
+
+    if max_members is not None and len(team.members) >= max_members:
         raise HTTPException(status_code=403, detail=f"Достигнут лимит на количество участников в команде ({max_members}).")
 
     invited_user = (await db.execute(select(User).where(User.vk_id == invite_data.user_vk_id))).scalar_one_or_none()
@@ -3246,6 +3259,119 @@ async def update_user_delay_profile(
     await db.commit()
     await db.refresh(current_user)
     return await read_users_me(current_user)
+
+@router.post("/me/filter-presets", response_model=FilterPresetRead, status_code=status.HTTP_201_CREATED)
+async def create_filter_preset(
+    preset_data: FilterPresetCreate,
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
+    """Создает новый пресет фильтров для пользователя."""
+    stmt = select(FilterPreset).where(
+        FilterPreset.user_id == current_user.id,
+        FilterPreset.name == preset_data.name,
+        FilterPreset.action_type == preset_data.action_type
+    )
+    existing = await db.execute(stmt)
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Пресет с таким названием для данного действия уже существует."
+        )
+    
+    new_preset = FilterPreset(
+        user_id=current_user.id,
+        **preset_data.model_dump()
+    )
+    db.add(new_preset)
+    try:
+        await db.commit()
+        await db.refresh(new_preset)
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Пресет с таким названием для данного действия уже существует."
+        )
+    return new_preset
+
+@router.get("/me/filter-presets", response_model=List[FilterPresetRead])
+async def get_filter_presets(
+    action_type: str = Query(...),
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
+    """Возвращает список пресетов фильтров для определенного действия."""
+    stmt = select(FilterPreset).where(
+        FilterPreset.user_id == current_user.id,
+        FilterPreset.action_type == action_type
+    ).order_by(FilterPreset.name)
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+@router.get("/me/managed-profiles", response_model=List[ManagedProfileRead])
+async def get_managed_profiles(
+    manager: User = Depends(get_current_manager_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Возвращает список профилей, которыми управляет текущий пользователь (менеджер), включая его собственный."""
+    await db.refresh(manager, attribute_names=['managed_profiles'])
+    
+    all_profiles_in_db = [manager] + [mp.profile for mp in manager.managed_profiles]
+    all_vk_ids = {p.vk_id for p in all_profiles_in_db}
+    
+    vk_info_map = {}
+    if all_vk_ids:
+        vk_api = VKAPI(decrypt_data(manager.encrypted_vk_token))
+        try:
+            vk_ids_str = ",".join(map(str, all_vk_ids))
+            user_infos = await vk_api.users.get(user_ids=vk_ids_str, fields="photo_50")
+            if user_infos:
+                vk_info_map = {info['id']: info for info in user_infos}
+        except VKAPIError:
+            pass # Игнорируем ошибки VK, чтобы вернуть хотя бы данные из нашей БД
+        finally:
+            await vk_api.close()
+
+    response_data = []
+    for profile in all_profiles_in_db:
+        vk_info = vk_info_map.get(profile.vk_id, {})
+        response_data.append(ManagedProfileRead(
+            id=profile.id,
+            vk_id=profile.vk_id,
+            first_name=vk_info.get("first_name", "N/A"),
+            last_name=vk_info.get("last_name", ""),
+            photo_50=vk_info.get("photo_50", "")
+        ))
+    return response_data
+
+@router.put(
+    "/me/analytics-settings",
+    response_model=AnalyticsSettingsRead,
+    response_model_by_alias=False 
+)
+async def update_analytics_settings(
+    settings_data: AnalyticsSettingsUpdate,
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
+    """Обновляет настройки аналитики для пользователя."""
+    current_user.analytics_settings_posts_count = settings_data.posts_count
+    current_user.analytics_settings_photos_count = settings_data.photos_count
+    await db.commit()
+    await db.refresh(current_user)
+    return current_user
+
+@router.get(
+    "/me/analytics-settings",
+    response_model=AnalyticsSettingsRead,
+    response_model_by_alias=False  
+)
+async def get_analytics_settings(
+    current_user: User = Depends(get_current_active_profile)
+):
+    """Возвращает текущие настройки аналитики пользователя."""
+    return current_user
 
 # --- backend/app\api\endpoints\websockets.py ---
 
@@ -3894,11 +4020,13 @@ class ManagedProfileRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 class AnalyticsSettingsUpdate(BaseModel):
-    posts_count: int = Field(100, ge=10, le=500, description="Количество недавних постов для анализа лайков.")
-    photos_count: int = Field(200, ge=10, le=1000, description="Количество недавних фото для анализа лайков.")
+    posts_count: int = Field(..., ge=10, le=500, description="Количество недавних постов для анализа лайков.", alias="analytics_settings_posts_count")
+    photos_count: int = Field(..., ge=10, le=1000, description="Количество недавних фото для анализа лайков.", alias="analytics_settings_photos_count")
 
 class AnalyticsSettingsRead(AnalyticsSettingsUpdate):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(
+        from_attributes=True
+    )
 
 # --- backend/app\api\schemas\__init__.py ---
 
@@ -4246,7 +4374,7 @@ async def is_feature_available_for_plan(plan_name: PlanName | str, feature_id: s
         return False
 
     # 3. Проверяем доступность по тарифному плану.
-    key = plan_name if isinstance(plan_name, str) else plan_name.name
+    key = plan_name if isinstance(plan_name, str) else plan_name.name_id
     plan_model = PLAN_CONFIG.get(key, PLAN_CONFIG[PlanName.EXPIRED.name])
     
     available_features = plan_model.available_features
@@ -4262,7 +4390,7 @@ def get_features_for_plan(plan_name: PlanName | str) -> list[str]:
     Возвращает полный список доступных ключей фич для тарифного плана.
     Обрабатывает wildcard '*' для PRO тарифов.
     """
-    key = plan_name if isinstance(plan_name, str) else plan_name.name
+    key = plan_name if isinstance(plan_name, str) else plan_name.name_id
     plan_model = PLAN_CONFIG.get(key, PLAN_CONFIG[PlanName.EXPIRED.name])
     available = plan_model.available_features
     
@@ -4476,7 +4604,7 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 # --- backend/app\db\models\analytics.py ---
 
-# --- START OF FILE backend/app/db/models/analytics.py ---
+# backend/app/db/models/analytics.py
 
 import datetime
 from sqlalchemy import (
@@ -4540,7 +4668,6 @@ class ProfileMetric(Base):
     photos_count = Column(Integer, nullable=False, default=0)
     wall_posts_count = Column(Integer, nullable=False, default=0)
     
-    # <<< ИЗМЕНЕНО: Поля для лайков разделены >>>
     recent_post_likes = Column(Integer, nullable=False, default=0)
     recent_photo_likes = Column(Integer, nullable=False, default=0)
     total_post_likes = Column(Integer, nullable=False, default=0)
@@ -4577,16 +4704,15 @@ class FriendRequestLog(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     target_vk_id = Column(BigInteger, nullable=False, index=True)
-    status = Column(Enum(FriendRequestStatus), nullable=False, default=FriendRequestStatus.pending, index=True)
+    status = Column(Enum(FriendRequestStatus, native_enum=False), nullable=False, default=FriendRequestStatus.pending, index=True)
     created_at = Column(DateTime(timezone=True), default=datetime.datetime.now(datetime.UTC), index=True)
     resolved_at = Column(DateTime(timezone=True), nullable=True)
     user = relationship("User", back_populates="friend_requests")
     __table_args__ = (UniqueConstraint('user_id', 'target_vk_id', name='_user_target_uc'),)
 
-
-
 # --- backend/app\db\models\payment.py ---
 
+# backend/app/db/models/payment.py
 import datetime
 import enum
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Float, Enum, JSON, Boolean, Text
@@ -4619,11 +4745,12 @@ class Payment(Base):
     payment_system_id = Column(String, unique=True, index=True, nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     amount = Column(Float, nullable=False)
-    status = Column(Enum(PaymentStatus), default=PaymentStatus.PENDING, nullable=False)
+    status = Column(Enum(PaymentStatus, native_enum=False), default=PaymentStatus.PENDING, nullable=False)
     plan_name = Column(String, nullable=False)
     months = Column(Integer, nullable=False, default=1)
     created_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    error_message = Column(Text, nullable=True)
     user = relationship("User")
 
 # --- backend/app\db\models\shared.py ---
@@ -4653,7 +4780,7 @@ class Proxy(Base):
 class Notification(Base):
     __tablename__ = "notifications"
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     message = Column(String, nullable=False)
     level = Column(String, default="info", nullable=False)
     is_read = Column(Boolean, default=False, nullable=False, index=True)
@@ -4676,7 +4803,7 @@ class SupportTicket(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     subject = Column(String(255), nullable=False)
-    status = Column(Enum(TicketStatus), default=TicketStatus.OPEN, nullable=False, index=True)
+    status = Column(Enum(TicketStatus, native_enum=False), default=TicketStatus.OPEN, nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), onupdate=datetime.datetime.utcnow)
     reopen_count = Column(Integer, default=0, nullable=False)
@@ -4694,7 +4821,7 @@ class TicketMessage(Base):
     created_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow)
     
     ticket = relationship("SupportTicket", back_populates="messages")
-    author = relationship("User")
+    author = relationship("User", backref="ticket_messages")
 
 # --- backend/app\db\models\system.py ---
 
@@ -4756,7 +4883,7 @@ class Automation(Base):
     __tablename__ = "automations"
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    automation_type = Column(Enum(AutomationType), nullable=False, index=True)
+    automation_type = Column(Enum(AutomationType, native_enum=False), nullable=False, index=True)
     is_active = Column(Boolean, default=False, nullable=False)
     settings = Column(JSON, nullable=True)
     last_run_at = Column(DateTime(timezone=True), nullable=True)
@@ -4767,7 +4894,7 @@ class Scenario(Base):
     __tablename__ = "scenarios"
     
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String, nullable=False)
     schedule = Column(String, nullable=False)
     is_active = Column(Boolean, default=False, nullable=False)
@@ -4787,19 +4914,20 @@ class Scenario(Base):
             ['first_step_id'], 
             ['scenario_steps.id'],
             use_alter=True, 
-            name="fk_scenarios_first_step_id_scenario_steps"
+            name="fk_scenarios_first_step_id_scenario_steps",
+            ondelete="SET NULL"
         ),
     )
 
 class ScenarioStep(Base):
     __tablename__ = "scenario_steps"
     id = Column(Integer, primary_key=True)
-    scenario_id = Column(Integer, ForeignKey("scenarios.id"), nullable=False, index=True)
-    step_type = Column(Enum(ScenarioStepType), nullable=False)
+    scenario_id = Column(Integer, ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False, index=True)
+    step_type = Column(Enum(ScenarioStepType, native_enum=False), nullable=False)
     details = Column(JSON, nullable=False)
-    next_step_id = Column(Integer, ForeignKey("scenario_steps.id"), nullable=True)
-    on_success_next_step_id = Column(Integer, ForeignKey("scenario_steps.id"), nullable=True)
-    on_failure_next_step_id = Column(Integer, ForeignKey("scenario_steps.id"), nullable=True)
+    next_step_id = Column(Integer, ForeignKey("scenario_steps.id", ondelete="SET NULL"), nullable=True)
+    on_success_next_step_id = Column(Integer, ForeignKey("scenario_steps.id", ondelete="SET NULL"), nullable=True)
+    on_failure_next_step_id = Column(Integer, ForeignKey("scenario_steps.id", ondelete="SET NULL"), nullable=True)
     position_x = Column(Float, default=0)
     position_y = Column(Float, default=0)
     scenario = relationship("Scenario", back_populates="steps", foreign_keys=[scenario_id])
@@ -4812,7 +4940,7 @@ class ScheduledPost(Base):
     post_text = Column(Text, nullable=True)
     attachments = Column(JSON, nullable=True)
     publish_at = Column(DateTime(timezone=True), nullable=False, index=True)
-    status = Column(Enum(ScheduledPostStatus), nullable=False, default=ScheduledPostStatus.scheduled, index=True)
+    status = Column(Enum(ScheduledPostStatus, native_enum=False), nullable=False, default=ScheduledPostStatus.scheduled, index=True)
     arq_job_id = Column(String, nullable=True, unique=True)
     vk_post_id = Column(String, nullable=True)
     error_message = Column(Text, nullable=True)
@@ -4831,15 +4959,15 @@ class ActionLog(Base):
     __tablename__ = "action_logs"
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    action_type = Column(Enum(ActionType), nullable=False, index=True)
+    action_type = Column(Enum(ActionType, native_enum=False), nullable=False, index=True)
     message = Column(Text, nullable=False)
-    status = Column(Enum(ActionStatus), nullable=False)
+    status = Column(Enum(ActionStatus, native_enum=False), nullable=False)
     timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
     user = relationship("User", back_populates="action_logs")
 
 # --- backend/app\db\models\user.py ---
 
-# backend/app/db/models/user.py
+# --- START OF FILE backend/app/db/models/user.py ---
 
 from datetime import datetime, UTC
 from sqlalchemy import (
@@ -4871,14 +4999,12 @@ class User(Base):
     daily_posts_limit = Column(Integer, nullable=False, server_default=text('0'))
     daily_join_groups_limit = Column(Integer, nullable=False, server_default=text('0'))
     daily_leave_groups_limit = Column(Integer, nullable=False, server_default=text('0'))
-    delay_profile = Column(Enum(DelayProfile), nullable=False, server_default=DelayProfile.normal.name)
+    delay_profile = Column(Enum(DelayProfile, native_enum=False), nullable=False, server_default=DelayProfile.normal.name)
     analytics_settings_posts_count = Column(Integer, nullable=False, server_default=text('100'))
     analytics_settings_photos_count = Column(Integer, nullable=False, server_default=text('200'))
-    
-    plan = relationship("Plan", back_populates="users", lazy="joined")
-    
-    # --- ОТНОШЕНИЯ (RELATIONSHIPS) ---
-    action_logs = relationship("ActionLog", back_populates="user", cascade="all, delete-orphan") # <--- ДОБАВЛЕНА ЭТА СТРОКА
+    plan = relationship("Plan", back_populates="users", lazy="selectin")
+
+    action_logs = relationship("ActionLog", back_populates="user", cascade="all, delete-orphan")
     automations = relationship("Automation", back_populates="user", cascade="all, delete-orphan")
     daily_stats = relationship("DailyStats", back_populates="user", cascade="all, delete-orphan")
     filter_presets = relationship("FilterPreset", back_populates="user", cascade="all, delete-orphan")
@@ -4891,7 +5017,7 @@ class User(Base):
     profile_metrics = relationship("ProfileMetric", back_populates="user", cascade="all, delete-orphan")
     proxies = relationship("Proxy", back_populates="user", cascade="all, delete-orphan", lazy="select")
     scenarios = relationship("Scenario", back_populates="user", cascade="all, delete-orphan")
-    scheduled_posts = relationship("ScheduledPost", back_populates="user", cascade="all, delete-orphan", foreign_keys="[ScheduledPost.user_id]")
+    scheduled_posts = relationship("ScheduledPost", back_populates="user", cascade="all, delete-orphan")
     task_history = relationship("TaskHistory", back_populates="user", cascade="all, delete-orphan")
     team_membership = relationship("TeamMember", back_populates="user", uselist=False, cascade="all, delete-orphan")
 
@@ -4909,7 +5035,7 @@ class TeamMember(Base):
     id = Column(Integer, primary_key=True)
     team_id = Column(Integer, ForeignKey("teams.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
-    role = Column(Enum(TeamMemberRole), nullable=False, default=TeamMemberRole.member)
+    role = Column(Enum(TeamMemberRole, native_enum=False), nullable=False, default=TeamMemberRole.member)
     team = relationship("Team", back_populates="members")
     user = relationship("User", back_populates="team_membership")
     profile_accesses = relationship("TeamProfileAccess", back_populates="team_member", cascade="all, delete-orphan")
@@ -4922,6 +5048,7 @@ class TeamProfileAccess(Base):
     profile_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     team_member = relationship("TeamMember", back_populates="profile_accesses")
     profile = relationship("User", foreign_keys=[profile_user_id])
+    __table_args__ = (UniqueConstraint('team_member_id', 'profile_user_id', name='_team_member_profile_uc'),)
 
 class ManagedProfile(Base):
     __tablename__ = "managed_profiles"
@@ -4929,7 +5056,7 @@ class ManagedProfile(Base):
     manager_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     profile_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     manager = relationship("User", foreign_keys=[manager_user_id], back_populates="managed_profiles")
-    profile = relationship("User", foreign_keys=[profile_user_id])
+    profile = relationship("User", foreign_keys=[profile_user_id], backref="managed_by")
     __table_args__ = (UniqueConstraint('manager_user_id', 'profile_user_id', name='_manager_profile_uc'),)
 
 class LoginHistory(Base):
@@ -8046,7 +8173,7 @@ import structlog
 import pytz
 import random
 from redis.asyncio import Redis 
-from sqlalchemy import select, or_
+from sqlalchemy import String, select, or_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from arq.connections import ArqRedis
@@ -8092,7 +8219,7 @@ async def _run_daily_automations_async(session: AsyncSession, arq_pool: ArqRedis
 
     stmt = select(Automation).join(User).where(
         Automation.is_active == True,
-        Automation.automation_type.in_(automation_ids),
+        Automation.automation_type.cast(String).in_(automation_ids),
         or_(User.plan_expires_at.is_(None), User.plan_expires_at > now_utc)
     ).options(selectinload(Automation.user))
     
@@ -8146,6 +8273,7 @@ from app.db.models import TaskHistory, User, Automation, Notification
 from app.core.plans import get_limits_for_plan
 from app.core.enums import PlanName
 from app.core.constants import CronSettings
+from app.db.models.payment import Plan
 
 
 log = structlog.get_logger(__name__)
@@ -8183,12 +8311,22 @@ async def _clear_old_task_history_async():
         if total_deleted > 0:
             log.info("maintenance.task_history_cleaned", count=total_deleted)
 
-async def _check_expired_plans_async(session_for_test: AsyncSession | None = None):
+async def _check_expired_plans_async(session: AsyncSession | None = None):
     """Проверяет и деактивирует истекшие тарифные планы пользователей."""
-    async with get_session(session_for_test) as session:
+    async with get_session(session) as db_session: # Используем db_session внутри
         now = datetime.datetime.now(datetime.UTC)
-        stmt = select(User).where(User.plan != 'Expired', User.plan_expires_at != None, User.plan_expires_at < now)
-        expired_users = (await session.execute(stmt)).scalars().all()
+
+        # --- ИСПРАВЛЕНИЕ 1: Получаем ID истекшего плана один раз ---
+        expired_plan_stmt = select(Plan.id).where(Plan.name_id == PlanName.EXPIRED.name)
+        expired_plan_id = (await db_session.execute(expired_plan_stmt)).scalar_one()
+
+        # --- ИСПРАВЛЕНИЕ 2: Сравниваем plan_id, а не объект plan ---
+        stmt = select(User).where(
+            User.plan_id != expired_plan_id,
+            User.plan_expires_at != None,
+            User.plan_expires_at < now
+        )
+        expired_users = (await db_session.execute(stmt)).scalars().all()
 
         if not expired_users:
             return
@@ -8197,17 +8335,29 @@ async def _check_expired_plans_async(session_for_test: AsyncSession | None = Non
         expired_plan_limits = get_limits_for_plan(PlanName.EXPIRED)
         user_ids_to_deactivate = [user.id for user in expired_users]
 
-        notifications = [Notification(user_id=user.id, message=f"Срок действия тарифа '{user.plan}' истек.", level="error") for user in expired_users]
-        session.add_all(notifications)
+        notifications = [
+            Notification(
+                user_id=user.id,
+                message=f"Срок действия тарифа '{user.plan.display_name if user.plan else 'Unknown'}' истек.",
+                level="error"
+            ) for user in expired_users
+        ]
+        db_session.add_all(notifications)
 
-        await session.execute(update(Automation).where(Automation.user_id.in_(user_ids_to_deactivate)).values(is_active=False))
-        
-        await session.execute(update(User).where(User.id.in_(user_ids_to_deactivate)).values(
-            plan=PlanName.EXPIRED.name,
-            **{k: v for k, v in expired_plan_limits.items() if hasattr(User, k)}
-        ))
-        
-        if not session_for_test:
-            await session.commit()
-        else:
-            await session.flush()
+        await db_session.execute(
+            update(Automation).where(Automation.user_id.in_(user_ids_to_deactivate)).values(is_active=False)
+        )
+
+        # --- ИСПРАВЛЕНИЕ 3: Обновляем plan_id, а не plan ---
+        await db_session.execute(
+            update(User).where(User.id.in_(user_ids_to_deactivate)).values(
+                plan_id=expired_plan_id,
+                **{k: v for k, v in expired_plan_limits.items() if hasattr(User, k)}
+            )
+        )
+
+        # ▼▼▼ ГЛАВНОЕ ИСПРАВЛЕНИЕ ЗДЕСЬ ▼▼▼
+        if not session: # Если сессия не была передана (production), то коммитим
+            await db_session.commit()
+        else: # Если сессия была передана (тесты), делаем flush
+            await db_session.flush()

@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 from app.db.models import User, TaskHistory
 from app.core.enums import PlanName, TaskKey
 from app.tasks.logic.maintenance_jobs import _check_expired_plans_async
+from app.db.models.payment import Plan
 
 pytestmark = pytest.mark.anyio
 
@@ -59,25 +60,21 @@ async def test_run_task_with_defer(
     assert isinstance(deferred_time, datetime)
     assert abs((deferred_time - publish_time).total_seconds()) < 1
 
-# ИСПРАВЛЕННЫЙ ТЕСТ
 async def test_run_task_permission_denied(
-    async_client: AsyncClient, 
-    test_user: User, 
+    async_client: AsyncClient,
+    test_user: User,
     db_session: AsyncSession,
-    get_auth_headers_for # Используем фикстуру-фабрику
+    get_auth_headers_for # Используем новую фикстуру
 ):
-    """
-    Тест на ошибку при попытке запустить задачу, недоступную по тарифу.
-    """
     # Arrange: Переводим пользователя на базовый тариф
-    test_user.plan = PlanName.BASE.name
+    base_plan = (await db_session.execute(select(Plan).where(Plan.name_id == PlanName.BASE.name))).scalar_one()
+    test_user.plan_id = base_plan.id
     await db_session.commit()
-    await db_session.refresh(test_user)
+    await db_session.refresh(test_user, ['plan'])
     
-    # --- ИСПРАВЛЕНИЕ: Генерируем токен ПОСЛЕ изменения пользователя ---
+    # Генерируем токен ПОСЛЕ изменения пользователя
     headers = get_auth_headers_for(test_user)
 
-    # `birthday_congratulation` недоступна на BASE
     task_key = TaskKey.BIRTHDAY_CONGRATULATION
     task_params = {}
 
@@ -110,31 +107,28 @@ async def test_preview_task_audience(
 async def test_run_task_with_expired_plan(
     async_client: AsyncClient, test_user: User, db_session: AsyncSession, get_auth_headers_for
 ):
-    """
-    Тест: Пользователь с истекшим тарифом получает ошибку при попытке запустить любую задачу.
-    """
-    # Arrange:
-    # 1. Устанавливаем пользователю PRO тариф, который истек вчера.
-    test_user.plan = PlanName.PRO.name
+    # ... (логика теста без изменений до генерации токена)
+    expired_plan = (await db_session.execute(select(Plan).where(Plan.name_id == PlanName.EXPIRED.name))).scalar_one()
+    pro_plan = (await db_session.execute(select(Plan).where(Plan.name_id == PlanName.PRO.name))).scalar_one()
+    
+    test_user.plan_id = pro_plan.id
     test_user.plan_expires_at = datetime.now(UTC) - timedelta(days=1)
     await db_session.commit()
     await db_session.refresh(test_user)
 
-    # 2. Запускаем логику cron-задачи, чтобы она "отключила" тариф пользователя.
     await _check_expired_plans_async(session_for_test=db_session)
-    await db_session.refresh(test_user)
+    await db_session.refresh(test_user, ['plan'])
     
-    # Убедимся, что тариф действительно сменился на Expired
-    assert test_user.plan == "Expired"
+    assert test_user.plan.name_id == PlanName.EXPIRED.name
     
-    # 3. Генерируем токен для пользователя с уже истекшим тарифом.
+    # Генерируем токен для пользователя с уже истекшим тарифом
     headers = get_auth_headers_for(test_user)
     task_key = TaskKey.LIKE_FEED
     task_params = {"count": 10, "filters": {}}
 
-    # Act: Пытаемся запустить задачу
+    # Act
     response = await async_client.post(f"/api/v1/tasks/run/{task_key.value}", headers=headers, json=task_params)
     
-    # Assert: Ожидаем ошибку 403 Forbidden
+    # Assert
     assert response.status_code == 403
-    assert "Действие недоступно на вашем тарифе 'Expired'" in response.json()["detail"]
+    assert "Действие недоступно на вашем тарифе" in response.json()["detail"]

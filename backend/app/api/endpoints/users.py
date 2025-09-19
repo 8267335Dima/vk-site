@@ -116,3 +116,116 @@ async def update_user_delay_profile(
     await db.commit()
     await db.refresh(current_user)
     return await read_users_me(current_user)
+
+@router.post("/me/filter-presets", response_model=FilterPresetRead, status_code=status.HTTP_201_CREATED)
+async def create_filter_preset(
+    preset_data: FilterPresetCreate,
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
+    """Создает новый пресет фильтров для пользователя."""
+    stmt = select(FilterPreset).where(
+        FilterPreset.user_id == current_user.id,
+        FilterPreset.name == preset_data.name,
+        FilterPreset.action_type == preset_data.action_type
+    )
+    existing = await db.execute(stmt)
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Пресет с таким названием для данного действия уже существует."
+        )
+    
+    new_preset = FilterPreset(
+        user_id=current_user.id,
+        **preset_data.model_dump()
+    )
+    db.add(new_preset)
+    try:
+        await db.commit()
+        await db.refresh(new_preset)
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Пресет с таким названием для данного действия уже существует."
+        )
+    return new_preset
+
+@router.get("/me/filter-presets", response_model=List[FilterPresetRead])
+async def get_filter_presets(
+    action_type: str = Query(...),
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
+    """Возвращает список пресетов фильтров для определенного действия."""
+    stmt = select(FilterPreset).where(
+        FilterPreset.user_id == current_user.id,
+        FilterPreset.action_type == action_type
+    ).order_by(FilterPreset.name)
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+@router.get("/me/managed-profiles", response_model=List[ManagedProfileRead])
+async def get_managed_profiles(
+    manager: User = Depends(get_current_manager_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Возвращает список профилей, которыми управляет текущий пользователь (менеджер), включая его собственный."""
+    await db.refresh(manager, attribute_names=['managed_profiles'])
+    
+    all_profiles_in_db = [manager] + [mp.profile for mp in manager.managed_profiles]
+    all_vk_ids = {p.vk_id for p in all_profiles_in_db}
+    
+    vk_info_map = {}
+    if all_vk_ids:
+        vk_api = VKAPI(decrypt_data(manager.encrypted_vk_token))
+        try:
+            vk_ids_str = ",".join(map(str, all_vk_ids))
+            user_infos = await vk_api.users.get(user_ids=vk_ids_str, fields="photo_50")
+            if user_infos:
+                vk_info_map = {info['id']: info for info in user_infos}
+        except VKAPIError:
+            pass # Игнорируем ошибки VK, чтобы вернуть хотя бы данные из нашей БД
+        finally:
+            await vk_api.close()
+
+    response_data = []
+    for profile in all_profiles_in_db:
+        vk_info = vk_info_map.get(profile.vk_id, {})
+        response_data.append(ManagedProfileRead(
+            id=profile.id,
+            vk_id=profile.vk_id,
+            first_name=vk_info.get("first_name", "N/A"),
+            last_name=vk_info.get("last_name", ""),
+            photo_50=vk_info.get("photo_50", "")
+        ))
+    return response_data
+
+@router.put(
+    "/me/analytics-settings",
+    response_model=AnalyticsSettingsRead,
+    response_model_by_alias=False 
+)
+async def update_analytics_settings(
+    settings_data: AnalyticsSettingsUpdate,
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
+    """Обновляет настройки аналитики для пользователя."""
+    current_user.analytics_settings_posts_count = settings_data.posts_count
+    current_user.analytics_settings_photos_count = settings_data.photos_count
+    await db.commit()
+    await db.refresh(current_user)
+    return current_user
+
+@router.get(
+    "/me/analytics-settings",
+    response_model=AnalyticsSettingsRead,
+    response_model_by_alias=False  
+)
+async def get_analytics_settings(
+    current_user: User = Depends(get_current_active_profile)
+):
+    """Возвращает текущие настройки аналитики пользователя."""
+    return current_user

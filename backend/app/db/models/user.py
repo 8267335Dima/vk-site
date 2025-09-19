@@ -1,4 +1,4 @@
-# backend/app/db/models/user.py
+# --- START OF FILE backend/app/db/models/user.py ---
 
 from datetime import datetime, UTC
 from sqlalchemy import (
@@ -30,14 +30,12 @@ class User(Base):
     daily_posts_limit = Column(Integer, nullable=False, server_default=text('0'))
     daily_join_groups_limit = Column(Integer, nullable=False, server_default=text('0'))
     daily_leave_groups_limit = Column(Integer, nullable=False, server_default=text('0'))
-    delay_profile = Column(Enum(DelayProfile), nullable=False, server_default=DelayProfile.normal.name)
+    delay_profile = Column(Enum(DelayProfile, native_enum=False), nullable=False, server_default=DelayProfile.normal.name)
     analytics_settings_posts_count = Column(Integer, nullable=False, server_default=text('100'))
     analytics_settings_photos_count = Column(Integer, nullable=False, server_default=text('200'))
-    
-    plan = relationship("Plan", back_populates="users", lazy="joined")
-    
-    # --- ОТНОШЕНИЯ (RELATIONSHIPS) ---
-    action_logs = relationship("ActionLog", back_populates="user", cascade="all, delete-orphan") # <--- ДОБАВЛЕНА ЭТА СТРОКА
+    plan = relationship("Plan", back_populates="users", lazy="selectin")
+
+    action_logs = relationship("ActionLog", back_populates="user", cascade="all, delete-orphan")
     automations = relationship("Automation", back_populates="user", cascade="all, delete-orphan")
     daily_stats = relationship("DailyStats", back_populates="user", cascade="all, delete-orphan")
     filter_presets = relationship("FilterPreset", back_populates="user", cascade="all, delete-orphan")
@@ -50,7 +48,7 @@ class User(Base):
     profile_metrics = relationship("ProfileMetric", back_populates="user", cascade="all, delete-orphan")
     proxies = relationship("Proxy", back_populates="user", cascade="all, delete-orphan", lazy="select")
     scenarios = relationship("Scenario", back_populates="user", cascade="all, delete-orphan")
-    scheduled_posts = relationship("ScheduledPost", back_populates="user", cascade="all, delete-orphan", foreign_keys="[ScheduledPost.user_id]")
+    scheduled_posts = relationship("ScheduledPost", back_populates="user", cascade="all, delete-orphan")
     task_history = relationship("TaskHistory", back_populates="user", cascade="all, delete-orphan")
     team_membership = relationship("TeamMember", back_populates="user", uselist=False, cascade="all, delete-orphan")
 
@@ -68,7 +66,7 @@ class TeamMember(Base):
     id = Column(Integer, primary_key=True)
     team_id = Column(Integer, ForeignKey("teams.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
-    role = Column(Enum(TeamMemberRole), nullable=False, default=TeamMemberRole.member)
+    role = Column(Enum(TeamMemberRole, native_enum=False), nullable=False, default=TeamMemberRole.member)
     team = relationship("Team", back_populates="members")
     user = relationship("User", back_populates="team_membership")
     profile_accesses = relationship("TeamProfileAccess", back_populates="team_member", cascade="all, delete-orphan")
@@ -81,6 +79,7 @@ class TeamProfileAccess(Base):
     profile_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     team_member = relationship("TeamMember", back_populates="profile_accesses")
     profile = relationship("User", foreign_keys=[profile_user_id])
+    __table_args__ = (UniqueConstraint('team_member_id', 'profile_user_id', name='_team_member_profile_uc'),)
 
 class ManagedProfile(Base):
     __tablename__ = "managed_profiles"
@@ -88,7 +87,7 @@ class ManagedProfile(Base):
     manager_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     profile_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     manager = relationship("User", foreign_keys=[manager_user_id], back_populates="managed_profiles")
-    profile = relationship("User", foreign_keys=[profile_user_id])
+    profile = relationship("User", foreign_keys=[profile_user_id], backref="managed_by")
     __table_args__ = (UniqueConstraint('manager_user_id', 'profile_user_id', name='_manager_profile_uc'),)
 
 class LoginHistory(Base):

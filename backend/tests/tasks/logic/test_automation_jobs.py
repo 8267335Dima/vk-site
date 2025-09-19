@@ -8,6 +8,7 @@ import pytz
 from datetime import datetime as real_datetime
 from app.db.models import User, Automation
 from app.tasks.logic.automation_jobs import _run_daily_automations_async
+from app.core.enums import AutomationType
 
 pytestmark = pytest.mark.asyncio
 
@@ -48,7 +49,7 @@ async def test_eternal_online_schedule_logic(
     # Arrange:
     automation = Automation(
         user_id=test_user.id,
-        automation_type="eternal_online",
+        automation_type=AutomationType.ETERNAL_ONLINE,
         is_active=True,
         settings=ETERNAL_ONLINE_SETTINGS
     )

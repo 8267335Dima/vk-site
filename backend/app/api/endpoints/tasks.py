@@ -48,7 +48,7 @@ async def _enqueue_task(
                 detail=f"Достигнут лимит на одновременное выполнение задач ({max_concurrent}). Дождитесь завершения текущих."
             )
 
-    if not is_feature_available_for_plan(user.plan, task_key):
+    if not await is_feature_available_for_plan(user.plan, task_key):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Действие недоступно на вашем тарифе '{user.plan}'.")
 
     task_func_name = TASK_FUNC_MAP.get(TaskKey(task_key))

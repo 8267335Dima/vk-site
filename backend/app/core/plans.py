@@ -53,7 +53,7 @@ async def is_feature_available_for_plan(plan_name: PlanName | str, feature_id: s
         return False
 
     # 3. Проверяем доступность по тарифному плану.
-    key = plan_name if isinstance(plan_name, str) else plan_name.name
+    key = plan_name if isinstance(plan_name, str) else plan_name.name_id
     plan_model = PLAN_CONFIG.get(key, PLAN_CONFIG[PlanName.EXPIRED.name])
     
     available_features = plan_model.available_features
@@ -69,7 +69,7 @@ def get_features_for_plan(plan_name: PlanName | str) -> list[str]:
     Возвращает полный список доступных ключей фич для тарифного плана.
     Обрабатывает wildcard '*' для PRO тарифов.
     """
-    key = plan_name if isinstance(plan_name, str) else plan_name.name
+    key = plan_name if isinstance(plan_name, str) else plan_name.name_id
     plan_model = PLAN_CONFIG.get(key, PLAN_CONFIG[PlanName.EXPIRED.name])
     available = plan_model.available_features
     

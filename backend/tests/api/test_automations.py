@@ -4,7 +4,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.db.models import User, Automation
+from app.db.models import User, Automation, Plan
 from app.core.enums import PlanName
 
 pytestmark = pytest.mark.anyio
@@ -35,13 +35,11 @@ async def test_update_automation_success(
     
     assert response.status_code == 200
 
-    # --- ИСПРАВЛЕНИЕ: Используем точный запрос для поиска нужной записи ---
     stmt = select(Automation).where(
         Automation.user_id == test_user.id,
         Automation.automation_type == automation_type
     )
     automation_in_db = (await db_session.execute(stmt)).scalar_one()
-    # ---------------------------------------------------------------------
 
     assert automation_in_db.is_active is True
     assert automation_in_db.settings["count"] == 77
@@ -53,9 +51,11 @@ async def test_update_automation_access_denied(
     """
     Тест на запрет активации фичи, недоступной по тарифу.
     """
-    test_user.plan = PlanName.BASE.name
+    # ИСПРАВЛЕНИЕ: Правильно меняем тариф пользователю через plan_id
+    base_plan = (await db_session.execute(select(Plan).where(Plan.name_id == PlanName.BASE.name))).scalar_one()
+    test_user.plan_id = base_plan.id
     await db_session.commit()
-    await db_session.refresh(test_user)
+    await db_session.refresh(test_user, ['plan'])
 
     automation_type = "birthday_congratulation" # Эта фича недоступна на BASE тарифе
     update_data = {"is_active": True, "settings": {}}

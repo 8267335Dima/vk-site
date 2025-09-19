@@ -10,6 +10,8 @@ from unittest.mock import AsyncMock
 from app.main import app
 from app.db.models import User, Team, TeamMember, ManagedProfile, TeamProfileAccess
 from app.api.dependencies import get_current_active_profile
+from app.core.enums import PlanName
+from app.db.models.payment import Plan
 
 pytestmark = pytest.mark.anyio
 
@@ -261,9 +263,11 @@ async def test_cannot_invite_user_already_in_a_team(
     Тест проверяет, что API вернет ошибку 409 Conflict, если менеджер
     пытается пригласить пользователя, который уже является членом другой команды.
     """
-    # Arrange:
-    # 1. Создаем "другого" менеджера и его команду.
-    another_manager = User(vk_id=999, encrypted_vk_token="another_manager", plan="AGENCY")
+    agency_plan = (await db_session.execute(select(Plan).where(Plan.name_id == PlanName.AGENCY.name))).scalar_one()
+    # Затем создаем пользователя, используя plan_id
+    another_manager = User(vk_id=999, encrypted_vk_token="another_manager", plan_id=agency_plan.id)
+    # ↑↑↑ КОНЕЦ ИСПРАВЛЕНИЯ ↑↑↑
+
     db_session.add(another_manager)
     await db_session.flush()
     

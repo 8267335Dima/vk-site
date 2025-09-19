@@ -1,3 +1,4 @@
+# backend/app/db/models/payment.py
 import datetime
 import enum
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Float, Enum, JSON, Boolean, Text
@@ -30,9 +31,10 @@ class Payment(Base):
     payment_system_id = Column(String, unique=True, index=True, nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     amount = Column(Float, nullable=False)
-    status = Column(Enum(PaymentStatus), default=PaymentStatus.PENDING, nullable=False)
+    status = Column(Enum(PaymentStatus, native_enum=False), default=PaymentStatus.PENDING, nullable=False)
     plan_name = Column(String, nullable=False)
     months = Column(Integer, nullable=False, default=1)
     created_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    error_message = Column(Text, nullable=True)
     user = relationship("User")

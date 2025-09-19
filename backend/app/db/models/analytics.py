@@ -1,4 +1,4 @@
-# --- START OF FILE backend/app/db/models/analytics.py ---
+# backend/app/db/models/analytics.py
 
 import datetime
 from sqlalchemy import (
@@ -62,7 +62,6 @@ class ProfileMetric(Base):
     photos_count = Column(Integer, nullable=False, default=0)
     wall_posts_count = Column(Integer, nullable=False, default=0)
     
-    # <<< ИЗМЕНЕНО: Поля для лайков разделены >>>
     recent_post_likes = Column(Integer, nullable=False, default=0)
     recent_photo_likes = Column(Integer, nullable=False, default=0)
     total_post_likes = Column(Integer, nullable=False, default=0)
@@ -99,9 +98,8 @@ class FriendRequestLog(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     target_vk_id = Column(BigInteger, nullable=False, index=True)
-    status = Column(Enum(FriendRequestStatus), nullable=False, default=FriendRequestStatus.pending, index=True)
+    status = Column(Enum(FriendRequestStatus, native_enum=False), nullable=False, default=FriendRequestStatus.pending, index=True)
     created_at = Column(DateTime(timezone=True), default=datetime.datetime.now(datetime.UTC), index=True)
     resolved_at = Column(DateTime(timezone=True), nullable=True)
     user = relationship("User", back_populates="friend_requests")
     __table_args__ = (UniqueConstraint('user_id', 'target_vk_id', name='_user_target_uc'),)
-

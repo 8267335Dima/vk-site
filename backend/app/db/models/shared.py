@@ -23,7 +23,7 @@ class Proxy(Base):
 class Notification(Base):
     __tablename__ = "notifications"
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     message = Column(String, nullable=False)
     level = Column(String, default="info", nullable=False)
     is_read = Column(Boolean, default=False, nullable=False, index=True)
@@ -46,7 +46,7 @@ class SupportTicket(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     subject = Column(String(255), nullable=False)
-    status = Column(Enum(TicketStatus), default=TicketStatus.OPEN, nullable=False, index=True)
+    status = Column(Enum(TicketStatus, native_enum=False), default=TicketStatus.OPEN, nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), onupdate=datetime.datetime.utcnow)
     reopen_count = Column(Integer, default=0, nullable=False)
@@ -64,4 +64,4 @@ class TicketMessage(Base):
     created_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow)
     
     ticket = relationship("SupportTicket", back_populates="messages")
-    author = relationship("User")
+    author = relationship("User", backref="ticket_messages")

@@ -129,12 +129,12 @@ async def invite_member(
 ):
     manager, team = manager_and_team
     
-    # Загружаем актуальное количество участников
     await db.refresh(team, attribute_names=['members'])
 
-    plan_config = get_plan_config(manager.plan)
-    max_members = plan_config.get("limits", {}).get("max_team_members", 1)
-    if len(team.members) >= max_members:
+    plan_config = get_plan_config(manager.plan.name_id) 
+    max_members = plan_config.get("limits", {}).get("max_team_members")
+
+    if max_members is not None and len(team.members) >= max_members:
         raise HTTPException(status_code=403, detail=f"Достигнут лимит на количество участников в команде ({max_members}).")
 
     invited_user = (await db.execute(select(User).where(User.vk_id == invite_data.user_vk_id))).scalar_one_or_none()

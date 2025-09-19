@@ -1,3 +1,4 @@
+# tests/admin/test_admin_user_actions.py
 import json
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +13,7 @@ ASYNC_TEST = pytest.mark.asyncio
 class TestUserAdminComplexActions:
 
     @ASYNC_TEST
-    async def test_soft_delete_action(self, db_session: AsyncSession, test_user: User):
+    async def test_soft_delete_action(self, db_session: AsyncSession, test_user: User, admin_user: User):
         """Проверяет, что soft_delete корректно устанавливает флаги."""
         mock_request = MagicMock(state=MagicMock(session=db_session))
         admin_view = UserAdmin()

@@ -8,13 +8,13 @@ from sqlalchemy import select
 from fastapi_cache.decorator import cache
 
 from app.db.session import get_db
-from app.db.models import User, Payment
+# --- ИЗМЕНЕНИЕ: Добавляем импорт модели Plan ---
+from app.db.models import User, Payment, Plan
 from app.api.dependencies import get_current_active_profile
 from app.api.schemas.billing import CreatePaymentRequest, CreatePaymentResponse, AvailablePlansResponse, PlanDetail
 from app.core.config_loader import PLAN_CONFIG
 import structlog
 
-from app.core.plans import get_limits_for_plan
 
 log = structlog.get_logger(__name__)
 router = APIRouter()
@@ -127,7 +127,10 @@ async def payment_webhook(request: Request, db: AsyncSession = Depends(get_db)):
             log.info("webhook.already_processed", payment_id=payment.id)
             return {"status": "ok"}
         
+        # --- НАЧАЛО ИСПРАВЛЕНИЯ 1: Меняем способ загрузки и блокировки пользователя ---
         user = await db.get(User, payment.user_id, with_for_update=True)
+        # --- КОНЕЦ ИСПРАВЛЕНИЯ 1 ---
+        
         if not user:
             log.error("webhook.user_not_found", user_id=payment.user_id)
             payment.status = "failed"
@@ -142,23 +145,33 @@ async def payment_webhook(request: Request, db: AsyncSession = Depends(get_db)):
             log.error("webhook.amount_mismatch", payment_id=payment.id, expected=payment.amount, got=received_amount)
             await db.commit()
             return {"status": "ok"}
+        
+        # --- НАЧАЛО ИСПРАВЛЕНИЯ 2: Исправляем логику обновления тарифа ---
+        new_plan_stmt = select(Plan).where(Plan.name_id == payment.plan_name)
+        new_plan = (await db.execute(new_plan_stmt)).scalar_one_or_none()
+
+        if not new_plan:
+            log.error("webhook.plan_not_found", payment_id=payment.id, plan_name=payment.plan_name)
+            payment.status = "failed"
+            payment.error_message = f"Plan '{payment.plan_name}' not found."
+            await db.commit()
+            return {"status": "ok"}
 
         start_date = user.plan_expires_at if user.plan_expires_at and user.plan_expires_at > datetime.datetime.now(datetime.UTC) else datetime.datetime.now(datetime.UTC)
         
-        user.plan = payment.plan_name
+        user.plan_id = new_plan.id
         user.plan_expires_at = start_date + datetime.timedelta(days=30 * payment.months)
         
-        new_limits = get_limits_for_plan(user.plan)
+        new_limits = new_plan.limits
         for key, value in new_limits.items():
             if hasattr(user, key):
                 setattr(user, key, value)
+        # --- КОНЕЦ ИСПРАВЛЕНИЯ 2 ---
 
         payment.status = "succeeded"
         
-        log.info("webhook.success", user_id=user.id, plan=user.plan, expires_at=user.plan_expires_at)
+        log.info("webhook.success", user_id=user.id, plan=new_plan.name_id, expires_at=user.plan_expires_at)
         
-        # --- ИСПРАВЛЕНИЕ: Сохраняем все изменения в БД ---
         await db.commit()
         
     return {"status": "ok"}
-

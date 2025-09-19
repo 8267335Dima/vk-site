@@ -11,14 +11,12 @@ from app.api.dependencies import get_current_active_profile
 from app.api.schemas.proxies import ProxyCreate, ProxyRead
 from app.core.security import encrypt_data, decrypt_data
 from app.services.proxy_service import ProxyService
-# --- НОВЫЙ ИМПОРТ ---
 from app.core.plans import is_feature_available_for_plan
 
 router = APIRouter()
 
-# --- НОВАЯ ЗАВИСИМОСТЬ ДЛЯ ПРОВЕРКИ ПРАВ ---
 async def check_proxy_feature_access(current_user: User = Depends(get_current_active_profile)):
-    if not is_feature_available_for_plan(current_user.plan, "proxy_management"):
+    if not await is_feature_available_for_plan(current_user.plan.name_id, "proxy_management", user=current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Управление прокси доступно только на PRO-тарифе."
@@ -28,7 +26,7 @@ async def check_proxy_feature_access(current_user: User = Depends(get_current_ac
 @router.post("", response_model=ProxyRead, status_code=status.HTTP_201_CREATED)
 async def add_proxy(
     proxy_data: ProxyCreate,
-    current_user: User = Depends(check_proxy_feature_access), # <-- ПРОВЕРКА ПРАВ
+    current_user: User = Depends(check_proxy_feature_access),
     db: AsyncSession = Depends(get_db)
 ):
     """Добавляет новый прокси для пользователя и сразу проверяет его."""
@@ -46,7 +44,7 @@ async def add_proxy(
         encrypted_proxy_url=encrypted_url,
         is_working=is_working,
         check_status_message=status_message,
-        last_checked_at=datetime.datetime.utcnow()
+        last_checked_at=datetime.datetime.now(datetime.UTC)
     )
     db.add(new_proxy)
     await db.commit()
@@ -62,9 +60,12 @@ async def add_proxy(
 
 @router.get("", response_model=List[ProxyRead])
 async def get_user_proxies(
-    current_user: User = Depends(check_proxy_feature_access) # <-- ПРОВЕРКА ПРАВ
+    current_user: User = Depends(check_proxy_feature_access),
+    db: AsyncSession = Depends(get_db)  # <--- ИЗМЕНЕНИЕ 1: Добавлена зависимость
 ):
     """Возвращает список всех прокси пользователя."""
+    await db.refresh(current_user, attribute_names=['proxies'])
+    
     return [
         ProxyRead(
             id=p.id,
@@ -78,7 +79,7 @@ async def get_user_proxies(
 @router.delete("/{proxy_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_proxy(
     proxy_id: int,
-    current_user: User = Depends(check_proxy_feature_access), # <-- ПРОВЕРКА ПРАВ
+    current_user: User = Depends(check_proxy_feature_access),
     db: AsyncSession = Depends(get_db)
 ):
     """Удаляет прокси по ID."""

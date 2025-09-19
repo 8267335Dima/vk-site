@@ -30,7 +30,7 @@ class Automation(Base):
     __tablename__ = "automations"
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    automation_type = Column(Enum(AutomationType), nullable=False, index=True)
+    automation_type = Column(Enum(AutomationType, native_enum=False), nullable=False, index=True)
     is_active = Column(Boolean, default=False, nullable=False)
     settings = Column(JSON, nullable=True)
     last_run_at = Column(DateTime(timezone=True), nullable=True)
@@ -41,7 +41,7 @@ class Scenario(Base):
     __tablename__ = "scenarios"
     
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String, nullable=False)
     schedule = Column(String, nullable=False)
     is_active = Column(Boolean, default=False, nullable=False)
@@ -61,19 +61,20 @@ class Scenario(Base):
             ['first_step_id'], 
             ['scenario_steps.id'],
             use_alter=True, 
-            name="fk_scenarios_first_step_id_scenario_steps"
+            name="fk_scenarios_first_step_id_scenario_steps",
+            ondelete="SET NULL"
         ),
     )
 
 class ScenarioStep(Base):
     __tablename__ = "scenario_steps"
     id = Column(Integer, primary_key=True)
-    scenario_id = Column(Integer, ForeignKey("scenarios.id"), nullable=False, index=True)
-    step_type = Column(Enum(ScenarioStepType), nullable=False)
+    scenario_id = Column(Integer, ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False, index=True)
+    step_type = Column(Enum(ScenarioStepType, native_enum=False), nullable=False)
     details = Column(JSON, nullable=False)
-    next_step_id = Column(Integer, ForeignKey("scenario_steps.id"), nullable=True)
-    on_success_next_step_id = Column(Integer, ForeignKey("scenario_steps.id"), nullable=True)
-    on_failure_next_step_id = Column(Integer, ForeignKey("scenario_steps.id"), nullable=True)
+    next_step_id = Column(Integer, ForeignKey("scenario_steps.id", ondelete="SET NULL"), nullable=True)
+    on_success_next_step_id = Column(Integer, ForeignKey("scenario_steps.id", ondelete="SET NULL"), nullable=True)
+    on_failure_next_step_id = Column(Integer, ForeignKey("scenario_steps.id", ondelete="SET NULL"), nullable=True)
     position_x = Column(Float, default=0)
     position_y = Column(Float, default=0)
     scenario = relationship("Scenario", back_populates="steps", foreign_keys=[scenario_id])
@@ -86,7 +87,7 @@ class ScheduledPost(Base):
     post_text = Column(Text, nullable=True)
     attachments = Column(JSON, nullable=True)
     publish_at = Column(DateTime(timezone=True), nullable=False, index=True)
-    status = Column(Enum(ScheduledPostStatus), nullable=False, default=ScheduledPostStatus.scheduled, index=True)
+    status = Column(Enum(ScheduledPostStatus, native_enum=False), nullable=False, default=ScheduledPostStatus.scheduled, index=True)
     arq_job_id = Column(String, nullable=True, unique=True)
     vk_post_id = Column(String, nullable=True)
     error_message = Column(Text, nullable=True)
@@ -105,8 +106,8 @@ class ActionLog(Base):
     __tablename__ = "action_logs"
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    action_type = Column(Enum(ActionType), nullable=False, index=True)
+    action_type = Column(Enum(ActionType, native_enum=False), nullable=False, index=True)
     message = Column(Text, nullable=False)
-    status = Column(Enum(ActionStatus), nullable=False)
+    status = Column(Enum(ActionStatus, native_enum=False), nullable=False)
     timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
     user = relationship("User", back_populates="action_logs")

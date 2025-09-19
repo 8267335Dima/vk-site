@@ -4,11 +4,11 @@ import structlog
 import pytz
 import random
 from redis.asyncio import Redis 
-from sqlalchemy import select, or_
+from sqlalchemy import String, select, or_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from arq.connections import ArqRedis
-
+from app.core.enums import AutomationType
 from app.db.models import Automation, TaskHistory, User
 from app.core.config_loader import AUTOMATIONS_CONFIG
 from app.core.constants import CronSettings
@@ -50,7 +50,8 @@ async def _run_daily_automations_async(session: AsyncSession, arq_pool: ArqRedis
 
     stmt = select(Automation).join(User).where(
         Automation.is_active == True,
-        Automation.automation_type.in_(automation_ids),
+        # Сравниваем напрямую с Enum объектами
+        Automation.automation_type.in_([AutomationType(aid) for aid in automation_ids]),
         or_(User.plan_expires_at.is_(None), User.plan_expires_at > now_utc)
     ).options(selectinload(Automation.user))
     

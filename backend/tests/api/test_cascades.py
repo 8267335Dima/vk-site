@@ -4,7 +4,9 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
-from app.db.models import User, TaskHistory, Automation, FilterPreset, Proxy, Notification, Scenario
+# Импортируем все необходимые модели
+from app.db.models import User, TaskHistory, Automation, FilterPreset, Proxy, Notification, Scenario, Plan
+from app.core.enums import PlanName
 
 pytestmark = pytest.mark.asyncio
 
@@ -14,7 +16,16 @@ async def test_user_deletion_cascades(db_session: AsyncSession):
     каскадное удаление всех связанных с ним данных.
     """
     # Arrange: Создаем пользователя и полный набор связанных с ним сущностей
-    user_to_delete = User(vk_id=999, encrypted_vk_token="token_to_delete", plan="PRO")
+    
+    # --- ИСПРАВЛЕНИЕ: Сначала получаем объект Plan из БД ---
+    pro_plan = (await db_session.execute(select(Plan).where(Plan.name_id == PlanName.PRO.name))).scalar_one()
+    
+    # --- ИСПРАВЛЕНИЕ: Используем plan_id для создания пользователя ---
+    user_to_delete = User(
+        vk_id=999,
+        encrypted_vk_token="token_to_delete",
+        plan_id=pro_plan.id
+    )
     db_session.add(user_to_delete)
     await db_session.flush() # Получаем user_id
     

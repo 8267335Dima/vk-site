@@ -36,7 +36,6 @@ async def get_friends_analytics(current_user: User = Depends(get_current_active_
 
     analytics = {"male_count": 0, "female_count": 0, "other_count": 0}
     if friends_response and isinstance(friends_response.get('items'), list):
-        # Итерируемся по списку друзей, а не по всему словарю
         for friend in friends_response['items']:
             sex = friend.get("sex")
             if sex == 1:
@@ -45,7 +44,7 @@ async def get_friends_analytics(current_user: User = Depends(get_current_active_
                 analytics["male_count"] += 1
             else:
                 analytics["other_count"] += 1
-    return FriendsAnalyticsResponse(**analytics)
+    return analytics
 
 @router.get("/activity", response_model=ActivityStatsResponse)
 async def get_activity_stats(

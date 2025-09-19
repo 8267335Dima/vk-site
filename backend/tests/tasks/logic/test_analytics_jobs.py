@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock, patch
 
 from app.db.models import User, ProfileMetric, FriendRequestLog
 from app.core.enums import FriendRequestStatus
-
-# --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
-# Импортируем _snapshot... из его нового дома - profile_parser.py
+from app.db.models import Plan # Добавьте эту строку
+from app.core.enums import PlanName # Добавьте эту строку
+from sqlalchemy import select # Добавьте эту строку
 from app.tasks.profile_parser import _snapshot_all_users_metrics_async
 # А _update... остается в analytics_jobs.py
 from app.tasks.logic.analytics_jobs import _update_friend_request_statuses_async
@@ -17,7 +17,7 @@ from app.tasks.logic.analytics_jobs import _update_friend_request_statuses_async
 pytestmark = pytest.mark.anyio
 
 
-@patch('app.services.profile_analytics_service.VKAPI')
+@patch('app.services.base.VKAPI')
 async def test_snapshot_uses_user_custom_settings(
     MockVKAPI, db_session: AsyncSession, test_user: User
 ):
@@ -56,10 +56,11 @@ async def test_update_friend_requests_logic(
     """
     Тест: Проверяет логику обновления статусов заявок в друзья.
     """
-    # Arrange
-    invalid_user = User(vk_id=111, encrypted_vk_token="invalid_token", plan="PRO")
+    pro_plan = (await db_session.execute(select(Plan).where(Plan.name_id == PlanName.PRO.name))).scalar_one()
+
+    invalid_user = User(vk_id=111, encrypted_vk_token="invalid_token", plan_id=pro_plan.id)
     req1 = FriendRequestLog(user=invalid_user, target_vk_id=1, status=FriendRequestStatus.pending)
-    valid_user = User(vk_id=222, encrypted_vk_token="valid_token", plan="PRO")
+    valid_user = User(vk_id=222, encrypted_vk_token="valid_token", plan_id=pro_plan.id)
     req2 = FriendRequestLog(user=valid_user, target_vk_id=2, status=FriendRequestStatus.pending)
     db_session.add_all([invalid_user, valid_user, req1, req2])
     await db_session.commit()
@@ -69,7 +70,8 @@ async def test_update_friend_requests_logic(
     mock_decrypt.side_effect = fake_decrypt
 
     mock_api = MockVKAPI.return_value
-    mock_api.get_user_friends.return_value = {"items": [2, 3, 4]}
+    # Делаем метод асинхронным и сразу задаем возвращаемое значение
+    mock_api.get_user_friends = AsyncMock(return_value={"items": [2, 3, 4]})
     mock_api.close = AsyncMock()
 
     # Act: Вызываем _update_friend_request_statuses_async

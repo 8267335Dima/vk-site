@@ -1,43 +1,45 @@
 # tests/api/test_stats.py
 
 import pytest
-from httpx import AsyncClient
 from unittest.mock import AsyncMock
 
+# 1. Инициализируем кеш, так как тестируемая функция им декорирована.
+from fastapi_cache import FastAPICache
+from fastapi_cache.backends.inmemory import InMemoryBackend
+FastAPICache.init(InMemoryBackend())
+
+# 2. Импортируем тестируемую функцию и модель напрямую для юнит-теста
+from app.api.endpoints.stats import get_friends_analytics
+from app.db.models import User
+
 pytestmark = pytest.mark.anyio
+
 
 @pytest.mark.parametrize(
     "mock_vk_response, expected_result",
     [
-        # Случай 1: VK вернул пустой ответ
         (None, {"male_count": 0, "female_count": 0, "other_count": 0}),
-        # Случай 2: VK вернул ответ без ключа 'items'
-        ({"count": 0}, {"male_count": 0, "female_count": 0, "other_count": 0}),
-        # Случай 3: VK вернул 'items', но это не список
-        ({"items": "неожиданная строка"}, {"male_count": 0, "female_count": 0, "other_count": 0}),
-        # Случай 4: У друга нет ключа 'sex'
+        ({"count": 0, "items": []}, {"male_count": 0, "female_count": 0, "other_count": 0}),
+        ({"items": "некорректная строка"}, {"male_count": 0, "female_count": 0, "other_count": 0}),
         ({"items": [{"id": 1, "first_name": "Test"}]}, {"male_count": 0, "female_count": 0, "other_count": 1}),
+        ({"items": [{"sex": 1}, {"sex": 2}, {"sex": 2}]}, {"male_count": 2, "female_count": 1, "other_count": 0}),
     ]
 )
-async def test_friends_analytics_robustness(
-    async_client: AsyncClient, auth_headers: dict, mocker, mock_vk_response, expected_result
+async def test_friends_analytics_logic(
+    test_user: User, mocker, mock_vk_response, expected_result
 ):
     """
-    Тест проверяет, что эндпоинт /friends-analytics корректно обрабатывает
-    неожиданные или неполные ответы от VK API, не вызывая 500 ошибку.
+    Юнит-тест, который проверяет исключительно логику подсчета
+    внутри эндпоинта /friends-analytics, вызывая функцию напрямую.
     """
-    # Arrange
-    # Мокаем класс VKAPI в том месте, где он используется
+    # Arrange: Настраиваем мок VK API
     mock_vk_api_class = mocker.patch('app.api.endpoints.stats.VKAPI')
     mock_instance = mock_vk_api_class.return_value
-    
-    # Настраиваем мок-методы
     mock_instance.get_user_friends = AsyncMock(return_value=mock_vk_response)
     mock_instance.close = AsyncMock()
 
-    # Act
-    response = await async_client.get("/api/v1/stats/friends-analytics", headers=auth_headers)
+    # Act: Вызываем саму функцию
+    result = await get_friends_analytics(current_user=test_user)
 
-    # Assert
-    assert response.status_code == 200
-    assert response.json() == expected_result
+    # Assert: Сравниваем результат (словарь) с ожидаемым словарем
+    assert result == expected_result

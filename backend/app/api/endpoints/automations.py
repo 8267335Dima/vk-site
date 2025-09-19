@@ -36,21 +36,17 @@ async def get_automations_status(
     
     response_list = []
     for config_item in AUTOMATIONS_CONFIG:
-        # --- ИЗМЕНЕНИЕ ---
         auto_type = config_item.id
-        # -----------------
         db_item = user_automations_db.get(auto_type)
         
-        is_available = is_feature_available_for_plan(current_user.plan, auto_type)
+        is_available = await is_feature_available_for_plan(current_user.plan.name_id, auto_type, user=current_user)
         
         response_list.append(AutomationStatus(
             automation_type=auto_type,
             is_active=db_item.is_active if db_item else False,
-            # --- ИЗМЕНЕНИЕ ---
             settings=db_item.settings if db_item else config_item.default_settings or {},
             name=config_item.name,
             description=config_item.description,
-            # -----------------
             is_available=is_available
         ))
         
@@ -63,15 +59,13 @@ async def update_automation(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    if request_data.is_active and not is_feature_available_for_plan(current_user.plan, automation_type):
+    if request_data.is_active and not await is_feature_available_for_plan(current_user.plan.name_id, automation_type, user=current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Функция '{automation_type}' недоступна на вашем тарифе '{current_user.plan}'."
+            detail=f"Функция '{automation_type}' недоступна на вашем тарифе '{current_user.plan.display_name}'."
         )
 
-    # --- ИЗМЕНЕНИЕ ---
     config_item = next((item for item in AUTOMATIONS_CONFIG if item.id == automation_type), None)
-    # -----------------
     if not config_item:
         raise HTTPException(status_code=404, detail="Автоматизация такого типа не найдена.")
 
@@ -87,9 +81,7 @@ async def update_automation(
             user_id=current_user.id,
             automation_type=automation_type,
             is_active=request_data.is_active,
-            # --- ИЗМЕНЕНИЕ ---
             settings=request_data.settings or config_item.default_settings or {}
-            # -----------------
         )
         db.add(automation)
     else:
@@ -104,9 +96,7 @@ async def update_automation(
         automation_type=automation.automation_type,
         is_active=automation.is_active,
         settings=automation.settings,
-        # --- ИЗМЕНЕНИЕ ---
         name=config_item.name,
         description=config_item.description,
-        # -----------------
-        is_available=is_feature_available_for_plan(current_user.plan, automation_type)
+        is_available=await is_feature_available_for_plan(current_user.plan.name_id, automation_type, user=current_user)
     )

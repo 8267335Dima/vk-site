@@ -1,14 +1,14 @@
 import os
 import uuid
 import json
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Generator
 from unittest.mock import AsyncMock
 
 from sqlalchemy import StaticPool, select
 
 from app.services.event_emitter import RedisEventEmitter
 os.environ['ENV_FILE'] = os.path.join(os.path.dirname(__file__), '..', '.env.test')
-
+from fastapi.testclient import TestClient
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
@@ -30,18 +30,15 @@ from app.core.config_loader import PLAN_CONFIG
 async def db_engine() -> AsyncGenerator[AsyncEngine, None]:
     is_sqlite = "sqlite" in settings.database_url
     
-    # --- НАЧАЛО ИСПРАВЛЕНИЯ ---
     connect_args = {"check_same_thread": False} if is_sqlite else {}
     
     engine = create_async_engine(
         settings.database_url,
         poolclass=StaticPool if is_sqlite else None,
         connect_args=connect_args,
-        # Эта опция научит SQLite правильно работать с JSON
         json_serializer=json.dumps,
         json_deserializer=json.loads
     )
-    # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
@@ -52,29 +49,49 @@ async def db_engine() -> AsyncGenerator[AsyncEngine, None]:
     await engine.dispose()
 
 
+# ▼▼▼ ОБНОВЛЕННАЯ И УЛУЧШЕННАЯ ФИКСТУРА ▼▼▼
 @pytest_asyncio.fixture(scope="function")
 async def db_session(db_engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
-    async with AsyncSession(db_engine, expire_on_commit=False) as session:
+    """
+    Создает сессию БД для теста, которая работает внутри одной транзакции
+    и откатывается после завершения теста. Это обеспечивает изоляцию
+    и корректное закрытие соединений, устраняя RuntimeWarning.
+    """
+    # Устанавливаем соединение с БД на время всего теста
+    connection = await db_engine.connect()
+    # Начинаем транзакцию
+    trans = await connection.begin()
+
+    # Создаем сессию, привязанную к этому конкретному соединению
+    session = AsyncSession(bind=connection, expire_on_commit=False)
+
+    try:
+        # Предварительно заполняем БД базовыми данными (например, тарифами),
+        # которые будут доступны тесту, но откатятся после его завершения.
         plans_to_create = []
-        
-        # --- НАЧАЛО ИСПРАВЛЕНИЯ ---
         plan_model_columns = {c.name for c in Plan.__table__.columns}
         for plan_id, config in PLAN_CONFIG.items():
             plan_data = config.model_dump()
-            
-            # Фильтруем данные, оставляя только те ключи, что есть в модели Plan
             filtered_data = {
-                key: value for key, value in plan_data.items() 
+                key: value for key, value in plan_data.items()
                 if key in plan_model_columns
             }
-            filtered_data['name_id'] = plan_id # name_id - это колонка в модели
-            
+            filtered_data['name_id'] = plan_id
             plans_to_create.append(Plan(**filtered_data))
-        # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
         
         session.add_all(plans_to_create)
-        await session.commit()
+        await session.commit() # Этот commit работает внутри транзакции
+
         yield session
+
+    finally:
+        # Блок finally гарантирует, что ресурсы будут освобождены,
+        # даже если тест упадет с ошибкой.
+        await session.close()
+        # Откатываем транзакцию, чтобы очистить БД для следующего теста
+        await trans.rollback()
+        # Закрываем соединение
+        await connection.close()
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -100,9 +117,11 @@ def test_app(db_engine: AsyncEngine, db_session: AsyncSession, mock_arq_pool: As
 
     app.add_middleware(SQLAdminTestSessionMiddleware)
 
-
-    def override_get_db():
+    # ▼▼▼ ОБНОВЛЕННЫЙ OVERRIDE ▼▼▼
+    # Этот override теперь асинхронный генератор, как и оригинальная зависимость.
+    async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
         yield db_session
+
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_arq_pool] = lambda: mock_arq_pool
     
@@ -150,3 +169,54 @@ async def mock_emitter(mocker) -> RedisEventEmitter:
     emitter.send_task_status_update = mocker.AsyncMock()
     emitter.send_system_notification = mocker.AsyncMock()
     return emitter
+
+@pytest.fixture(scope="function")
+def get_auth_headers_for():
+    """Фикстура-фабрика для создания auth-заголовков для конкретного пользователя."""
+    def _get_headers(user: User) -> dict[str, str]:
+        token_data = {"sub": str(user.id), "profile_id": str(user.id)}
+        access_token = create_access_token(data=token_data)
+        return {"Authorization": f"Bearer {access_token}"}
+    return _get_headers
+
+@pytest_asyncio.fixture(scope="function")
+async def manager_user(db_session: AsyncSession) -> User:
+    """Создает пользователя с тарифом 'Agency', который может быть менеджером команды."""
+    agency_plan = (await db_session.execute(select(Plan).where(Plan.name_id == PlanName.AGENCY.name))).scalar_one()
+    user_data = { "vk_id": 1111, "encrypted_vk_token": encrypt_data("manager_token"), "plan_id": agency_plan.id }
+    user = User(**user_data, **{k: v for k, v in agency_plan.limits.items() if hasattr(User, k)})
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+    return user
+
+@pytest_asyncio.fixture(scope="function")
+async def team_member_user(db_session: AsyncSession) -> User:
+    """Создает обычного пользователя, который будет членом команды."""
+    base_plan = (await db_session.execute(select(Plan).where(Plan.name_id == PlanName.BASE.name))).scalar_one()
+    user_data = { "vk_id": 2222, "encrypted_vk_token": encrypt_data("member_token"), "plan_id": base_plan.id }
+    user = User(**user_data, **{k: v for k, v in base_plan.limits.items() if hasattr(User, k)})
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+    return user
+
+@pytest_asyncio.fixture(scope="function")
+async def managed_profile_user(db_session: AsyncSession) -> User:
+    """Создает пользователя, профилем которого будут управлять."""
+    pro_plan = (await db_session.execute(select(Plan).where(Plan.name_id == PlanName.PRO.name))).scalar_one()
+    user_data = { "vk_id": 3333, "encrypted_vk_token": encrypt_data("managed_token"), "plan_id": pro_plan.id }
+    user = User(**user_data, **{k: v for k, v in pro_plan.limits.items() if hasattr(User, k)})
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+    return user
+
+@pytest.fixture(scope="function")
+def client(test_app: FastAPI) -> Generator[TestClient, None, None]:
+    """
+    Создает синхронный тестовый клиент для API.
+    Необходим для тестирования WebSocket.
+    """
+    with TestClient(test_app) as c:
+        yield c

@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 from app.db.models import User, DailyStats, FilterPreset
 from app.core.enums import PlanName, FeatureKey
 from app.db.models.user import ManagedProfile
+from app.db.models.payment import Plan
 
 # Все тесты в этом файле должны использовать anyio
 pytestmark = pytest.mark.anyio
@@ -111,10 +112,11 @@ async def test_update_and_get_analytics_settings(
     Тест на успешное обновление и последующее получение
     пользовательских настроек для аналитики.
     """
-    # Arrange: Данные для обновления
+    # ▼▼▼ ГЛАВНОЕ ИСПРАВЛЕНИЕ ЗДЕСЬ ▼▼▼
+    # Arrange: Данные для обновления. Используем ключи из alias Pydantic-модели.
     settings_data = {
-        "posts_count": 77,
-        "photos_count": 177
+        "analytics_settings_posts_count": 77,
+        "analytics_settings_photos_count": 177
     }
 
     # Act: Обновляем настройки
@@ -127,6 +129,7 @@ async def test_update_and_get_analytics_settings(
     # Assert: Проверяем ответ и состояние БД
     assert response_update.status_code == 200
     updated_settings = response_update.json()
+    # Pydantic-модель ответа отдает ключи без alias (так как response_model_by_alias=False)
     assert updated_settings["posts_count"] == 77
     assert updated_settings["photos_count"] == 177
 
@@ -177,7 +180,12 @@ async def test_get_managed_profiles_handles_missing_vk_user(
     """
     # Arrange:
     # 1. Создаем менеджера и два управляемых профиля в нашей БД.
-    another_managed_user = User(vk_id=333, encrypted_vk_token="another", plan="PRO")
+    
+    # ↓↓↓ ИСПРАВЛЕНИЕ ЗДЕСЬ ↓↓↓
+    pro_plan = (await db_session.execute(select(Plan).where(Plan.name_id == PlanName.PRO.name))).scalar_one()
+    another_managed_user = User(vk_id=333, encrypted_vk_token="another", plan_id=pro_plan.id)
+    # ↑↑↑ КОНЕЦ ИСПРАВЛЕНИЯ ↑↑↑
+
     db_session.add(another_managed_user)
     await db_session.flush()
 

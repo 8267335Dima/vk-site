@@ -2,9 +2,11 @@
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
+# --- ИЗМЕНЕНИЕ: Добавляем импорт Plan ---
 from sqlalchemy import select, func
 
-from app.db.models import User, Proxy
+# --- ИЗМЕНЕНИЕ: Добавляем импорт Plan и PlanName ---
+from app.db.models import User, Proxy, Plan
 from app.core.enums import PlanName
 from app.core.security import decrypt_data
 from datetime import datetime, UTC
@@ -50,10 +52,12 @@ async def test_get_and_delete_proxy(
     )
     db_session.add(new_proxy)
     await db_session.flush()
-    # --- НАЧАЛО ИЗМЕНЕНИЯ ---
-    # Обновляем объект test_user, чтобы он "увидел" новый прокси
-    await db_session.refresh(test_user)
-    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+    
+    # --- НАЧАЛО ИСПРАВЛЕНИЯ (ОШИБКА MissingGreenlet) ---
+    # Обновляем объект test_user, чтобы он "увидел" новый прокси.
+    # Это ключевой шаг для избежания ошибок ленивой загрузки.
+    await db_session.refresh(test_user, attribute_names=['proxies'])
+    # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
 
     mocker.patch("app.api.endpoints.proxies.decrypt_data", return_value="http://user:pass@1.2.3.4:8000")
 
@@ -78,9 +82,15 @@ async def test_proxy_access_denied_for_base_plan(
     """
     Тест: доступ к управлению прокси должен быть запрещен для базового тарифа.
     """
-    test_user.plan = PlanName.BASE.name
-    await db_session.merge(test_user)
-    await db_session.flush()
+    # --- НАЧАЛО ИСПРАВЛЕНИЯ (ОШИБКА AttributeError) ---
+    # 1. Находим в БД объект базового тарифа
+    base_plan = (await db_session.execute(select(Plan).where(Plan.name_id == PlanName.BASE.name))).scalar_one()
+    # 2. Присваиваем ID этого тарифа в поле-внешний ключ
+    test_user.plan_id = base_plan.id
+    await db_session.commit()
+    # 3. Обновляем объект, чтобы подтянулась новая связь
+    await db_session.refresh(test_user, ['plan'])
+    # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
 
     response = await async_client.post(
         "/api/v1/proxies", headers=auth_headers, json={"proxy_url": "http://some.proxy"}

@@ -4,8 +4,8 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload # <-- ИСПРАВЛЕНИЕ: Импортируем selectinload
-
-from app.db.models import User, Scenario, ScenarioStep
+from app.core.enums import PlanName
+from app.db.models import User, Scenario, ScenarioStep, Plan
 
 pytestmark = pytest.mark.anyio
 
@@ -117,7 +117,14 @@ async def test_get_another_user_scenario_not_found(
     Тест на проверку прав: пользователь не может получить доступ к сценарию другого пользователя.
     """
     # Arrange: Создаем другого пользователя и его сценарий
-    other_user = User(vk_id=999, encrypted_vk_token="token", plan="PRO")
+    
+    # --- НАЧАЛО ИСПРАВЛЕНИЯ ---
+    # 1. Получаем объект PRO-плана из БД
+    pro_plan = (await db_session.execute(select(Plan).where(Plan.name_id == PlanName.PRO.name))).scalar_one()
+    # 2. Создаем пользователя, используя plan_id
+    other_user = User(vk_id=999, encrypted_vk_token="token", plan_id=pro_plan.id)
+    # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+
     db_session.add(other_user)
     await db_session.flush()
     other_scenario = Scenario(user_id=other_user.id, name="Чужой сценарий", schedule="* * * * *")

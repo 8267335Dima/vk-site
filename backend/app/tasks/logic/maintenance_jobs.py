@@ -10,6 +10,7 @@ from app.db.models import TaskHistory, User, Automation, Notification
 from app.core.plans import get_limits_for_plan
 from app.core.enums import PlanName
 from app.core.constants import CronSettings
+from app.db.models.payment import Plan
 
 
 log = structlog.get_logger(__name__)
@@ -47,12 +48,22 @@ async def _clear_old_task_history_async():
         if total_deleted > 0:
             log.info("maintenance.task_history_cleaned", count=total_deleted)
 
-async def _check_expired_plans_async(session_for_test: AsyncSession | None = None):
+async def _check_expired_plans_async(session: AsyncSession | None = None):
     """Проверяет и деактивирует истекшие тарифные планы пользователей."""
-    async with get_session(session_for_test) as session:
+    async with get_session(session) as db_session: # Используем db_session внутри
         now = datetime.datetime.now(datetime.UTC)
-        stmt = select(User).where(User.plan != 'Expired', User.plan_expires_at != None, User.plan_expires_at < now)
-        expired_users = (await session.execute(stmt)).scalars().all()
+
+        # --- ИСПРАВЛЕНИЕ 1: Получаем ID истекшего плана один раз ---
+        expired_plan_stmt = select(Plan.id).where(Plan.name_id == PlanName.EXPIRED.name)
+        expired_plan_id = (await db_session.execute(expired_plan_stmt)).scalar_one()
+
+        # --- ИСПРАВЛЕНИЕ 2: Сравниваем plan_id, а не объект plan ---
+        stmt = select(User).where(
+            User.plan_id != expired_plan_id,
+            User.plan_expires_at != None,
+            User.plan_expires_at < now
+        )
+        expired_users = (await db_session.execute(stmt)).scalars().all()
 
         if not expired_users:
             return
@@ -61,17 +72,29 @@ async def _check_expired_plans_async(session_for_test: AsyncSession | None = Non
         expired_plan_limits = get_limits_for_plan(PlanName.EXPIRED)
         user_ids_to_deactivate = [user.id for user in expired_users]
 
-        notifications = [Notification(user_id=user.id, message=f"Срок действия тарифа '{user.plan}' истек.", level="error") for user in expired_users]
-        session.add_all(notifications)
+        notifications = [
+            Notification(
+                user_id=user.id,
+                message=f"Срок действия тарифа '{user.plan.display_name if user.plan else 'Unknown'}' истек.",
+                level="error"
+            ) for user in expired_users
+        ]
+        db_session.add_all(notifications)
 
-        await session.execute(update(Automation).where(Automation.user_id.in_(user_ids_to_deactivate)).values(is_active=False))
-        
-        await session.execute(update(User).where(User.id.in_(user_ids_to_deactivate)).values(
-            plan=PlanName.EXPIRED.name,
-            **{k: v for k, v in expired_plan_limits.items() if hasattr(User, k)}
-        ))
-        
-        if not session_for_test:
-            await session.commit()
-        else:
-            await session.flush()
+        await db_session.execute(
+            update(Automation).where(Automation.user_id.in_(user_ids_to_deactivate)).values(is_active=False)
+        )
+
+        # --- ИСПРАВЛЕНИЕ 3: Обновляем plan_id, а не plan ---
+        await db_session.execute(
+            update(User).where(User.id.in_(user_ids_to_deactivate)).values(
+                plan_id=expired_plan_id,
+                **{k: v for k, v in expired_plan_limits.items() if hasattr(User, k)}
+            )
+        )
+
+        # ▼▼▼ ГЛАВНОЕ ИСПРАВЛЕНИЕ ЗДЕСЬ ▼▼▼
+        if not session: # Если сессия не была передана (production), то коммитим
+            await db_session.commit()
+        else: # Если сессия была передана (тесты), делаем flush
+            await db_session.flush()

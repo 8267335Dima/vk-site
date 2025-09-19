@@ -8,6 +8,12 @@ from datetime import date, timedelta
 from app.db.models import User, ProfileMetric, FriendRequestLog, PostActivityHeatmap
 from app.core.enums import FriendRequestStatus
 
+# Инициализируем кеш для тестов, чтобы избежать ошибки AssertionError
+from fastapi_cache import FastAPICache
+from fastapi_cache.backends.inmemory import InMemoryBackend
+FastAPICache.init(InMemoryBackend())
+
+
 pytestmark = pytest.mark.anyio
 
 

@@ -31,8 +31,10 @@ class ManagedProfileRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 class AnalyticsSettingsUpdate(BaseModel):
-    posts_count: int = Field(100, ge=10, le=500, description="Количество недавних постов для анализа лайков.")
-    photos_count: int = Field(200, ge=10, le=1000, description="Количество недавних фото для анализа лайков.")
+    posts_count: int = Field(..., ge=10, le=500, description="Количество недавних постов для анализа лайков.", alias="analytics_settings_posts_count")
+    photos_count: int = Field(..., ge=10, le=1000, description="Количество недавних фото для анализа лайков.", alias="analytics_settings_photos_count")
 
 class AnalyticsSettingsRead(AnalyticsSettingsUpdate):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(
+        from_attributes=True
+    )
