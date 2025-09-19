@@ -1,3 +1,5 @@
+# backend/app/db/models/user.py
+
 from datetime import datetime, UTC
 from sqlalchemy import (
     Column, Integer, String, DateTime, ForeignKey, BigInteger,
@@ -33,20 +35,23 @@ class User(Base):
     analytics_settings_photos_count = Column(Integer, nullable=False, server_default=text('200'))
     
     plan = relationship("Plan", back_populates="users", lazy="joined")
-    login_history = relationship("LoginHistory", back_populates="user", cascade="all, delete-orphan", order_by="desc(LoginHistory.timestamp)")
-    proxies = relationship("Proxy", back_populates="user", cascade="all, delete-orphan", lazy="select")
-    task_history = relationship("TaskHistory", back_populates="user", cascade="all, delete-orphan")
-    daily_stats = relationship("DailyStats", back_populates="user", cascade="all, delete-orphan")
+    
+    # --- ОТНОШЕНИЯ (RELATIONSHIPS) ---
+    action_logs = relationship("ActionLog", back_populates="user", cascade="all, delete-orphan") # <--- ДОБАВЛЕНА ЭТА СТРОКА
     automations = relationship("Automation", back_populates="user", cascade="all, delete-orphan")
-    notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
-    scenarios = relationship("Scenario", back_populates="user", cascade="all, delete-orphan")
-    profile_metrics = relationship("ProfileMetric", back_populates="user", cascade="all, delete-orphan")
+    daily_stats = relationship("DailyStats", back_populates="user", cascade="all, delete-orphan")
     filter_presets = relationship("FilterPreset", back_populates="user", cascade="all, delete-orphan")
     friend_requests = relationship("FriendRequestLog", back_populates="user", cascade="all, delete-orphan")
     heatmap = relationship("PostActivityHeatmap", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    login_history = relationship("LoginHistory", back_populates="user", cascade="all, delete-orphan", order_by="desc(LoginHistory.timestamp)")
     managed_profiles = relationship("ManagedProfile", foreign_keys="[ManagedProfile.manager_user_id]", back_populates="manager", cascade="all, delete-orphan")
-    scheduled_posts = relationship("ScheduledPost", back_populates="user", cascade="all, delete-orphan", foreign_keys="[ScheduledPost.user_id]")
+    notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
     owned_team = relationship("Team", back_populates="owner", uselist=False, cascade="all, delete-orphan")
+    profile_metrics = relationship("ProfileMetric", back_populates="user", cascade="all, delete-orphan")
+    proxies = relationship("Proxy", back_populates="user", cascade="all, delete-orphan", lazy="select")
+    scenarios = relationship("Scenario", back_populates="user", cascade="all, delete-orphan")
+    scheduled_posts = relationship("ScheduledPost", back_populates="user", cascade="all, delete-orphan", foreign_keys="[ScheduledPost.user_id]")
+    task_history = relationship("TaskHistory", back_populates="user", cascade="all, delete-orphan")
     team_membership = relationship("TeamMember", back_populates="user", uselist=False, cascade="all, delete-orphan")
 
 

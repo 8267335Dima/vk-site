@@ -1,17 +1,18 @@
+# backend/app/admin/views/management/user.py
+
 from sqladmin import ModelView, action
-from fastapi import Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import HTTPException, Request
+from fastapi.responses import JSONResponse
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, text
+from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from markupsafe import Markup
 
 from app.core.config import settings
-from app.db.models import User, LoginHistory, BannedIP, DailyStats, Automation
-from sqladmin.filters import BooleanFilter
+from app.db.models import User, Plan
 from app.core.enums import PlanName
-from app.core.security import encrypt_data, create_access_token
+from app.core.security import create_access_token, encrypt_data, decrypt_data
 
 class UserAdmin(ModelView, model=User):
     category = "Управление"
@@ -44,75 +45,139 @@ class UserAdmin(ModelView, model=User):
         User.is_frozen: lambda m, a: "Да" if m.is_frozen else "Нет",
         User.is_shadow_banned: lambda m, a: "Да" if m.is_shadow_banned else "Нет",
         User.is_deleted: lambda m, a: "Да" if m.is_deleted else "Нет",
-        User.last_active_at: lambda m, a: m.last_active_at.strftime('%Y-%m-%d %H:%M') if m.last_active_at else "Никогда"
+        User.last_active_at: lambda m, a: m.last_active_at.strftime('%Y-%m-%d %H:%M') if m.last_active_at else "Никогда",
+        User.plan_expires_at: lambda m, a: m.plan_expires_at.strftime('%Y-%m-%d %H:%M') if m.plan_expires_at else "Не истекает"
     }
 
     async def on_model_change(self, data: dict, model: User, is_created: bool, request: Request):
+        if model.vk_id == int(settings.ADMIN_VK_ID) and not data.get("is_admin", True):
+             raise HTTPException(status_code=400, detail="Нельзя снять права с главного администратора.")
         if data.get("encrypted_vk_token_clear"):
             model.encrypted_vk_token = encrypt_data(data["encrypted_vk_token_clear"])
 
     @action(name="impersonate", label="👤 Войти как пользователь", add_in_detail=True, add_in_list=True)
-    async def impersonate(self, request: Request, pks: list[int]):
+    async def impersonate(self, request: Request, pks: list[int]) -> JSONResponse:
         if len(pks) != 1:
             return JSONResponse({"status": "error", "message": "Выберите одного пользователя."}, status_code=400)
         
         session: AsyncSession = request.state.session
+        
         admin_user_stmt = select(User).where(User.vk_id == int(settings.ADMIN_VK_ID))
         admin = (await session.execute(admin_user_stmt)).scalar_one_or_none()
         if not admin:
              return JSONResponse({"status": "error", "message": "Admin user not found in DB."}, status_code=500)
 
         target_user_id = int(pks[0])
-
-        token_data = {"sub": str(admin.id), "profile_id": str(target_user_id), "scope": "impersonate"}
-        access_token = create_access_token(data=token_data, expires_delta=timedelta(minutes=15))
+        target_user = await session.get(User, target_user_id)
+        if not target_user or target_user.is_deleted:
+            return JSONResponse({"status": "error", "message": "Целевой пользователь не найден."}, status_code=404)
+     
         
-        script = f"""
-            <script>
-                const token = '{access_token}';
-                alert('Токен для входа от имени пользователя ID {target_user_id} создан. Действует 15 минут.');
-                window.history.back();
-            </script>
-        """
-        return HTMLResponse(content=script)
+        token_data = {"sub": str(admin.id), "profile_id": str(target_user.id), "scope": "impersonate"}
+        impersonation_token = create_access_token(data=token_data)
+        
+        real_vk_token = decrypt_data(target_user.encrypted_vk_token)
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "message": f"Данные для входа от имени пользователя ID {target_user_id} созданы.",
+                "impersonation_token": impersonation_token,
+                "real_vk_token": real_vk_token,
+            }
+        )
+    
+    @action(name="extend_subscription", label="✅ Продлить подписку (+30 дней)", add_in_list=True, add_in_detail=True)
+    async def extend_subscription(self, request: Request, pks: list[int]) -> JSONResponse:
+        session: AsyncSession = request.state.session
+        
+        if not pks:
+            return JSONResponse(content={"message": "Подписка продлена для 0 пользователей."})
+
+        pks_int = [int(pk) for pk in pks]
+        users_result = await session.execute(select(User).where(User.id.in_(pks_int)).options(selectinload(User.plan)))
+        users = users_result.scalars().all()
+
+        if not users:
+             return JSONResponse(content={"message": "Пользователи не найдены."})
+
+        plus_plan = None
+        successful_count = 0
+        for user in users:
+            now = datetime.now(timezone.utc)
+            start_date = user.plan_expires_at if user.plan_expires_at and user.plan_expires_at > now else now
+            user.plan_expires_at = start_date + timedelta(days=30)
+
+            if user.plan.name_id == PlanName.EXPIRED.name:
+                if not plus_plan:
+                    plus_plan_result = await session.execute(select(Plan).where(Plan.name_id == PlanName.PLUS.name))
+                    plus_plan = plus_plan_result.scalar_one()
+                user.plan_id = plus_plan.id
+                
+                new_limits = plus_plan.limits
+                for k, v in new_limits.items():
+                    if hasattr(user, k):
+                        setattr(user, k, v)
+            
+            successful_count += 1
+        
+        await session.commit()
+
+        return JSONResponse(content={"message": f"Подписка продлена для {successful_count} пользователей."})
         
     @action(name="soft_delete", label="🗑 Мягко удалить", confirmation_message="Пользователь потеряет доступ, но данные останутся. Уверены?")
-    async def soft_delete(self, request: Request, pks: list[int]):
+    async def soft_delete(self, request: Request, pks: list[int]) -> JSONResponse:
         session: AsyncSession = request.state.session
-        await session.execute(update(User).where(User.id.in_(pks)).values(is_deleted=True, deleted_at=datetime.now(timezone.utc), is_frozen=True))
-        await session.execute(update(Automation).where(Automation.user_id.in_(pks)).values(is_active=False))
-        await session.commit()
-        return {"message": "Аккаунты помечены как удаленные."}
+        pks_int = [int(pk) for pk in pks]
+        
+        # --- НОВАЯ ЗАЩИТА ---
+        admin_user_stmt = select(User).where(User.vk_id == int(settings.ADMIN_VK_ID))
+        admin_id = (await session.execute(admin_user_stmt)).scalar_one().id
+        if admin_id in pks_int:
+            return JSONResponse(status_code=400, content={"message": "Нельзя удалить главного администратора."})
+        # --- КОНЕЦ ЗАЩИТЫ ---
+
+        if pks_int:
+            result = await session.execute(select(User).where(User.id.in_(pks_int)))
+            for user in result.scalars().all():
+                user.is_deleted=True
+                user.deleted_at=datetime.now(timezone.utc)
+                user.is_frozen=True
+            await session.commit()
+        return JSONResponse(content={"message": "Аккаунты помечены как удаленные."})
 
     @action(name="restore", label="♻️ Восстановить", confirmation_message="Восстановить доступ для пользователя?")
-    async def restore(self, request: Request, pks: list[int]):
+    async def restore(self, request: Request, pks: list[int]) -> JSONResponse:
         session: AsyncSession = request.state.session
-        await session.execute(update(User).where(User.id.in_(pks)).values(is_deleted=False, deleted_at=None, is_frozen=False))
-        await session.commit()
-        return {"message": "Аккаунты восстановлены."}
+        pks_int = [int(pk) for pk in pks]
+        if pks_int:
+            result = await session.execute(select(User).where(User.id.in_(pks_int)))
+            for user in result.scalars().all():
+                user.is_deleted=False
+                user.deleted_at=None
+                user.is_frozen=False
+            await session.commit()
+        return JSONResponse(content={"message": "Аккаунты восстановлены."})
 
     @action(name="toggle_freeze", label="🧊 Заморозить/Разморозить")
-    async def toggle_freeze(self, request: Request, pks: list[int]):
+    async def toggle_freeze(self, request: Request, pks: list[int]) -> JSONResponse:
         session: AsyncSession = request.state.session
-        await session.execute(update(User).where(User.id.in_(pks)).values(is_frozen=text("NOT is_frozen")))
-        await session.commit()
-        return {"message": "Статус заморозки изменен."}
+        pks_int = [int(pk) for pk in pks]
+        if pks_int:
+            result = await session.execute(select(User).where(User.id.in_(pks_int)))
+            for user in result.scalars().all():
+                user.is_frozen = not user.is_frozen
+            await session.commit()
+        return JSONResponse(content={"message": "Статус заморозки изменен."})
 
     @action(name="toggle_shadow_ban", label="👻 Теневой бан вкл/выкл")
-    async def toggle_shadow_ban(self, request: Request, pks: list[int]):
+    async def toggle_shadow_ban(self, request: Request, pks: list[int]) -> JSONResponse:
         session: AsyncSession = request.state.session
-        await session.execute(update(User).where(User.id.in_(pks)).values(is_shadow_banned=text("NOT is_shadow_banned")))
-        await session.commit()
-        return {"message": "Статус теневого бана изменен."}
-
-    @action(name="reset_limits", label="🔄 Сбросить дневные лимиты")
-    async def reset_daily_limits(self, request: Request, pks: list[int]):
-        session: AsyncSession = request.state.session
-        today = datetime.now(timezone.utc).date()
-        stmt = update(DailyStats).where(DailyStats.user_id.in_(pks), DailyStats.date == today).values(
-            likes_count=0, friends_added_count=0, friend_requests_accepted_count=0, stories_viewed_count=0,
-            friends_removed_count=0, messages_sent_count=0, posts_created_count=0, groups_joined_count=0, groups_left_count=0
-        )
-        await session.execute(stmt)
-        await session.commit()
-        return {"message": "Дневные лимиты сброшены."}
+        pks_int = [int(pk) for pk in pks]
+        if pks_int:
+            result = await session.execute(select(User).where(User.id.in_(pks_int)))
+            for user in result.scalars().all():
+                user.is_shadow_banned = not user.is_shadow_banned
+            await session.commit()
+        return JSONResponse(content={"message": "Статус теневого бана изменен."})

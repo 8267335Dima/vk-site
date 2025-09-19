@@ -1,41 +1,34 @@
-# tests/admin/test_admin_unit.py
-
+import json
 import pytest
 from unittest.mock import MagicMock, AsyncMock
 from datetime import datetime, timedelta, timezone
 
-# Обновленные импорты:
 from app.admin.views.management.automation import AutomationAdmin
 from app.admin.views.monitoring.action_log import ActionLogAdmin
 from app.admin.views.monitoring.daily_stats import DailyStatsAdmin
-from app.admin.views.support.ticket import SupportTicketAdmin
 from app.admin.views.management.user import UserAdmin
-
-from app.db.models import User
+from app.db.models import User, Plan
 from app.core.enums import PlanName, AutomationType
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 ASYNC_TEST = pytest.mark.asyncio
 
 
 class TestAdminFormatters:
-    """Тестируем ВСЕ кастомные форматтеры для колонок."""
-
     def test_automation_formatters(self):
-        # User Formatter
         user_formatter = AutomationAdmin.column_formatters["user"]
         assert user_formatter(MagicMock(user=MagicMock(vk_id=123)), None) == "User 123"
         assert user_formatter(MagicMock(user=None), None) == "Unknown"
         
-        # Type Formatter
         type_formatter = AutomationAdmin.column_formatters[AutomationAdmin.model.automation_type]
         assert type_formatter(MagicMock(automation_type=AutomationType.LIKE_FEED), None) == "like_feed"
         assert type_formatter(MagicMock(automation_type="CUSTOM"), None) == "CUSTOM"
         assert type_formatter(MagicMock(automation_type=None), None) == "Не указан"
         
-        # Active Formatter
         active_formatter = AutomationAdmin.column_formatters[AutomationAdmin.model.is_active]
-        assert active_formatter(MagicMock(is_active=True), None) == "Active"
-        assert active_formatter(MagicMock(is_active=False), None) == "Inactive"
+        assert active_formatter(MagicMock(is_active=True), None) == "✅"
+        assert active_formatter(MagicMock(is_active=False), None) == "❌"
 
     def test_action_log_user_formatter(self):
         formatter = ActionLogAdmin.column_formatters["user"]
@@ -53,34 +46,37 @@ class TestAdminFormatters:
 
 
 class TestUserAdminActions:
-    """Тестируем кастомные действия в UserAdmin."""
 
     @ASYNC_TEST
-    async def test_extend_subscription_for_expired_user(self, mocker):
-        mocker.patch("app.admin.auth.AdminAuth.authenticate", return_value=True)
-        mock_session = AsyncMock()
-        mock_user = MagicMock(spec=User, plan=PlanName.EXPIRED.name, plan_expires_at=None)
-        mock_session.get.return_value = mock_user
-        mock_request = MagicMock(state=MagicMock(session=mock_session))
+    async def test_extend_subscription_for_expired_user(self, db_session: AsyncSession):
+        expired_plan = (await db_session.execute(select(Plan).where(Plan.name_id == PlanName.EXPIRED.name))).scalar_one()
+        plus_plan = (await db_session.execute(select(Plan).where(Plan.name_id == PlanName.PLUS.name))).scalar_one()
+
+        test_user = User(vk_id=98765, encrypted_vk_token="token", plan_id=expired_plan.id, plan_expires_at=datetime.now(timezone.utc) - timedelta(days=10))
+        db_session.add(test_user)
+        await db_session.commit()
+        await db_session.refresh(test_user, ["plan"])
+
+        mock_request = MagicMock(state=MagicMock(session=db_session))
         admin_view = UserAdmin()
-        mocker.patch('app.admin.views.user.get_limits_for_plan', return_value={'daily_likes_limit': 100})
+        
+        await admin_view.extend_subscription.__wrapped__(admin_view, mock_request, pks=[test_user.id])
 
-        await admin_view.extend_subscription(mock_request, pks=[1])
-
-        assert mock_user.plan_expires_at > datetime.now(timezone.utc) + timedelta(days=29)
-        assert mock_user.plan == PlanName.PLUS.name
-        assert mock_user.daily_likes_limit == 100
-        mock_session.commit.assert_awaited_once()
+        await db_session.refresh(test_user)
+        assert test_user.plan_expires_at > datetime.now(timezone.utc) + timedelta(days=29)
+        assert test_user.plan_id == plus_plan.id
 
     @ASYNC_TEST
-    async def test_extend_subscription_with_empty_pks_list(self, mocker):
-        mocker.patch("app.admin.auth.AdminAuth.authenticate", return_value=True)
+    async def test_extend_subscription_with_empty_pks_list(self):
         mock_session = AsyncMock()
         mock_request = MagicMock(state=MagicMock(session=mock_session))
         admin_view = UserAdmin()
 
-        response = await admin_view.extend_subscription(mock_request, pks=[])
+        response = await admin_view.extend_subscription.__wrapped__(admin_view, mock_request, pks=[])
 
         mock_session.get.assert_not_called()
-        mock_session.commit.assert_awaited_once()
-        assert response["message"] == "Подписка продлена для 0 пользователей."
+        mock_session.commit.assert_not_awaited() 
+        
+        # Исправленная строка:
+        response_data = json.loads(response.body)
+        assert response_data["message"] == "Подписка продлена для 0 пользователей."

@@ -2,18 +2,13 @@
 
 # --- .env ---
 
-# --- PostgreSQL Database ---
 POSTGRES_USER=smm_user
 POSTGRES_PASSWORD=my_strong_password_123
-POSTGRES_SERVER=localhost  
+POSTGRES_SERVER=localhost
 POSTGRES_PORT=5432
 POSTGRES_DB=smm_combine
-
-# --- Redis ---
-REDIS_HOST=localhost 
+REDIS_HOST=localhost
 REDIS_PORT=6379
-
-# --- Остальные переменные без изменений ---
 SECRET_KEY=a3611f67fd335a325455c6d2f1b4258867d826bf354a46bd731ea75c81870bdc
 ENCRYPTION_KEY=LLn9-hFySo5xa8Xm9-W0-9Cod_uG0g1adBk3ZRmZo44=
 ALGORITHM=HS256
@@ -29,11 +24,7 @@ ADMIN_PASSWORD=super_secret_password_change_me
 ADMIN_IP_WHITELIST=127.0.0.1
 ALLOWED_ORIGINS=http://localhost,http://localhost:3000,http://127.0.0.1:3000
 
-
 # --- backend/app\core\configs\automations.yml ---
-
-# Единый источник правды обо всех возможных действиях (задачах),
-# которые пользователь может запустить. Используется для построения UI.
 
 - id: "like_feed"
   name: "Лайки в ленте новостей"
@@ -43,7 +34,6 @@ ALLOWED_ORIGINS=http://localhost,http://localhost:3000,http://127.0.0.1:3000
   modal_count_label: "Количество лайков"
   default_count: 50
   group: "standard"
-
 - id: "add_recommended"
   name: "Добавление друзей"
   description: "Отправляет заявки в друзья пользователям из списка 'Возможные друзья', повышая охваты."
@@ -52,14 +42,12 @@ ALLOWED_ORIGINS=http://localhost,http://localhost:3000,http://127.0.0.1:3000
   modal_count_label: "Количество заявок"
   default_count: 20
   group: "standard"
-
 - id: "accept_friends"
   name: "Прием заявок в друзья"
   description: "Автоматически принимает входящие заявки в друзья на основе заданных критериев."
   has_filters: true
   has_count_slider: false
   group: "standard"
-
 - id: "remove_friends"
   name: "Очистка списка друзей"
   description: "Удаляет друзей по критериям: 'собачки', неактивность, пол. Поддерживает актуальность списка контактов."
@@ -68,21 +56,18 @@ ALLOWED_ORIGINS=http://localhost,http://localhost:3000,http://127.0.0.1:3000
   modal_count_label: "Максимум удалений"
   default_count: 100
   group: "standard"
-
 - id: "view_stories"
   name: "Просмотр историй"
   description: "Автоматически просматривает все доступные истории, сигнализируя об активности вашего аккаунта."
   has_filters: false
   has_count_slider: false
   group: "standard"
-
 - id: "birthday_congratulation"
   name: "Поздравления с Днем Рождения"
   description: "Автоматически отправляет персональные поздравления вашим друзьям в их день рождения."
-  has_filters: false # Фильтры здесь не нужны, т.к. логика специфична
+  has_filters: false
   has_count_slider: false
   group: "standard"
-
 - id: "mass_messaging"
   name: "Массовая рассылка"
   description: "Отправляет заданное сообщение вашим друзьям по гибким фильтрам. Идеально для информирования."
@@ -91,7 +76,6 @@ ALLOWED_ORIGINS=http://localhost,http://localhost:3000,http://127.0.0.1:3000
   modal_count_label: "Количество сообщений"
   default_count: 50
   group: "standard"
-
 - id: "leave_groups"
   name: "Отписка от сообществ"
   description: "Автоматически покидает сообщества по заданным критериям (ключевые слова в названии)."
@@ -100,7 +84,6 @@ ALLOWED_ORIGINS=http://localhost,http://localhost:3000,http://127.0.0.1:3000
   modal_count_label: "Максимум отписок"
   default_count: 50
   group: "standard"
-
 - id: "join_groups"
   name: "Вступление в группы"
   description: "Вступает в группы по ключевым словам для повышения информированности."
@@ -109,7 +92,6 @@ ALLOWED_ORIGINS=http://localhost,http://localhost:3000,http://127.0.0.1:3000
   modal_count_label: "Максимум вступлений"
   default_count: 20
   group: "standard"
-
 - id: "eternal_online"
   name: "Статус 'Онлайн'"
   description: "Поддерживает статус 'онлайн' для вашего аккаунта по гибкому расписанию с имитацией человеческого поведения."
@@ -131,9 +113,6 @@ ALLOWED_ORIGINS=http://localhost,http://localhost:3000,http://127.0.0.1:3000
 
 # --- backend/app\core\configs\plans.yml ---
 
-# Единый источник правды о тарифных планах.
-# Ключи: BASE, PLUS, PRO - соответствуют PlanName Enum в коде.
-
 BASE:
   display_name: "Базовый"
   description: "Начальный тариф для ознакомления с базовыми возможностями."
@@ -154,7 +133,6 @@ BASE:
     - "mass_messaging"
     - "leave_groups"
     - "join_groups"
-
 PLUS:
   display_name: "Plus"
   description: "Расширенные возможности и увеличенные лимиты для активного продвижения."
@@ -195,7 +173,6 @@ PLUS:
     - "automations_center"
     - "post_scheduler"
     - "profile_growth_analytics"
-
 PRO:
   display_name: "PRO"
   description: "Максимальные лимиты и все функции для профессионалов и SMM-специалистов."
@@ -221,7 +198,6 @@ PRO:
     daily_leave_groups_limit: 200
     max_concurrent_tasks: 5
   available_features: "*"
-
 AGENCY:
   display_name: "Agency"
   description: "Для агентств и команд. Управление несколькими аккаунтами."
@@ -248,7 +224,6 @@ AGENCY:
     max_profiles: 5
     max_team_members: 5
   available_features: "*"
-
 EXPIRED:
   display_name: "Expired"
   description: "Срок действия вашего тарифа истек."

@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from unittest.mock import MagicMock
 from fastapi import HTTPException
 from jose import jwt
+import json
 
 from app.admin.views.management.user import UserAdmin
 from app.api.endpoints.support import reply_to_ticket
@@ -10,6 +11,7 @@ from app.db.models import User, SupportTicket, TicketStatus
 from app.core.config import settings
 from app.services.system_service import SystemService
 from app.core.plans import is_feature_available_for_plan
+from app.core.security import decrypt_data
 
 ASYNC_TEST = pytest.mark.asyncio
 
@@ -25,18 +27,23 @@ class TestAdminSuperpowers:
         mock_request = MagicMock(state=MagicMock(session=db_session))
         admin_view = UserAdmin()
         
-        response = await admin_view.impersonate(mock_request, pks=[test_user.id])
+        response = await admin_view.impersonate.__wrapped__(admin_view, mock_request, pks=[test_user.id])
         
         assert response.status_code == 200
-        body = response.body.decode()
-        token_line = next(line for line in body.splitlines() if "const token =" in line)
-        access_token = token_line.split("'")[1]
+        response_data = json.loads(response.body.decode())
+        
+        assert "impersonation_token" in response_data
+        access_token = response_data["impersonation_token"]
 
         payload = jwt.decode(access_token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         
         assert payload['sub'] == str(admin_user.id)
         assert payload['profile_id'] == str(test_user.id)
         assert payload['scope'] == 'impersonate'
+
+        assert "real_vk_token" in response_data
+        decrypted_vk_token = decrypt_data(test_user.encrypted_vk_token)
+        assert response_data["real_vk_token"] == decrypted_vk_token
 
 class TestTicketSystemLimits:
     @ASYNC_TEST

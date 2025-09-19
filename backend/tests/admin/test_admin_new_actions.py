@@ -1,13 +1,12 @@
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 from unittest.mock import MagicMock
-from datetime import datetime, timezone
 
 from app.admin.views.management.user import UserAdmin
 from app.admin.views.system.banned_ip import BannedIPAdmin
 from app.admin.views.support.ticket import SupportTicketAdmin
 from app.admin.views.monitoring.task_history import TaskHistoryAdmin
-from app.db.models import User, BannedIP, SupportTicket, TicketStatus, TaskHistory, Plan
+from app.db.models import User, BannedIP, SupportTicket, TicketStatus, TaskHistory
 
 ASYNC_TEST = pytest.mark.asyncio
 
@@ -19,11 +18,13 @@ class TestNewUserAdminActions:
         admin_view = UserAdmin()
 
         initial_state = test_user.is_frozen
-        await admin_view.toggle_freeze(mock_request, pks=[test_user.id])
+        # Первый вызов
+        await admin_view.toggle_freeze.__wrapped__(admin_view, mock_request, pks=[test_user.id])
         await db_session.refresh(test_user)
         assert test_user.is_frozen is not initial_state
 
-        await admin_view.toggle_freeze(mock_request, pks=[test_user.id])
+        # Второй вызов (здесь было исправление)
+        await admin_view.toggle_freeze.__wrapped__(admin_view, mock_request, pks=[test_user.id])
         await db_session.refresh(test_user)
         assert test_user.is_frozen is initial_state
         
@@ -32,7 +33,7 @@ class TestNewUserAdminActions:
         mock_request = MagicMock(state=MagicMock(session=db_session))
         admin_view = UserAdmin()
 
-        await admin_view.toggle_shadow_ban(mock_request, pks=[test_user.id])
+        await admin_view.toggle_shadow_ban.__wrapped__(admin_view, mock_request, pks=[test_user.id])
         await db_session.refresh(test_user)
         assert test_user.is_shadow_banned is True
 
@@ -47,7 +48,7 @@ class TestNewSystemAdminActions:
         mock_request = MagicMock(state=MagicMock(session=db_session))
         admin_view = BannedIPAdmin()
 
-        await admin_view.unban_ips(mock_request, pks=[ban.id])
+        await admin_view.unban_ips.__wrapped__(admin_view, mock_request, pks=[ban.id])
         
         ban_in_db = await db_session.get(BannedIP, ban.id)
         assert ban_in_db is None
@@ -62,7 +63,7 @@ class TestNewSupportAdminActions:
         mock_request = MagicMock(state=MagicMock(session=db_session))
         admin_view = SupportTicketAdmin()
         
-        await admin_view.reopen_tickets(mock_request, pks=[ticket.id])
+        await admin_view.reopen_tickets.__wrapped__(admin_view, mock_request, pks=[ticket.id])
         
         await db_session.refresh(ticket)
         assert ticket.status == TicketStatus.OPEN
@@ -77,7 +78,7 @@ class TestNewTaskHistoryAdminActions:
         mock_request = MagicMock(state=MagicMock(session=db_session))
         admin_view = TaskHistoryAdmin()
 
-        await admin_view.mark_as_successful(mock_request, pks=[task.id])
+        await admin_view.mark_as_successful.__wrapped__(admin_view, mock_request, pks=[task.id])
         
         await db_session.refresh(task)
         assert task.status == "SUCCESS"
@@ -91,7 +92,7 @@ class TestNewTaskHistoryAdminActions:
         mock_request = MagicMock(state=MagicMock(session=db_session))
         admin_view = TaskHistoryAdmin()
         
-        await admin_view.cancel_manually(mock_request, pks=[task.id])
+        await admin_view.cancel_manually.__wrapped__(admin_view, mock_request, pks=[task.id])
         
         await db_session.refresh(task)
         assert task.status == "CANCELLED"

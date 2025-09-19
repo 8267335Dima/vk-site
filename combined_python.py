@@ -15,8 +15,6 @@ redis_settings = RedisSettings(
 
 # --- backend/app\main.py ---
 
-# backend/app/main.py
-
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException, status
@@ -41,28 +39,18 @@ from app.api.endpoints import (
     auth_router, users_router, proxies_router, tasks_router,
     stats_router, automations_router, billing_router, analytics_router,
     scenarios_router, notifications_router, posts_router, teams_router,
-    websockets_router, support_router, task_history_router
+    websockets_router, support_router, task_history_router, admin_router
 )
 from fastapi_limiter import FastAPILimiter
 
-
-# Логирование конфигурируем один раз при импорте
 configure_logging()
-
 
 async def run_redis_listener(redis_client):
     await redis_listener(redis_client)
 
-
 def create_app(db_engine: AsyncEngine | None = None) -> FastAPI:
-    """
-    Создает и конфигурирует экземпляр приложения FastAPI.
-    Принимает опциональный db_engine для использования в тестах.
-    """
-
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        # --- Код, который выполнится при старте ---
         arq_pool = await create_pool(redis_settings)
         app.state.arq_pool = arq_pool
 
@@ -79,12 +67,10 @@ def create_app(db_engine: AsyncEngine | None = None) -> FastAPI:
         app.state.redis_client = redis_client
         app.state.activity_redis = AsyncRedis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/3")
 
-
         listener_task = asyncio.create_task(run_redis_listener(redis_client))
 
         yield
 
-        # --- Код, который выполнится при остановке ---
         listener_task.cancel()
         try:
             await listener_task
@@ -96,7 +82,6 @@ def create_app(db_engine: AsyncEngine | None = None) -> FastAPI:
         await limiter_redis.aclose()
         await arq_pool.aclose()
 
-    # Создаем объект FastAPI внутри фабрики
     app = FastAPI(
         title="VK SMM Combine API",
         description="API для сервиса автоматизации SMM-задач ВКонтакте.",
@@ -104,7 +89,6 @@ def create_app(db_engine: AsyncEngine | None = None) -> FastAPI:
         lifespan=lifespan,
     )
 
-    # --- Middleware ---
     app.add_middleware(
         SessionMiddleware,
         secret_key=settings.SECRET_KEY
@@ -158,11 +142,9 @@ def create_app(db_engine: AsyncEngine | None = None) -> FastAPI:
             
         return await call_next(request)
 
-    # --- Подключаем админку ---
     engine_to_use = db_engine or main_engine
     init_admin(app, engine_to_use)
 
-    # --- Подключение всех роутеров API ---
     api_prefix = "/api/v1"
     app.include_router(auth_router, prefix=f"{api_prefix}/auth", tags=["Authentication"])
     app.include_router(users_router, prefix=f"{api_prefix}/users", tags=["Users"])
@@ -179,6 +161,7 @@ def create_app(db_engine: AsyncEngine | None = None) -> FastAPI:
     app.include_router(websockets_router, prefix=api_prefix, tags=["WebSockets"])
     app.include_router(tasks_router, prefix=f"{api_prefix}/tasks", tags=["Tasks"])
     app.include_router(task_history_router, prefix=f"{api_prefix}/tasks", tags=["Tasks"])
+    app.include_router(admin_router, prefix=f"{api_prefix}/admin", tags=["Admin"])
 
     return app
 
@@ -239,8 +222,6 @@ class WorkerSettings:
 
 # --- backend/app\admin\auth.py ---
 
-# backend/app/admin/auth.py
-
 from sqladmin.authentication import AuthenticationBackend
 from fastapi import Request
 from sqlalchemy import select
@@ -298,51 +279,87 @@ class AdminAuth(AuthenticationBackend):
 # --- backend/app\admin\__init__.py ---
 
 # backend/app/admin/__init__.py
+
 from sqladmin import Admin
 from app.core.config import settings
 from .auth import AdminAuth
 
 def init_admin(app, engine):
-    from .views.user import UserAdmin
-    from .views.support import SupportTicketAdmin, TicketMessageAdmin
-    from .views.payment import PaymentAdmin
-    from .views.stats import AutomationAdmin, DailyStatsAdmin, ActionLogAdmin, TaskHistoryAdmin
-    from .views.system import GlobalSettingsAdmin, BannedIPAdmin, AdminActions
+    from .views.management.user import UserAdmin
+    from .views.management.payment import PaymentAdmin
+    from .views.management.plan import PlanAdmin
+    from .views.management.automation import AutomationAdmin
+    
+    from .views.monitoring.task_history import TaskHistoryAdmin
+    from .views.monitoring.daily_stats import DailyStatsAdmin
+    from .views.monitoring.action_log import ActionLogAdmin
+
+    from .views.support.ticket import SupportTicketAdmin
+    from .views.support.message import TicketMessageAdmin
+
+    from .views.system.global_settings import GlobalSettingsAdmin
+    from .views.system.banned_ip import BannedIPAdmin
+    from .views.system.admin_actions import AdminActionsView
     
     authentication_backend = AdminAuth(secret_key=settings.SECRET_KEY)
     
     admin = Admin(app, engine, authentication_backend=authentication_backend, title="SMM Combine Admin")
 
-    # Категория "Управление"
+
     admin.add_view(UserAdmin)
     admin.add_view(PaymentAdmin)
+    admin.add_view(PlanAdmin)
     admin.add_view(AutomationAdmin)
-    admin.add_view(TaskHistoryAdmin)
 
-    # Категория "Техподдержка"
+    admin.add_view(TaskHistoryAdmin)
+    admin.add_view(DailyStatsAdmin)
+    admin.add_view(ActionLogAdmin)
+
     admin.add_view(SupportTicketAdmin)
     admin.add_view(TicketMessageAdmin)
 
-    # Категория "Статистика и Логи"
-    admin.add_view(DailyStatsAdmin)
-    admin.add_view(ActionLogAdmin)
-    
-    # Категория "Система"
     admin.add_view(GlobalSettingsAdmin)
     admin.add_view(BannedIPAdmin)
-    admin.add_view(AdminActions)
+    admin.add_view(AdminActionsView)
 
     app.state.admin = admin
 
-# --- backend/app\admin\views\payment.py ---
+# --- backend/app\admin\views\management\automation.py ---
 
-# backend/app/admin/views/payment.py
+from sqladmin import ModelView
+from app.db.models import Automation
+from sqladmin.filters import BooleanFilter
+import enum
+
+class AutomationAdmin(ModelView, model=Automation):
+    category = "Управление"
+    name = "Автоматизация"
+    name_plural = "Автоматизации"
+    icon = "fa-solid fa-robot"
+    can_create = False
+    can_edit = True
+    can_delete = False
+    
+    column_list = [Automation.id, "user", Automation.automation_type, Automation.is_active, Automation.last_run_at]
+    column_joined_list = [Automation.user]
+    column_searchable_list = [Automation.user_id, "user.vk_id"]
+    column_formatters = {
+        "user": lambda m, a: f"User {m.user.vk_id}" if m.user else "Unknown",
+        Automation.automation_type: lambda m, a: m.automation_type.value if isinstance(m.automation_type, enum.Enum) else (m.automation_type or "Не указан"),
+        Automation.is_active: lambda m, a: "✅" if m.is_active else "❌",
+    }
+    column_filters = [BooleanFilter(Automation.is_active)]
+    column_default_sort = ("last_run_at", True)
+
+# --- backend/app\admin\views\management\payment.py ---
+
 from sqladmin import ModelView
 from app.db.models import Payment, PaymentStatus
 from sqladmin.filters import AllUniqueStringValuesFilter
 
 class PaymentAdmin(ModelView, model=Payment):
-    identity = "payment"
+    category = "Управление"
+    name = "Платеж"
     name_plural = "Платежи"
     icon = "fa-solid fa-ruble-sign"
     can_create = False
@@ -358,67 +375,291 @@ class PaymentAdmin(ModelView, model=Payment):
     ]
     
     column_default_sort = ("created_at", True)
+    column_labels = {
+        "plan_name": "Название тарифа"
+    }
 
-# --- backend/app\admin\views\stats.py ---
+# --- backend/app\admin\views\management\plan.py ---
 
-# backend/app/admin/views/stats.py
-from sqladmin import ModelView, action # <--- Убедитесь, что 'action' импортирован
-from app.db.models import (
-    Automation, DailyStats, ActionLog, TaskHistory # <--- Добавьте TaskHistory
-)
-from sqladmin.filters import AllUniqueStringValuesFilter, BooleanFilter
-import enum
-# --- ДОБАВЬТЕ ЭТИ ИМПОРТЫ ---
-from fastapi import Request
-from sqlalchemy.ext.asyncio import AsyncSession
-# --- КОНЕЦ ДОБАВЛЕНИЙ ---
+from sqladmin import ModelView
+from app.db.models import Plan
 
-
-class AutomationAdmin(ModelView, model=Automation):
-    # ... (код этого класса без изменений) ...
-    identity = "automation"
-    name_plural = "Автоматизации"
-    icon = "fa-solid fa-robot"
-    can_create = False
+class PlanAdmin(ModelView, model=Plan):
+    category = "Управление"
+    name = "Тариф"
+    name_plural = "Тарифы"
+    icon = "fa-solid fa-star"
+    
+    can_create = True
     can_edit = True
     can_delete = False
-    column_list = [ Automation.id, "user", Automation.automation_type, Automation.is_active, Automation.last_run_at ]
-    column_joined_list = [Automation.user]
-    column_searchable_list = [Automation.user_id, "user.vk_id"]
-    column_formatters = { "user": lambda m, a: f"User {m.user.vk_id}" if m.user else "Unknown", Automation.automation_type: lambda m, a: m.automation_type.value if isinstance(m.automation_type, enum.Enum) else (m.automation_type or "Не указан"), Automation.is_active: lambda m, a: "Active" if m.is_active else "Inactive", }
-    column_filters = [ BooleanFilter(Automation.is_active), ]
 
+    column_list = [Plan.id, Plan.name_id, Plan.display_name, Plan.base_price, Plan.is_active, Plan.is_popular]
+    column_searchable_list = [Plan.name_id, Plan.display_name]
+    column_filters = [Plan.is_active]
+    column_default_sort = ("base_price", False)
 
-class DailyStatsAdmin(ModelView, model=DailyStats):
-    # ... (код этого класса без изменений) ...
-    identity = "daily-stats"
-    name_plural = "Дневная статистика"
-    icon = "fa-solid fa-chart-line"
+    form_columns = [
+        Plan.name_id,
+        Plan.display_name,
+        Plan.description,
+        Plan.base_price,
+        Plan.limits,
+        Plan.available_features,
+        Plan.is_active,
+        Plan.is_popular,
+    ]
+
+    column_labels = {
+        "name_id": "Системное имя (ID)",
+        "display_name": "Отображаемое имя",
+        "base_price": "Цена (RUB)",
+        "is_active": "Активен для покупки",
+        "is_popular": "Популярный",
+        "limits": "Лимиты (JSON)",
+        "available_features": "Доступные функции (JSON)"
+    }
+
+# --- backend/app\admin\views\management\user.py ---
+
+# backend/app/admin/views/management/user.py
+
+from sqladmin import ModelView, action
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from datetime import datetime, timedelta, timezone
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
+from markupsafe import Markup
+
+from app.core.config import settings
+from app.db.models import User, Plan
+from app.core.enums import PlanName
+from app.core.security import create_access_token, encrypt_data, decrypt_data
+
+class UserAdmin(ModelView, model=User):
+    category = "Управление"
+    name = "Пользователь"
+    name_plural = "Пользователи"
+    icon = "fa-solid fa-users"
+    
+    column_list = [User.vk_id, User.plan, User.is_frozen, User.is_shadow_banned, User.is_deleted, User.last_active_at]
+    column_details_exclude_list = [User.encrypted_vk_token, User.automations, User.task_history, User.daily_stats, User.action_logs, User.notifications, User.scenarios, User.profile_metrics, User.filter_presets, User.friend_requests, User.heatmap, User.managed_profiles, User.scheduled_posts, User.owned_team, User.team_membership]
+    column_searchable_list = [User.vk_id]
+    column_filters = [User.plan, User.is_admin, User.is_frozen, User.is_deleted, User.is_shadow_banned]
+    column_default_sort = ("created_at", True)
+
+    can_edit = True
     can_create = False
-    can_edit = False
-    column_list = [c.name for c in DailyStats.__table__.c]
-    column_default_sort = ("date", True)
-    column_searchable_list = [DailyStats.user_id]
-    column_formatters = { DailyStats.user_id: lambda m, a: f"User {m.user_id}" }
+    can_delete = False
 
+    form_columns = [User.plan, User.plan_expires_at, User.is_admin, "encrypted_vk_token_clear", User.is_frozen, User.is_shadow_banned]
+    form_overrides = {"encrypted_vk_token_clear": "Password"}
+    form_args = {"encrypted_vk_token_clear": {"label": "Новый VK токен (оставить пустым, чтобы не менять)"}}
+
+    column_labels = {
+        User.vk_id: "VK ID", User.plan: "Тариф", User.is_frozen: "🧊",
+        User.is_shadow_banned: "👻", User.is_deleted: "🗑️",
+        User.last_active_at: "Был онлайн", User.login_history: "История входов",
+    }
+
+    column_formatters = {
+        User.vk_id: lambda m, a: Markup(f'<a href="https://vk.com/id{m.vk_id}" target="_blank">{m.vk_id}</a>'),
+        User.is_frozen: lambda m, a: "Да" if m.is_frozen else "Нет",
+        User.is_shadow_banned: lambda m, a: "Да" if m.is_shadow_banned else "Нет",
+        User.is_deleted: lambda m, a: "Да" if m.is_deleted else "Нет",
+        User.last_active_at: lambda m, a: m.last_active_at.strftime('%Y-%m-%d %H:%M') if m.last_active_at else "Никогда",
+        User.plan_expires_at: lambda m, a: m.plan_expires_at.strftime('%Y-%m-%d %H:%M') if m.plan_expires_at else "Не истекает"
+    }
+
+    async def on_model_change(self, data: dict, model: User, is_created: bool, request: Request):
+        if data.get("encrypted_vk_token_clear"):
+            model.encrypted_vk_token = encrypt_data(data["encrypted_vk_token_clear"])
+
+    @action(name="impersonate", label="👤 Войти как пользователь", add_in_detail=True, add_in_list=True)
+    async def impersonate(self, request: Request, pks: list[int]) -> JSONResponse:
+        if len(pks) != 1:
+            return JSONResponse({"status": "error", "message": "Выберите одного пользователя."}, status_code=400)
+        
+        session: AsyncSession = request.state.session
+        
+        admin_user_stmt = select(User).where(User.vk_id == int(settings.ADMIN_VK_ID))
+        admin = (await session.execute(admin_user_stmt)).scalar_one_or_none()
+        if not admin:
+             return JSONResponse({"status": "error", "message": "Admin user not found in DB."}, status_code=500)
+
+        target_user_id = int(pks[0])
+        target_user = await session.get(User, target_user_id)
+        if not target_user:
+            return JSONResponse({"status": "error", "message": "Целевой пользователь не найден."}, status_code=404)
+        
+        token_data = {"sub": str(admin.id), "profile_id": str(target_user.id), "scope": "impersonate"}
+        impersonation_token = create_access_token(data=token_data)
+        
+        real_vk_token = decrypt_data(target_user.encrypted_vk_token)
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "message": f"Данные для входа от имени пользователя ID {target_user_id} созданы.",
+                "impersonation_token": impersonation_token,
+                "real_vk_token": real_vk_token,
+            }
+        )
+    
+    @action(name="extend_subscription", label="✅ Продлить подписку (+30 дней)", add_in_list=True, add_in_detail=True)
+    async def extend_subscription(self, request: Request, pks: list[int]) -> JSONResponse:
+        session: AsyncSession = request.state.session
+        
+        if not pks:
+            return JSONResponse(content={"message": "Подписка продлена для 0 пользователей."})
+
+        pks_int = [int(pk) for pk in pks]
+        users_result = await session.execute(select(User).where(User.id.in_(pks_int)).options(selectinload(User.plan)))
+        users = users_result.scalars().all()
+
+        if not users:
+             return JSONResponse(content={"message": "Пользователи не найдены."})
+
+        plus_plan = None
+        successful_count = 0
+        for user in users:
+            now = datetime.now(timezone.utc)
+            start_date = user.plan_expires_at if user.plan_expires_at and user.plan_expires_at > now else now
+            user.plan_expires_at = start_date + timedelta(days=30)
+
+            if user.plan.name_id == PlanName.EXPIRED.name:
+                if not plus_plan:
+                    plus_plan_result = await session.execute(select(Plan).where(Plan.name_id == PlanName.PLUS.name))
+                    plus_plan = plus_plan_result.scalar_one()
+                user.plan_id = plus_plan.id
+                
+                new_limits = plus_plan.limits
+                for k, v in new_limits.items():
+                    if hasattr(user, k):
+                        setattr(user, k, v)
+            
+            successful_count += 1
+        
+        await session.commit()
+
+        return JSONResponse(content={"message": f"Подписка продлена для {successful_count} пользователей."})
+        
+    @action(name="soft_delete", label="🗑 Мягко удалить", confirmation_message="Пользователь потеряет доступ, но данные останутся. Уверены?")
+    async def soft_delete(self, request: Request, pks: list[int]) -> JSONResponse:
+        session: AsyncSession = request.state.session
+        pks_int = [int(pk) for pk in pks]
+        if pks_int:
+            result = await session.execute(select(User).where(User.id.in_(pks_int)))
+            for user in result.scalars().all():
+                user.is_deleted=True
+                user.deleted_at=datetime.now(timezone.utc)
+                user.is_frozen=True
+            await session.commit()
+        return JSONResponse(content={"message": "Аккаунты помечены как удаленные."})
+
+    @action(name="restore", label="♻️ Восстановить", confirmation_message="Восстановить доступ для пользователя?")
+    async def restore(self, request: Request, pks: list[int]) -> JSONResponse:
+        session: AsyncSession = request.state.session
+        pks_int = [int(pk) for pk in pks]
+        if pks_int:
+            result = await session.execute(select(User).where(User.id.in_(pks_int)))
+            for user in result.scalars().all():
+                user.is_deleted=False
+                user.deleted_at=None
+                user.is_frozen=False
+            await session.commit()
+        return JSONResponse(content={"message": "Аккаунты восстановлены."})
+
+    @action(name="toggle_freeze", label="🧊 Заморозить/Разморозить")
+    async def toggle_freeze(self, request: Request, pks: list[int]) -> JSONResponse:
+        session: AsyncSession = request.state.session
+        pks_int = [int(pk) for pk in pks]
+        if pks_int:
+            result = await session.execute(select(User).where(User.id.in_(pks_int)))
+            for user in result.scalars().all():
+                user.is_frozen = not user.is_frozen
+            await session.commit()
+        return JSONResponse(content={"message": "Статус заморозки изменен."})
+
+    @action(name="toggle_shadow_ban", label="👻 Теневой бан вкл/выкл")
+    async def toggle_shadow_ban(self, request: Request, pks: list[int]) -> JSONResponse:
+        session: AsyncSession = request.state.session
+        pks_int = [int(pk) for pk in pks]
+        if pks_int:
+            result = await session.execute(select(User).where(User.id.in_(pks_int)))
+            for user in result.scalars().all():
+                user.is_shadow_banned = not user.is_shadow_banned
+            await session.commit()
+        return JSONResponse(content={"message": "Статус теневого бана изменен."})
+
+# --- backend/app\admin\views\monitoring\action_log.py ---
+
+from sqladmin import ModelView
+from app.db.models import ActionLog
+from sqladmin.filters import AllUniqueStringValuesFilter
 
 class ActionLogAdmin(ModelView, model=ActionLog):
-    # ... (код этого класса без изменений) ...
-    identity = "action-log"
-    name_plural = "Логи действий"
+    category = "Мониторинг"
+    name = "Лог Действий"
+    name_plural = "Логи Действий"
     icon = "fa-solid fa-clipboard-list"
     can_create = False
     can_edit = False
+    can_delete = False
+    
     column_list = [ActionLog.id, "user", ActionLog.action_type, ActionLog.message, ActionLog.status, ActionLog.timestamp]
     column_joined_list = [ActionLog.user]
     column_searchable_list = [ActionLog.user_id, "user.vk_id"]
-    column_filters = [ AllUniqueStringValuesFilter(ActionLog.action_type), AllUniqueStringValuesFilter(ActionLog.status), ]
+    column_filters = [
+        AllUniqueStringValuesFilter(ActionLog.action_type),
+        AllUniqueStringValuesFilter(ActionLog.status),
+    ]
     column_default_sort = ("timestamp", True)
-    column_formatters = { "user": lambda m, a: f"User {m.user.vk_id}" if m.user else "Unknown" }
 
-# --- ДОБАВЬТЕ ЭТОТ НОВЫЙ КЛАСС В КОНЕЦ ФАЙЛА ---
+    column_formatters = {
+        "user": lambda m, a: f"User {m.user.vk_id}" if m.user else "Unknown"
+    }
+
+# --- backend/app\admin\views\monitoring\daily_stats.py ---
+
+from sqladmin import ModelView
+from app.db.models import DailyStats
+
+class DailyStatsAdmin(ModelView, model=DailyStats):
+    category = "Мониторинг"
+    name = "Дневная Статистика"
+    name_plural = "Дневная Статистика"
+    icon = "fa-solid fa-chart-line"
+    can_create = False
+    can_edit = False
+    can_delete = False
+    
+    column_list = [c.name for c in DailyStats.__table__.c]
+    column_default_sort = ("date", True)
+    column_searchable_list = [DailyStats.user_id]
+
+    column_formatters = {
+        DailyStats.user_id: lambda m, a: f"User {m.user_id}"
+    }
+
+# --- backend/app\admin\views\monitoring\task_history.py ---
+
+# backend/app/admin/views/monitoring/task_history.py
+
+from sqladmin import ModelView, action
+from app.db.models import TaskHistory
+from sqladmin.filters import AllUniqueStringValuesFilter
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+
 class TaskHistoryAdmin(ModelView, model=TaskHistory):
-    identity = "task-history"
+    category = "Мониторинг"
+    name = "История Задач"
     name_plural = "История Задач"
     icon = "fa-solid fa-history"
     can_create = False
@@ -432,63 +673,78 @@ class TaskHistoryAdmin(ModelView, model=TaskHistory):
     column_default_sort = ("created_at", True)
     column_formatters = { "user": lambda m, a: f"User {m.user.vk_id}" if m.user else "Unknown" }
 
-    @action(name="mark_as_successful", label="✅ Пометить как Успешная", confirmation_message="Уверены? Это изменит статус задачи на SUCCESS.", add_in_list=True)
-    async def mark_as_successful(self, request: Request, pks: list[int]):
+    @action(name="mark_as_successful", label="✅ Пометить как Успешная")
+    async def mark_as_successful(self, request: Request, pks: list[int]) -> JSONResponse:
         session: AsyncSession = request.state.session
-        for pk in pks:
-            task = await session.get(TaskHistory, pk)
-            if task and task.status == "FAILURE":
-                task.status = "SUCCESS"
-                task.result = "Статус изменен администратором."
-        await session.commit()
-        return {"message": f"Статус изменен для {len(pks)} задач."}
+        pks_int = [int(pk) for pk in pks]
+        if pks_int:
+            result = await session.execute(select(TaskHistory).where(TaskHistory.id.in_(pks_int)))
+            for task in result.scalars().all():
+                task.status="SUCCESS"
+                task.result="Статус изменен администратором."
+            await session.commit()
+        return JSONResponse(content={"message": f"Статус изменен для {len(pks)} задач."})
 
-    @action(name="cancel_manually", label="↩️ Отменить (административно)", confirmation_message="Это действие изменит статус на CANCELLED. Оно не отменяет уже выполненные действия.", add_in_list=True)
-    async def cancel_manually(self, request: Request, pks: list[int]):
+    @action(name="cancel_manually", label="↩️ Отменить (административно)")
+    async def cancel_manually(self, request: Request, pks: list[int]) -> JSONResponse:
         session: AsyncSession = request.state.session
-        for pk in pks:
-            task = await session.get(TaskHistory, pk)
-            if task and task.status in ["SUCCESS", "FAILURE"]:
-                task.status = "CANCELLED"
-                task.result = "Задача отменена администратором."
-        await session.commit()
-        return {"message": f"Отменено (административно) {len(pks)} задач."}
+        pks_int = [int(pk) for pk in pks]
+        if pks_int:
+            result = await session.execute(select(TaskHistory).where(TaskHistory.id.in_(pks_int)))
+            for task in result.scalars().all():
+                task.status="CANCELLED"
+                task.result="Задача отменена администратором."
+            await session.commit()
+        return JSONResponse(content={"message": f"Отменено (административно) {len(pks)} задач."})
 
-# --- backend/app\admin\views\support.py ---
+# --- backend/app\admin\views\support\message.py ---
 
-# backend/app/admin/views/support.py
-import datetime
-from fastapi import Request
-from sqladmin import ModelView, action
-from sqlalchemy.ext.asyncio import AsyncSession
-from datetime import timezone
-
-from app.db.models import SupportTicket, TicketMessage, TicketStatus
-from sqladmin.filters import AllUniqueStringValuesFilter
-
+from sqladmin import ModelView
+from app.db.models import TicketMessage
 
 class TicketMessageAdmin(ModelView, model=TicketMessage):
-    can_create = True
-    can_edit = False
-    can_delete = False
-    can_list = False
-    column_list = ["author", TicketMessage.message, TicketMessage.created_at]
-    column_details_list = [TicketMessage.author] 
+    category = "Техподдержка"
+    name = "Сообщение"
+    name_plural = "Все Сообщения"
+    icon = "fa-solid fa-envelope"
+    can_create = False
+    can_edit = True
+    can_delete = True
+    can_list = True
+    
+    column_list = ["ticket", "author", TicketMessage.message, TicketMessage.created_at]
+    column_details_list = [TicketMessage.id, "ticket", "author", TicketMessage.message, TicketMessage.attachment_url, TicketMessage.created_at]
+    column_searchable_list = [TicketMessage.message, "author.vk_id", "ticket.id", "ticket.subject"]
+    column_default_sort = ("created_at", True)
 
     column_formatters = {
-        "author": lambda m, a: f"User {m.author.vk_id}" if m.author else "Unknown"
+        "author": lambda m, a: f"User {m.author.vk_id}" if m.author else "Admin"
     }
 
+# --- backend/app\admin\views\support\ticket.py ---
+
+# backend/app/admin/views/support/ticket.py
+
+import datetime
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from sqladmin import ModelView, action
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from datetime import timezone
+
+from app.db.models import SupportTicket, TicketStatus
+from sqladmin.filters import AllUniqueStringValuesFilter
 
 class SupportTicketAdmin(ModelView, model=SupportTicket):
-    identity = "support-ticket"
+    category = "Техподдержка"
     name = "Тикет"
-    name_plural = "Техподдержка"
+    name_plural = "Тикеты"
     icon = "fa-solid fa-headset"
     can_edit = True
-
+    can_create = True
+    
     column_list = [SupportTicket.id, "user", SupportTicket.subject, SupportTicket.status, SupportTicket.reopen_count, SupportTicket.updated_at]
-    column_select_related = [SupportTicket.user]
     column_details_list = [SupportTicket.id, SupportTicket.user, SupportTicket.subject, SupportTicket.status, SupportTicket.reopen_count, SupportTicket.created_at, SupportTicket.updated_at, SupportTicket.messages]
     column_searchable_list = [SupportTicket.id, SupportTicket.subject, "user.vk_id"]
     column_filters = [AllUniqueStringValuesFilter(SupportTicket.status)]
@@ -500,345 +756,136 @@ class SupportTicketAdmin(ModelView, model=SupportTicket):
     }
 
     async def on_model_change(self, data: dict, model: SupportTicket, is_created: bool, request: Request) -> None:
-        if is_created:
-            return
-
-        session: AsyncSession = request.state.session
-        
-        if 'status' in data:
-            try:
-                status_str = data['status'].upper()
-                if status_str in [s.name for s in TicketStatus]:
-                    model.status = TicketStatus[status_str]
-            except (KeyError, AttributeError):
-                pass
-        
         model.updated_at = datetime.datetime.now(timezone.utc)
 
-    # --- НОВОЕ ДЕЙСТВИЕ ---
-    @action(
-        name="reopen_tickets", label="↩️ Переоткрыть",
-        confirmation_message="Уверены? Статус тикета изменится на 'OPEN'.",
-        add_in_list=True, add_in_detail=True
-    )
-    async def reopen_tickets(self, request: Request, pks: list[int]):
+    @action(name="reopen_tickets", label="↩️ Переоткрыть")
+    async def reopen_tickets(self, request: Request, pks: list[int]) -> JSONResponse:
         session: AsyncSession = request.state.session
-        for pk in pks:
-            ticket = await session.get(SupportTicket, pk)
-            if ticket and ticket.status != TicketStatus.OPEN:
-                ticket.status = TicketStatus.OPEN
-                ticket.updated_at = datetime.datetime.now(timezone.utc)
-        await session.commit()
-        return {"message": f"Переоткрыто тикетов: {len(pks)}"}
+        pks_int = [int(pk) for pk in pks]
+        if pks_int:
+            result = await session.execute(select(SupportTicket).where(SupportTicket.id.in_(pks_int)))
+            for ticket in result.scalars().all():
+                ticket.status=TicketStatus.OPEN
+                ticket.updated_at=datetime.datetime.now(timezone.utc)
+            await session.commit()
+        return JSONResponse(content={"message": f"Переоткрыто тикетов: {len(pks)}"})
 
-    @action(
-        name="resolve_tickets", label="✅ Решить и закрыть (можно переоткрыть)",
-        confirmation_message="Уверены? Пользователь сможет переоткрыть тикет.",
-        add_in_list=True, add_in_detail=True
-    )
-    async def resolve_tickets(self, request: Request, pks: list[int]):
+    @action(name="resolve_tickets", label="✅ Решить и закрыть")
+    async def resolve_tickets(self, request: Request, pks: list[int]) -> JSONResponse:
         session: AsyncSession = request.state.session
-        for pk in pks:
-            ticket = await session.get(SupportTicket, pk)
-            if ticket:
-                ticket.status = TicketStatus.RESOLVED
-                ticket.updated_at = datetime.datetime.now(timezone.utc)
-        await session.commit()
-        return {"message": f"Решено тикетов: {len(pks)}"}
+        pks_int = [int(pk) for pk in pks]
+        if pks_int:
+            result = await session.execute(select(SupportTicket).where(SupportTicket.id.in_(pks_int)))
+            for ticket in result.scalars().all():
+                ticket.status=TicketStatus.RESOLVED
+                ticket.updated_at=datetime.datetime.now(timezone.utc)
+            await session.commit()
+        return JSONResponse(content={"message": f"Решено тикетов: {len(pks)}"})
 
-    @action(
-        name="close_permanently", label="🔒 Закрыть навсегда",
-        confirmation_message="ВНИМАНИЕ: Пользователь НЕ сможет переоткрыть этот тикет!",
-        add_in_list=True, add_in_detail=True
-    )
-    async def close_permanently(self, request: Request, pks: list[int]):
+    @action(name="close_permanently", label="🔒 Закрыть навсегда")
+    async def close_permanently(self, request: Request, pks: list[int]) -> JSONResponse:
         session: AsyncSession = request.state.session
-        for pk in pks:
-            ticket = await session.get(SupportTicket, pk)
-            if ticket:
-                ticket.status = TicketStatus.CLOSED
-                ticket.updated_at = datetime.datetime.now(timezone.utc)
-        await session.commit()
-        return {"message": f"Закрыто навсегда тикетов: {len(pks)}"}
+        pks_int = [int(pk) for pk in pks]
+        if pks_int:
+            result = await session.execute(select(SupportTicket).where(SupportTicket.id.in_(pks_int)))
+            for ticket in result.scalars().all():
+                ticket.status=TicketStatus.CLOSED
+                ticket.updated_at=datetime.datetime.now(timezone.utc)
+            await session.commit()
+        return JSONResponse(content={"message": f"Закрыто навсегда тикетов: {len(pks)}"})
 
-# --- backend/app\admin\views\system.py ---
+# --- backend/app\admin\views\system\admin_actions.py ---
 
-# backend/app/admin/views/system.py
-from sqladmin import ModelView, action, BaseView, expose
-from app.db.models.system import GlobalSetting, BannedIP
+from sqladmin import BaseView, expose
 from fastapi import Request
+from sqlalchemy import update
+from app.db.models import Automation, User
+
+class AdminActionsView(BaseView):
+    name = "Экстренные Действия"
+    category = "Система"
+    icon = "fa-solid fa-bolt"
+    
+    @expose("/admin/actions", methods=["GET", "POST"])
+    async def actions_page(self, request: Request):
+        if request.method == "POST":
+            form = await request.form()
+            session = request.state.session
+            message = ""
+            
+            if "panic_button" in form:
+                arq_pool = request.app.state.arq_pool
+                all_jobs = await arq_pool.all_jobs()
+                aborted_count = 0
+                for job in all_jobs:
+                    try:
+                        await arq_pool.abort_job(job.job_id)
+                        aborted_count += 1
+                    except Exception:
+                        pass
+                
+                await session.execute(update(Automation).values(is_active=False))
+                await session.execute(update(User).values(is_frozen=True))
+                await session.commit()
+                message = f"РЕЖИМ ПАНИКИ АКТИВИРОВАН: Отменено {aborted_count} задач, все автоматизации и пользователи заморожены."
+            
+            return await self.templates.TemplateResponse("admin/actions.html", {"request": request, "message": message})
+        
+        return await self.templates.TemplateResponse("admin/actions.html", {"request": request})
+
+# --- backend/app\admin\views\system\banned_ip.py ---
+
+# backend/app/admin/views/system/banned_ip.py
+
+from sqladmin import ModelView, action
+from app.db.models.system import BannedIP
+from fastapi import Request
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+
+class BannedIPAdmin(ModelView, model=BannedIP):
+    category = "Система"
+    name = "Блокировка IP"
+    name_plural = "Заблокированные IP"
+    icon = "fa-solid fa-gavel"
+    
+    can_create = True
+    can_delete = True
+    can_edit = True
+
+    column_list = [BannedIP.ip_address, BannedIP.reason, BannedIP.banned_at, BannedIP.admin]
+    column_searchable_list = [BannedIP.ip_address]
+    column_default_sort = ("banned_at", True)
+
+    @action(name="unban_ips", label="🟢 Разблокировать")
+    async def unban_ips(self, request: Request, pks: list[int]) -> JSONResponse:
+        session: AsyncSession = request.state.session
+        pks_int = [int(pk) for pk in pks]
+        if pks_int:
+            result = await session.execute(select(BannedIP).where(BannedIP.id.in_(pks_int)))
+            for ip_ban in result.scalars().all():
+                await session.delete(ip_ban)
+            await session.commit()
+        return JSONResponse(content={"message": f"Разблокировано IP-адресов: {len(pks)}"})
+
+# --- backend/app\admin\views\system\global_settings.py ---
+
+from sqladmin import ModelView
+from app.db.models.system import GlobalSetting
 
 class GlobalSettingsAdmin(ModelView, model=GlobalSetting):
     category = "Система"
     name = "Настройка"
     name_plural = "Глобальные настройки"
     icon = "fa-solid fa-cogs"
+    
     can_create = True
     can_delete = True
     can_edit = True
+
     column_list = [GlobalSetting.key, GlobalSetting.value, GlobalSetting.is_enabled, GlobalSetting.description]
     form_columns = [GlobalSetting.key, GlobalSetting.value, GlobalSetting.is_enabled, GlobalSetting.description]
-
-class BannedIPAdmin(ModelView, model=BannedIP):
-    category = "Система"
-    name = "Блокировка"
-    name_plural = "Заблокированные IP"
-    icon = "fa-solid fa-gavel"
-    can_create = True
-    can_delete = True
-    can_edit = True
-    column_list = [BannedIP.ip_address, BannedIP.reason, BannedIP.banned_at, BannedIP.admin]
-    column_searchable_list = [BannedIP.ip_address]
-    column_default_sort = ("banned_at", True)
-
-    @action(name="unban_ips", label="🟢 Разблокировать")
-    async def unban_ips(self, request: Request, pks: list[int]):
-        session: AsyncSession = request.state.session
-        for pk in pks:
-            ban = await session.get(BannedIP, pk)
-            if ban:
-                await session.delete(ban)
-        await session.commit()
-        return {"message": f"Разблокировано IP-адресов: {len(pks)}"}
-
-
-class AdminActions(BaseView):
-    name = "Действия"
-    category = "Система"
-    icon = "fa-solid fa-bolt"
-
-    @expose("/admin/actions", methods=["GET", "POST"])
-    async def actions_page(self, request: Request):
-        if request.method == "POST":
-            form = await request.form()
-            if "panic_button" in form:
-                arq_pool = request.app.state.arq_pool
-                all_jobs = await arq_pool.all_jobs()
-                for job in all_jobs:
-                    await arq_pool.abort_job(job.job_id)
-                # Тут можно добавить логику деактивации всех автоматизаций
-                return self.templates.TemplateResponse("admin/actions.html", {"request": request, "message": "Все задачи в очереди были отменены."})
-        return self.templates.TemplateResponse("admin/actions.html", {"request": request})
-
-# --- backend/app\admin\views\user.py ---
-
-# backend/app/admin/views/user.py
-from sqladmin import ModelView, action
-from fastapi import Request
-from fastapi.responses import HTMLResponse, JSONResponse
-from datetime import datetime, timedelta, timezone
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, text
-from sqlalchemy.orm import selectinload
-
-from app.core.config import settings
-from app.db.models import User, LoginHistory, BannedIP, TaskHistory, DailyStats, Automation
-from sqladmin.filters import AllUniqueStringValuesFilter, BooleanFilter
-from app.core.plans import get_limits_for_plan
-from app.core.enums import PlanName, AutomationType
-from app.core.security import encrypt_data, create_access_token
-from app.tasks.task_maps import TASK_FUNC_MAP
-from app.core.config_loader import AUTOMATIONS_CONFIG
-
-class UserAdmin(ModelView, model=User):
-    category = "Управление"
-    name = "Пользователь"
-    name_plural = "Пользователи"
-    icon = "fa-solid fa-users"
-    can_edit = True
-    
-    column_list = [User.id, User.vk_id, User.plan, User.is_frozen, User.last_active_at, User.created_at]
-    column_details_list = [User.id, User.vk_id, User.plan, User.plan_expires_at, User.is_admin, User.is_frozen, User.created_at, User.last_active_at, User.login_history]
-    column_searchable_list = [User.id, User.vk_id]
-    column_filters = [User.plan, User.is_admin, User.is_frozen]
-    column_default_sort = ("created_at", True)
-    
-    form_columns = [User.plan, User.plan_expires_at, User.is_admin, User.encrypted_vk_token, User.is_frozen]
-    column_labels = {User.vk_id: "VK ID", User.plan: "Тариф", User.is_frozen: "Заморожен", User.last_active_at: "Был онлайн", User.created_at: "Дата регистрации", User.login_history: "История входов"}
-
-    async def on_model_change(self, data: dict, model: User, is_created: bool, request: Request):
-        if 'plan' in data and not is_created:
-            original_plan = model.plan
-            if data['plan'] != original_plan:
-                new_limits = get_limits_for_plan(PlanName(data['plan']))
-                for key, value in new_limits.items():
-                    if hasattr(model, key):
-                        setattr(model, key, value)
-        if 'encrypted_vk_token' in data and data['encrypted_vk_token']:
-            model.encrypted_vk_token = encrypt_data(data['encrypted_vk_token'])
-
-    @action(name="impersonate", label="👤 Войти как пользователь", add_in_detail=True, add_in_list=True)
-    async def impersonate(self, request: Request, pks: list[int]):
-        if len(pks) != 1:
-            return JSONResponse({"status": "error", "message": "Выберите одного пользователя."}, status_code=400)
-        
-        session: AsyncSession = request.state.session
-        admin_user_stmt = select(User).where(User.vk_id == int(settings.ADMIN_VK_ID))
-        admin = (await session.execute(admin_user_stmt)).scalar_one_or_none()
-        if not admin:
-             return JSONResponse({"status": "error", "message": "Admin user not found in DB."}, status_code=500)
-
-        target_user_id = int(pks[0])
-
-        token_data = {"sub": str(admin.id), "profile_id": str(target_user_id), "scope": "impersonate"}
-        access_token = create_access_token(data=token_data, expires_delta=timedelta(minutes=15))
-        
-        script = f"""
-            <script>
-                const token = '{access_token}';
-                alert('Токен для входа от имени пользователя ID {target_user_id} создан и скопирован в буфер обмена. Действует 15 минут.');
-                navigator.clipboard.writeText(token).then(() => {{
-                    console.log('Token copied to clipboard');
-                }}).catch(err => {{
-                    console.error('Failed to copy token: ', err);
-                }});
-                window.history.back();
-            </script>
-        """
-        return HTMLResponse(content=script)
-
-    @action(name="extend_subscription", label="✅ Продлить подписку (+30 дней)", add_in_list=True, add_in_detail=True)
-    async def extend_subscription(self, request: Request, pks: list[int]):
-        session: AsyncSession = request.state.session
-        successful_count = 0
-        for pk_str in pks:
-            user = await session.get(User, int(pk_str))
-            if not user: continue
-
-            now = datetime.now(timezone.utc)
-            start_date = user.plan_expires_at if user.plan_expires_at and user.plan_expires_at > now else now
-            user.plan_expires_at = start_date + timedelta(days=30)
-
-            if user.plan == PlanName.EXPIRED.name:
-                user.plan = PlanName.PLUS.name
-                new_limits = get_limits_for_plan(PlanName.PLUS)
-                for k, v in new_limits.items():
-                    if hasattr(user, k): setattr(user, k, v)
-            successful_count += 1
-        await session.commit()
-        return {"message": f"Подписка продлена для {successful_count} пользователей."}
-
-    # --- НОВОЕ ДЕЙСТВИЕ ---
-    @action(name="expire_subscription", label="⛔️ Завершить подписку", confirmation_message="Уверены? Подписка пользователя станет неактивной.", add_in_list=True, add_in_detail=True)
-    async def expire_subscription(self, request: Request, pks: list[int]):
-        session: AsyncSession = request.state.session
-        for pk in pks:
-            user = await session.get(User, int(pk))
-            if user:
-                user.plan = PlanName.EXPIRED.name
-                user.plan_expires_at = datetime.now(timezone.utc) - timedelta(days=1)
-        await session.commit()
-        return {"message": f"Подписка завершена для {len(pks)} пользователей."}
-
-    # --- НОВОЕ ДЕЙСТВИЕ ---
-    @action(name="grant_admin", label="👑 Выдать права администратора", add_in_list=True, add_in_detail=True)
-    async def grant_admin(self, request: Request, pks: list[int]):
-        session: AsyncSession = request.state.session
-        for pk in pks:
-            user = await session.get(User, int(pk))
-            if user:
-                user.is_admin = True
-        await session.commit()
-        return {"message": f"Права администратора выданы для {len(pks)} пользователей."}
-
-    # --- НОВОЕ ДЕЙСТВИЕ ---
-    @action(name="revoke_admin", label="🛡 Забрать права администратора", add_in_list=True, add_in_detail=True)
-    async def revoke_admin(self, request: Request, pks: list[int]):
-        session: AsyncSession = request.state.session
-        for pk in pks:
-            user = await session.get(User, int(pk))
-            # Нельзя забрать права у главного админа
-            if user and str(user.vk_id) != settings.ADMIN_VK_ID:
-                user.is_admin = False
-        await session.commit()
-        return {"message": f"Права администратора отозваны для {len(pks)} пользователей."}
-
-    @action(name="ban_user_ip", label="🚫 Забанить по IP", confirmation_message="Уверены? Пользователь потеряет доступ к сайту с этого IP.", add_in_list=True, add_in_detail=True)
-    async def ban_user_ip(self, request: Request, pks: list[int]):
-        session: AsyncSession = request.state.session
-        banned_count = 0
-        
-        admin_user_stmt = select(User).where(User.vk_id == int(settings.ADMIN_VK_ID))
-        admin = (await session.execute(admin_user_stmt)).scalar_one_or_none()
-        if not admin:
-            return {"message": "Ошибка: админ не найден в БД."}
-
-        for pk in pks:
-            stmt = select(LoginHistory.ip_address).where(LoginHistory.user_id == int(pk)).order_by(LoginHistory.timestamp.desc()).limit(1)
-            last_ip = (await session.execute(stmt)).scalar_one_or_none()
-            if not last_ip or last_ip == "unknown": continue
-            
-            exists_stmt = select(BannedIP).where(BannedIP.ip_address == last_ip)
-            if (await session.execute(exists_stmt)).scalar_one_or_none(): continue
-                
-            new_ban = BannedIP(ip_address=last_ip, reason=f"Блокировка пользователя ID {pk}", admin_id=admin.id)
-            session.add(new_ban)
-            banned_count += 1
-        
-        await session.commit()
-        return {"message": f"Заблокировано IP-адресов: {banned_count}"}
-
-    @action(name="delete_account", label="❌ Удалить аккаунт", confirmation_message="ВНИМАНИЕ: Это действие необратимо и удалит ВСЕ данные пользователя!", add_in_list=True, add_in_detail=True)
-    async def delete_account(self, request: Request, pks: list[int]):
-        session: AsyncSession = request.state.session
-        deleted_count = 0
-        for pk in pks:
-            user = await session.get(User, int(pk))
-            if user:
-                await session.delete(user)
-                deleted_count += 1
-        await session.commit()
-        return {"message": f"Удалено аккаунтов: {deleted_count}"}
-    
-    @action(name="reset_limits", label="🔄 Сбросить дневные лимиты")
-    async def reset_daily_limits(self, request: Request, pks: list[int]):
-        session: AsyncSession = request.state.session
-        today = datetime.now(timezone.utc).date()
-        stmt = update(DailyStats).where(DailyStats.user_id.in_(pks), DailyStats.date == today).values(
-            likes_count=0, friends_added_count=0, friend_requests_accepted_count=0, stories_viewed_count=0,
-            friends_removed_count=0, messages_sent_count=0, posts_created_count=0, groups_joined_count=0, groups_left_count=0
-        )
-        await session.execute(stmt)
-        await session.commit()
-        return {"message": "Дневные лимиты сброшены."}
-
-    @action(name="run_automations", label="🚀 Запустить автоматизации")
-    async def run_automations(self, request: Request, pks: list[int]):
-        session: AsyncSession = request.state.session
-        arq_pool = request.app.state.arq_pool
-        users = (await session.execute(select(User).where(User.id.in_(pks)).options(selectinload(User.automations)))).scalars().all()
-        
-        for user in users:
-            active_automations = [a for a in user.automations if a.is_active]
-            for automation in active_automations:
-                task_key_enum = AutomationType(automation.automation_type)
-                task_func_name = TASK_FUNC_MAP.get(task_key_enum)
-                if not task_func_name: continue
-                
-                task_config = next((item for item in AUTOMATIONS_CONFIG if item.id == automation.automation_type), None)
-                display_name = f"[Ручной запуск] {task_config.name}" if task_config else "Автоматическая задача"
-
-                task_history = TaskHistory(user_id=user.id, task_name=display_name, status="PENDING", parameters=automation.settings)
-                session.add(task_history)
-                await session.flush()
-
-                job = await arq_pool.enqueue_job(task_func_name, task_history_id=task_history.id, **(automation.settings or {}))
-                task_history.arq_job_id = job.job_id
-        await session.commit()
-        return {"message": "Запрос на запуск автоматизаций отправлен."}
-        
-    @action(name="toggle_freeze", label="🧊 Заморозить/Разморозить")
-    async def toggle_freeze(self, request: Request, pks: list[int]):
-        session: AsyncSession = request.state.session
-        stmt = update(User).where(User.id.in_(pks)).values(is_frozen=text("NOT is_frozen"))
-        await session.execute(stmt)
-        await session.commit()
-        return {"message": "Статус заморозки изменен."}
-
-# --- backend/app\admin\views\__init__.py ---
-
-
 
 # --- backend/app\api\dependencies.py ---
 
@@ -950,6 +997,77 @@ async def get_current_user_from_ws(
 # --- backend/app\api\__init__.py ---
 
 
+
+# --- backend/app\api\endpoints\admin.py ---
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, func, case
+from typing import List
+
+from app.db.session import get_db
+from app.db.models import User, TaskHistory
+from app.api.dependencies import get_current_active_profile
+from pydantic import BaseModel
+
+router = APIRouter()
+
+# --- Зависимость для проверки прав администратора ---
+async def get_current_admin_user(current_user: User = Depends(get_current_active_profile)) -> User:
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Доступ запрещен")
+    return current_user
+
+# --- Схемы для ответа API ---
+class PerformanceDataItem(BaseModel):
+    task_name: str
+    total_runs: int
+    failure_rate: float
+    avg_duration: float | None
+
+class PerformanceDataResponse(BaseModel):
+    data: List[PerformanceDataItem]
+
+# --- Сам эндпоинт ---
+@router.get(
+    "/dashboard/performance",
+    response_model=PerformanceDataResponse,
+    dependencies=[Depends(get_current_admin_user)]
+)
+async def get_performance_data(db: AsyncSession = Depends(get_db)):
+    duration_sec = func.extract('epoch', TaskHistory.finished_at - TaskHistory.started_at)
+
+    avg_duration_subq = (
+        select(TaskHistory.task_name, func.avg(duration_sec).label("avg_duration"))
+        .where(TaskHistory.status == "SUCCESS", TaskHistory.started_at.is_not(None), TaskHistory.finished_at.is_not(None))
+        .group_by(TaskHistory.task_name).subquery()
+    )
+
+    status_counts_subq = (
+        select(TaskHistory.task_name, func.count().label("total_runs"),
+               func.sum(case((TaskHistory.status == "FAILURE", 1), else_=0)).label("failure_count"))
+        .group_by(TaskHistory.task_name).subquery()
+    )
+
+    stmt = (
+        select(status_counts_subq.c.task_name, status_counts_subq.c.total_runs,
+               status_counts_subq.c.failure_count, avg_duration_subq.c.avg_duration)
+        .join(avg_duration_subq, status_counts_subq.c.task_name == avg_duration_subq.c.task_name, isouter=True)
+        .order_by(status_counts_subq.c.total_runs.desc())
+    )
+    
+    result = await db.execute(stmt)
+    performance_data = []
+    for row in result.all():
+        failure_rate = (row.failure_count / row.total_runs * 100) if row.total_runs > 0 else 0
+        performance_data.append({
+            "task_name": row.task_name,
+            "total_runs": row.total_runs,
+            "failure_rate": round(failure_rate, 2),
+            "avg_duration": round(row.avg_duration, 2) if row.avg_duration else None
+        })
+
+    return PerformanceDataResponse(data=performance_data)
 
 # --- backend/app\api\endpoints\analytics.py ---
 
@@ -1123,16 +1241,15 @@ async def get_post_activity_heatmap(
 
 # --- backend/app\api\endpoints\auth.py ---
 
-# backend/app/api/endpoints/auth.py
-
 from datetime import timedelta, datetime, UTC
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy.orm import selectinload
 
 from app.db.session import get_db
-from app.db.models import User, LoginHistory
+from app.db.models import User, LoginHistory, Plan
 from app.api.schemas.auth import EnrichedTokenResponse
 from app.services.vk_api import is_token_valid
 from app.core.security import create_access_token, encrypt_data
@@ -1173,24 +1290,26 @@ async def login_via_vk(
     user = result.scalar_one_or_none()
 
     encrypted_token = encrypt_data(vk_token)
-    base_plan_limits = get_limits_for_plan(PlanName.BASE)
-
+    
     if user:
         user.encrypted_vk_token = encrypted_token
     else:
+        base_plan_stmt = select(Plan).where(Plan.name_id == PlanName.BASE.name)
+        base_plan = (await db.execute(base_plan_stmt)).scalar_one_or_none()
+        if not base_plan:
+            raise HTTPException(status_code=500, detail="Базовый тарифный план не найден в системе.")
+
         user_data = {
             "vk_id": vk_id,
             "encrypted_vk_token": encrypted_token,
-            "plan": PlanName.BASE.name,
+            "plan_id": base_plan.id,
             "plan_expires_at": datetime.now(UTC) + timedelta(days=14),
         }
-        
-        base_plan_limits = get_limits_for_plan(PlanName.BASE)
         
         user_model_columns = {c.name for c in User.__table__.columns}
         valid_limits_for_db = {
             key: value
-            for key, value in base_plan_limits.items()
+            for key, value in base_plan.limits.items()
             if key in user_model_columns
         }
         user_data.update(valid_limits_for_db)
@@ -1199,14 +1318,17 @@ async def login_via_vk(
         db.add(user)
 
     if str(vk_id) == settings.ADMIN_VK_ID:
-        admin_limits = get_limits_for_plan(PlanName.PRO)
+        admin_plan_stmt = select(Plan).where(Plan.name_id == PlanName.PRO.name)
+        admin_plan = (await db.execute(admin_plan_stmt)).scalar_one_or_none()
+        if not admin_plan:
+             raise HTTPException(status_code=500, detail="PRO тарифный план не найден в системе.")
+
         user.is_admin = True
-        # ИЗМЕНЕНО: Используем .name, чтобы в БД записалась строка "PRO"
-        user.plan = PlanName.PRO.name
+        user.plan_id = admin_plan.id
         user.plan_expires_at = None
         
         user_model_columns = {c.name for c in User.__table__.columns}
-        for key, value in admin_limits.items():
+        for key, value in admin_plan.limits.items():
             if key in user_model_columns:
                 setattr(user, key, value)
 
@@ -1250,27 +1372,20 @@ async def switch_profile(
     db: AsyncSession = Depends(get_db)
 ) -> EnrichedTokenResponse:
     
-    # --- НАЧАЛО ИСПРАВЛЕННОЙ ЛОГИКИ ---
-    # Загружаем все необходимые связи для проверки прав
     await db.refresh(manager, attribute_names=["managed_profiles", "team_membership"])
     if manager.team_membership:
         await db.refresh(manager.team_membership, attribute_names=["profile_accesses"])
 
-    # 1. Начинаем собирать все ID профилей, к которым у пользователя есть доступ
-    allowed_profile_ids = {manager.id} # Пользователь всегда может "переключиться" на себя
+    allowed_profile_ids = {manager.id}
 
-    # 2. Добавляем профили, которыми он управляет напрямую
     if manager.managed_profiles:
         allowed_profile_ids.update({p.profile_user_id for p in manager.managed_profiles})
 
-    # 3. Добавляем профили, к которым ему дали доступ как члену команды
     if manager.team_membership and manager.team_membership.profile_accesses:
         allowed_profile_ids.update({p.profile_user_id for p in manager.team_membership.profile_accesses})
 
-    # 4. Проверяем, есть ли желаемый ID в собранном списке
     if request_data.profile_id not in allowed_profile_ids:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступ к этому профилю запрещен.")
-    # --- КОНЕЦ ИСПРАВЛЕННОЙ ЛОГИКИ ---
 
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     token_data = {
@@ -3013,7 +3128,6 @@ async def update_member_access(
 
 # --- backend/app\api\endpoints\users.py ---
 
-# backend/app/api/endpoints/users.py
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
@@ -3084,27 +3198,26 @@ async def read_users_me(current_user: User = Depends(get_current_active_profile)
     
     user_info_vk = user_info_vk_list[0]
 
-
     is_plan_active = True
-    plan_name = current_user.plan
+    plan_name = current_user.plan.name_id
     if current_user.plan_expires_at and current_user.plan_expires_at < datetime.utcnow():
         is_plan_active = False
-        plan_name = PlanName.EXPIRED
+        plan_name = PlanName.EXPIRED.name
 
     features = get_features_for_plan(plan_name)
     
-    # Теперь user_info_vk - это словарь, и распаковка пройдет успешно
     return {
         **user_info_vk,
         "id": current_user.id,
         "vk_id": current_user.vk_id,
-        "plan": current_user.plan,
+        "plan": current_user.plan.display_name,
         "plan_expires_at": current_user.plan_expires_at,
         "is_admin": current_user.is_admin,
         "delay_profile": current_user.delay_profile.value,
         "is_plan_active": is_plan_active,
         "available_features": features,
     }
+
 @router.get("/me/limits", response_model=DailyLimitsResponse)
 async def get_daily_limits(
     current_user: User = Depends(get_current_active_profile),
@@ -3126,147 +3239,13 @@ async def update_user_delay_profile(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    if request_data.delay_profile != DelayProfile.normal and not is_feature_available_for_plan(current_user.plan, FeatureKey.FAST_SLOW_DELAY_PROFILE):
+    if request_data.delay_profile != DelayProfile.normal and not await is_feature_available_for_plan(current_user.plan.name_id, FeatureKey.FAST_SLOW_DELAY_PROFILE, user=current_user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Смена скорости доступна только на PRO тарифе.")
         
     current_user.delay_profile = request_data.delay_profile
     await db.commit()
     await db.refresh(current_user)
-    # Переиспользуем эндпоинт, чтобы не дублировать логику
     return await read_users_me(current_user)
-
-@router.put("/me/analytics-settings", response_model=AnalyticsSettingsRead)
-async def update_analytics_settings(
-    settings_data: AnalyticsSettingsUpdate,
-    current_user: User = Depends(get_current_active_profile),
-    db: AsyncSession = Depends(get_db)
-):
-    """Обновляет персональные настройки пользователя для сбора аналитики."""
-    current_user.analytics_settings_posts_count = settings_data.posts_count
-    current_user.analytics_settings_photos_count = settings_data.photos_count
-    await db.commit()
-    await db.refresh(current_user)
-    return AnalyticsSettingsRead(
-        posts_count=current_user.analytics_settings_posts_count,
-        photos_count=current_user.analytics_settings_photos_count
-    )
-
-@router.get("/task-info", response_model=TaskInfoResponse)
-async def get_task_info(
-    task_key: str = Query(...),
-    current_user: User = Depends(get_current_active_profile)
-):
-    vk_token = decrypt_data(current_user.encrypted_vk_token)
-    vk_api = VKAPI(access_token=vk_token)
-    count = 0
-
-    try:
-        if task_key == "accept_friends":
-            response = await vk_api.friends.getRequests() # Метод VK API для заявок
-            count = response.get("count", 0) if response else 0
-        
-        elif task_key == "remove_friends":
-            # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
-            user_info_list = await vk_api.users.get(user_ids=str(current_user.vk_id), fields="counters")
-            if user_info_list:
-                user_info = user_info_list[0]
-                count = user_info.get("counters", {}).get("friends", 0)
-    except VKAPIError as e:
-        print(f"Could not fetch task info for {task_key} due to VK API error: {e}")
-        count = 0
-    finally:
-        await vk_api.close()
-
-    return TaskInfoResponse(count=count)
-
-@router.get("/me/filter-presets", response_model=List[FilterPresetRead])
-async def get_filter_presets(
-    action_type: str = Query(...),
-    current_user: User = Depends(get_current_active_profile),
-    db: AsyncSession = Depends(get_db)
-):
-    stmt = select(FilterPreset).where(
-        FilterPreset.user_id == current_user.id,
-        FilterPreset.action_type == action_type
-    ).order_by(FilterPreset.name)
-    result = await db.execute(stmt)
-    return result.scalars().all()
-
-@router.post("/me/filter-presets", response_model=FilterPresetRead, status_code=status.HTTP_201_CREATED)
-async def create_filter_preset(
-    preset_data: FilterPresetCreate,
-    current_user: User = Depends(get_current_active_profile),
-    db: AsyncSession = Depends(get_db)
-):
-    new_preset = FilterPreset(user_id=current_user.id, **preset_data.model_dump())
-    db.add(new_preset)
-    try:
-        await db.commit()
-        await db.refresh(new_preset)
-        return new_preset
-    except IntegrityError:
-        await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Пресет с таким названием для данного действия уже существует."
-        )
-
-@router.delete("/me/filter-presets/{preset_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_filter_preset(
-    preset_id: int,
-    current_user: User = Depends(get_current_active_profile),
-    db: AsyncSession = Depends(get_db)
-):
-    stmt = delete(FilterPreset).where(
-        FilterPreset.id == preset_id,
-        FilterPreset.user_id == current_user.id
-    )
-    result = await db.execute(stmt)
-    if result.rowcount == 0:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пресет не найден.")
-    await db.commit()
-
-
-@router.get("/me/managed-profiles", response_model=List[ManagedProfileRead], summary="Получить список профилей для переключения")
-async def get_managed_profiles(
-    manager: User = Depends(get_current_manager_user),
-    db: AsyncSession = Depends(get_db)
-):
-    result = await db.execute(
-        select(User)
-        .options(selectinload(User.managed_profiles).selectinload(ManagedProfile.profile))
-        .where(User.id == manager.id)
-    )
-    manager_with_profiles = result.scalar_one()
-
-    all_users_map = {manager.id: manager}
-    for rel in manager_with_profiles.managed_profiles:
-        all_users_map[rel.profile.id] = rel.profile
-
-    all_vk_ids = [user.vk_id for user in all_users_map.values()]
-    vk_info_map = {}
-    if all_vk_ids:
-        vk_api = VKAPI(decrypt_data(manager.encrypted_vk_token))
-        try:
-            # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
-            user_infos = await vk_api.users.get(user_ids=",".join(map(str, all_vk_ids)), fields="photo_50")
-            if user_infos:
-                vk_info_map = {info['id']: info for info in user_infos}
-        finally:
-            await vk_api.close()
-
-    profiles_info = []
-    for user in all_users_map.values():
-        vk_info = vk_info_map.get(user.vk_id, {})
-        profiles_info.append({
-            "id": user.id,
-            "vk_id": user.vk_id,
-            "first_name": vk_info.get("first_name", "N/A"),
-            "last_name": vk_info.get("last_name", ""),
-            "photo_50": vk_info.get("photo_50", "")
-        })
-
-    return sorted(profiles_info, key=lambda p: p['id'] != manager.id)
 
 # --- backend/app\api\endpoints\websockets.py ---
 
@@ -3333,6 +3312,7 @@ from .websockets import router as websockets_router
 from .support import router as support_router
 from .tasks import router as tasks_router
 from .task_history import router as task_history_router
+from .admin import router as admin_router
 
 # --- backend/app\api\schemas\actions.py ---
 
@@ -4607,7 +4587,6 @@ class FriendRequestLog(Base):
 
 # --- backend/app\db\models\payment.py ---
 
-# backend/app/db/models/payment.py
 import datetime
 import enum
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Float, Enum, JSON, Boolean, Text
@@ -4623,13 +4602,13 @@ class PaymentStatus(str, enum.Enum):
 class Plan(Base):
     __tablename__ = "plans"
     id = Column(Integer, primary_key=True)
-    name_id = Column(String, unique=True, nullable=False, index=True) # e.g., "BASE", "PRO"
+    name_id = Column(String, unique=True, nullable=False, index=True)
     display_name = Column(String, nullable=False)
     description = Column(Text, nullable=False)
-    base_price = Column(Float, nullable=True) # None for free plans
+    base_price = Column(Float, nullable=True)
     limits = Column(JSON, nullable=False)
     available_features = Column(JSON, nullable=False)
-    is_active = Column(Boolean, default=True, nullable=False) # Can be disabled from purchase
+    is_active = Column(Boolean, default=True, nullable=False)
     is_popular = Column(Boolean, default=False)
     
     users = relationship("User", back_populates="plan")
@@ -4641,7 +4620,7 @@ class Payment(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     amount = Column(Float, nullable=False)
     status = Column(Enum(PaymentStatus), default=PaymentStatus.PENDING, nullable=False)
-    plan_name_id = Column(String, nullable=False) # Stores "PRO", "PLUS" etc.
+    plan_name = Column(String, nullable=False)
     months = Column(Integer, nullable=False, default=1)
     created_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
@@ -4869,8 +4848,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 from app.db.base import Base
-from app.core.enums import DelayProfile, TeamMemberRole, PlanName
-
+from app.core.enums import DelayProfile, TeamMemberRole
 
 class User(Base):
     __tablename__ = "users"
@@ -4884,7 +4862,7 @@ class User(Base):
     deleted_at = Column(DateTime(timezone=True), nullable=True)
     is_shadow_banned = Column(Boolean, nullable=False, server_default='false', index=True)
     
-    plan = Column(String, nullable=False, server_default=PlanName.BASE.value)
+    plan_id = Column(Integer, ForeignKey("plans.id"), nullable=True)
     plan_expires_at = Column(DateTime(timezone=True), nullable=True)
     is_admin = Column(Boolean, nullable=False, server_default='false')
     daily_likes_limit = Column(Integer, nullable=False, server_default=text('0'))
@@ -4897,20 +4875,24 @@ class User(Base):
     analytics_settings_posts_count = Column(Integer, nullable=False, server_default=text('100'))
     analytics_settings_photos_count = Column(Integer, nullable=False, server_default=text('200'))
     
-    login_history = relationship("LoginHistory", back_populates="user", cascade="all, delete-orphan", order_by="desc(LoginHistory.timestamp)")
-    proxies = relationship("Proxy", back_populates="user", cascade="all, delete-orphan", lazy="select")
-    task_history = relationship("TaskHistory", back_populates="user", cascade="all, delete-orphan")
-    daily_stats = relationship("DailyStats", back_populates="user", cascade="all, delete-orphan")
+    plan = relationship("Plan", back_populates="users", lazy="joined")
+    
+    # --- ОТНОШЕНИЯ (RELATIONSHIPS) ---
+    action_logs = relationship("ActionLog", back_populates="user", cascade="all, delete-orphan") # <--- ДОБАВЛЕНА ЭТА СТРОКА
     automations = relationship("Automation", back_populates="user", cascade="all, delete-orphan")
-    notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
-    scenarios = relationship("Scenario", back_populates="user", cascade="all, delete-orphan")
-    profile_metrics = relationship("ProfileMetric", back_populates="user", cascade="all, delete-orphan")
+    daily_stats = relationship("DailyStats", back_populates="user", cascade="all, delete-orphan")
     filter_presets = relationship("FilterPreset", back_populates="user", cascade="all, delete-orphan")
     friend_requests = relationship("FriendRequestLog", back_populates="user", cascade="all, delete-orphan")
     heatmap = relationship("PostActivityHeatmap", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    login_history = relationship("LoginHistory", back_populates="user", cascade="all, delete-orphan", order_by="desc(LoginHistory.timestamp)")
     managed_profiles = relationship("ManagedProfile", foreign_keys="[ManagedProfile.manager_user_id]", back_populates="manager", cascade="all, delete-orphan")
-    scheduled_posts = relationship("ScheduledPost", back_populates="user", cascade="all, delete-orphan", foreign_keys="[ScheduledPost.user_id]")
+    notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
     owned_team = relationship("Team", back_populates="owner", uselist=False, cascade="all, delete-orphan")
+    profile_metrics = relationship("ProfileMetric", back_populates="user", cascade="all, delete-orphan")
+    proxies = relationship("Proxy", back_populates="user", cascade="all, delete-orphan", lazy="select")
+    scenarios = relationship("Scenario", back_populates="user", cascade="all, delete-orphan")
+    scheduled_posts = relationship("ScheduledPost", back_populates="user", cascade="all, delete-orphan", foreign_keys="[ScheduledPost.user_id]")
+    task_history = relationship("TaskHistory", back_populates="user", cascade="all, delete-orphan")
     team_membership = relationship("TeamMember", back_populates="user", uselist=False, cascade="all, delete-orphan")
 
 

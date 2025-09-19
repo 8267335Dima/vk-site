@@ -18,3 +18,4 @@ from .websockets import router as websockets_router
 from .support import router as support_router
 from .tasks import router as tasks_router
 from .task_history import router as task_history_router
+from .admin import router as admin_router

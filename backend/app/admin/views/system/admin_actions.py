@@ -31,6 +31,6 @@ class AdminActionsView(BaseView):
                 await session.commit()
                 message = f"РЕЖИМ ПАНИКИ АКТИВИРОВАН: Отменено {aborted_count} задач, все автоматизации и пользователи заморожены."
             
-            return await self.templates.TemplateResponse("admin/actions.html", {"request": request, "message": message})
+            return self.templates.TemplateResponse("admin/actions.html", {"request": request, "message": message})
         
-        return await self.templates.TemplateResponse("admin/actions.html", {"request": request})
+        return self.templates.TemplateResponse("admin/actions.html", {"request": request})

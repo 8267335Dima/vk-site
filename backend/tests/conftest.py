@@ -30,11 +30,18 @@ from app.core.config_loader import PLAN_CONFIG
 async def db_engine() -> AsyncGenerator[AsyncEngine, None]:
     is_sqlite = "sqlite" in settings.database_url
     
+    # --- НАЧАЛО ИСПРАВЛЕНИЯ ---
+    connect_args = {"check_same_thread": False} if is_sqlite else {}
+    
     engine = create_async_engine(
         settings.database_url,
         poolclass=StaticPool if is_sqlite else None,
-        connect_args={"check_same_thread": False} if is_sqlite else {}
+        connect_args=connect_args,
+        # Эта опция научит SQLite правильно работать с JSON
+        json_serializer=json.dumps,
+        json_deserializer=json.loads
     )
+    # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
@@ -49,10 +56,21 @@ async def db_engine() -> AsyncGenerator[AsyncEngine, None]:
 async def db_session(db_engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSession(db_engine, expire_on_commit=False) as session:
         plans_to_create = []
+        
+        # --- НАЧАЛО ИСПРАВЛЕНИЯ ---
+        plan_model_columns = {c.name for c in Plan.__table__.columns}
         for plan_id, config in PLAN_CONFIG.items():
             plan_data = config.model_dump()
-            plan_data['name_id'] = plan_id
-            plans_to_create.append(Plan(**plan_data))
+            
+            # Фильтруем данные, оставляя только те ключи, что есть в модели Plan
+            filtered_data = {
+                key: value for key, value in plan_data.items() 
+                if key in plan_model_columns
+            }
+            filtered_data['name_id'] = plan_id # name_id - это колонка в модели
+            
+            plans_to_create.append(Plan(**filtered_data))
+        # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
         
         session.add_all(plans_to_create)
         await session.commit()
@@ -81,6 +99,7 @@ def test_app(db_engine: AsyncEngine, db_session: AsyncSession, mock_arq_pool: As
             return response
 
     app.add_middleware(SQLAdminTestSessionMiddleware)
+
 
     def override_get_db():
         yield db_session

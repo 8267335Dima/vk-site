@@ -1,7 +1,11 @@
+# backend/app/admin/views/system/banned_ip.py
+
 from sqladmin import ModelView, action
 from app.db.models.system import BannedIP
 from fastapi import Request
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 class BannedIPAdmin(ModelView, model=BannedIP):
     category = "Система"
@@ -18,11 +22,12 @@ class BannedIPAdmin(ModelView, model=BannedIP):
     column_default_sort = ("banned_at", True)
 
     @action(name="unban_ips", label="🟢 Разблокировать")
-    async def unban_ips(self, request: Request, pks: list[int]):
+    async def unban_ips(self, request: Request, pks: list[int]) -> JSONResponse:
         session: AsyncSession = request.state.session
-        for pk in pks:
-            ban = await session.get(BannedIP, int(pk))
-            if ban:
-                await session.delete(ban)
-        await session.commit()
-        return {"message": f"Разблокировано IP-адресов: {len(pks)}"}
+        pks_int = [int(pk) for pk in pks]
+        if pks_int:
+            result = await session.execute(select(BannedIP).where(BannedIP.id.in_(pks_int)))
+            for ip_ban in result.scalars().all():
+                await session.delete(ip_ban)
+            await session.commit()
+        return JSONResponse(content={"message": f"Разблокировано IP-адресов: {len(pks)}"})
