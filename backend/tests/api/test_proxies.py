@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
 from app.db.models import User, Proxy
-from app.core.constants import PlanName
+from app.core.enums import PlanName
 from app.core.security import decrypt_data
 from datetime import datetime, UTC
 

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 from app.db.models import User, Scenario, ScenarioStep, ScenarioStepType
 from app.services.scenario_service import ScenarioExecutionService
-from app.core.constants import TaskKey
+from app.core.enums import TaskKey
 from app.api.schemas.actions import LikeFeedRequest, EmptyRequest
 from app.services.vk_api.base import VKAPIError # Импортируем Pydantic модели
 

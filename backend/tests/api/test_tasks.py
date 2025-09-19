@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, UTC
 from unittest.mock import AsyncMock
 
 from app.db.models import User, TaskHistory
-from app.core.constants import PlanName, TaskKey
+from app.core.enums import PlanName, TaskKey
 from app.tasks.logic.maintenance_jobs import _check_expired_plans_async
 
 pytestmark = pytest.mark.anyio

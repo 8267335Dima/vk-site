@@ -7,7 +7,7 @@ from sqlalchemy import select
 from datetime import datetime, UTC, timedelta
 
 from app.db.models import User, Payment
-from app.core.constants import PlanName
+from app.core.enums import PlanName
 
 pytestmark = pytest.mark.anyio
 

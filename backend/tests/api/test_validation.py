@@ -3,7 +3,7 @@
 import pytest
 from httpx import AsyncClient
 
-from app.core.constants import TaskKey
+from app.core.enums import TaskKey
 
 pytestmark = pytest.mark.anyio
 

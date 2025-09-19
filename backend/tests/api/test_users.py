@@ -8,7 +8,7 @@ from sqlalchemy import select
 from unittest.mock import AsyncMock
 
 from app.db.models import User, DailyStats, FilterPreset
-from app.core.constants import PlanName, FeatureKey
+from app.core.enums import PlanName, FeatureKey
 from app.db.models.user import ManagedProfile
 
 # Все тесты в этом файле должны использовать anyio

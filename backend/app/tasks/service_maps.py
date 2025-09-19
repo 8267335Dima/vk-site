@@ -1,4 +1,5 @@
 # backend/app/tasks/service_maps.py
+
 # Этот файл разрывает циклическую зависимость между runner.py и scenario_service.py
 # Он является центральным местом для сопоставления задач с их исполнителями (сервисами).
 
@@ -11,7 +12,8 @@ from app.services.story_service import StoryService
 from app.services.automation_service import AutomationService
 from app.services.message_service import MessageService
 from app.services.group_management_service import GroupManagementService
-from app.core.constants import TaskKey
+# --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+from app.core.enums import TaskKey
 from app.api.schemas import actions as ActionSchemas
 
 # Карта для исполнителя сценариев (Service, method_name)
@@ -29,7 +31,6 @@ TASK_SERVICE_MAP = {
 }
 
 # Полная карта для runner.py (Service, method_name, ParamsModel)
-# Теперь она живет здесь, а не в runner.py
 TASK_CONFIG_MAP = {
     TaskKey.LIKE_FEED: (FeedService, "like_newsfeed", ActionSchemas.LikeFeedRequest),
     TaskKey.ADD_RECOMMENDED: (OutgoingRequestService, "add_recommended_friends", ActionSchemas.AddFriendsRequest),

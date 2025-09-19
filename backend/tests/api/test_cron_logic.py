@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timedelta, UTC
 
 from app.db.models import User, Automation, Notification
-from app.core.constants import PlanName
+from app.core.enums import PlanName
 from app.tasks.logic.maintenance_jobs import _check_expired_plans_async
 
 pytestmark = pytest.mark.asyncio

@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from unittest.mock import AsyncMock
 
 from app.db.models import User, TaskHistory
-from app.core.constants import TaskKey
+from app.core.enums import TaskKey
 
 pytestmark = pytest.mark.anyio
 

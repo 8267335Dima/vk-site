@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.db.models import User, Automation
-from app.core.constants import PlanName
+from app.core.enums import PlanName
 
 pytestmark = pytest.mark.anyio
 
