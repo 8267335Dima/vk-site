@@ -1,3 +1,4 @@
+# tests/admin/test_admin_security.py
 import pytest
 from unittest.mock import AsyncMock
 import jwt
@@ -47,4 +48,3 @@ class TestAdminTokenAuthentication:
 
         mock_request = AsyncMock(session={"token": bad_token})
         assert await auth_backend.authenticate(mock_request) is False
-

@@ -62,3 +62,25 @@ class TestUserAdminComplexActions:
         assert response.status_code == 400
         response_data = json.loads(response.body)
         assert "Выберите одного пользователя" in response_data["message"]
+
+    @ASYNC_TEST
+    async def test_impersonate_fails_if_admin_user_not_found_in_db(self, db_session: AsyncSession, test_user: User, admin_user: User):
+        """
+        Тест безопасности: проверяет, что действие 'impersonate' не сработает,
+        если по какой-то причине запись главного админа отсутствует в БД,
+        даже если пользователь, выполняющий действие, аутентифицирован как админ.
+        """
+        # Arrange: Удаляем админа из БД
+        await db_session.delete(admin_user)
+        await db_session.commit()
+
+        mock_request = MagicMock(state=MagicMock(session=db_session))
+        admin_view = UserAdmin()
+
+        # Act: Пытаемся выполнить вход под другим пользователем
+        response = await admin_view.impersonate.__wrapped__(admin_view, mock_request, pks=[test_user.id])
+
+        # Assert: Ожидаем ошибку сервера, так как система находится в неконсистентном состоянии
+        assert response.status_code == 500
+        response_data = json.loads(response.body.decode())
+        assert "Admin user not found in DB" in response_data["message"]

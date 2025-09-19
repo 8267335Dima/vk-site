@@ -38,10 +38,14 @@ class AddFriendsRequest(BaseModel):
     like_config: LikeAfterAddConfig = Field(default_factory=LikeAfterAddConfig)
     send_message_on_add: bool = False
     message_text: Optional[str] = Field(None, max_length=500)
-    # ДОБАВЛЕНО: Настройки очеловечивания для приветственного сообщения
     humanized_sending: HumanizedSendingConfig = Field(default_factory=HumanizedSendingConfig)
 
-
+    @model_validator(mode='after')
+    def check_message_text_if_sending_enabled(self) -> 'AddFriendsRequest':
+        if self.send_message_on_add and (not self.message_text or not self.message_text.strip()):
+            raise ValueError('Текст сообщения не может быть пустым, если включена опция отправки.')
+        return self
+    
 class AcceptFriendsRequest(BaseModel):
     filters: ActionFilters = Field(default_factory=ActionFilters)
 

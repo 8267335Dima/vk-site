@@ -13,7 +13,7 @@ from app.services.vk_api import VKAPI, VKAPIError
 from app.core.security import decrypt_data
 from app.repositories.stats import StatsRepository
 from app.core.plans import get_features_for_plan, is_feature_available_for_plan
-from app.api.schemas.users import TaskInfoResponse, FilterPresetCreate, FilterPresetRead, ManagedProfileRead, AnalyticsSettingsRead, AnalyticsSettingsUpdate
+from app.api.schemas.users import AllLimitsResponse, LimitStatus, FilterPresetCreate, FilterPresetRead, ManagedProfileRead, AnalyticsSettingsRead, AnalyticsSettingsUpdate
 from app.core.enums import PlanName, FeatureKey
 
 router = APIRouter()
@@ -229,3 +229,23 @@ async def get_analytics_settings(
 ):
     """Возвращает текущие настройки аналитики пользователя."""
     return current_user
+
+@router.get("/me/all-limits", response_model=AllLimitsResponse)
+async def get_all_daily_limits(
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Возвращает текущее использование и общие лимиты для всех отслеживаемых действий.
+    """
+    stats_repo = StatsRepository(db)
+    today_stats = await stats_repo.get_or_create_today_stats(current_user.id)
+
+    return AllLimitsResponse(
+        likes=LimitStatus(used=today_stats.likes_count, limit=current_user.daily_likes_limit),
+        add_friends=LimitStatus(used=today_stats.friends_added_count, limit=current_user.daily_add_friends_limit),
+        messages=LimitStatus(used=today_stats.messages_sent_count, limit=current_user.daily_message_limit),
+        posts=LimitStatus(used=today_stats.posts_created_count, limit=current_user.daily_posts_limit),
+        join_groups=LimitStatus(used=today_stats.groups_joined_count, limit=current_user.daily_join_groups_limit),
+        leave_groups=LimitStatus(used=today_stats.groups_left_count, limit=current_user.daily_leave_groups_limit),
+    )

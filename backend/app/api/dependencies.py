@@ -15,6 +15,11 @@ from app.db.session import get_db, AsyncSessionFactory
 from app.repositories.user import UserRepository
 from fastapi_limiter.depends import RateLimiter
 
+from app.ai.unified_service import UnifiedAIService
+from app.core.security import decrypt_data
+from app.core.exceptions import UserActionException
+
+
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/vk")
 
 credentials_exception = HTTPException(
@@ -102,3 +107,25 @@ async def get_current_user_from_ws(
     if not user:
         raise credentials_exception
     return user
+
+async def get_ai_service(user: User = Depends(get_current_active_profile)) -> UnifiedAIService:
+    """
+    Зависимость для создания экземпляра AI-сервиса с настройками
+    текущего пользователя из базы данных.
+    """
+    api_key = decrypt_data(user.encrypted_ai_api_key)
+    
+    if not all([user.ai_provider, api_key, user.ai_model_name]):
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail="Настройки AI не сконфигурированы. Пожалуйста, укажите провайдера, модель и API ключ в настройках."
+        )
+    
+    try:
+        return UnifiedAIService(
+            provider=user.ai_provider,
+            api_key=api_key,
+            model=user.ai_model_name
+        )
+    except UserActionException as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

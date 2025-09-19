@@ -169,3 +169,46 @@ async def test_get_task_config_calculates_remaining_limit(
     
     assert slider_field is not None
     assert slider_field["max_value"] == expected_max_val
+
+async def test_run_task_fails_with_invalid_params(
+    async_client: AsyncClient, auth_headers: dict
+):
+    """
+    Тест на валидацию: проверяет, что запуск задачи с невалидными
+    параметрами (несоответствие Pydantic-модели) вернет ошибку 422.
+    """
+    task_key = TaskKey.LIKE_FEED
+    # 'count' должен быть int, а мы передаем строку
+    invalid_task_params = {"count": "много", "filters": {}}
+
+    response = await async_client.post(
+        f"/api/v1/tasks/run/{task_key.value}", headers=auth_headers, json=invalid_task_params
+    )
+
+    assert response.status_code == 422 # Unprocessable Entity
+    assert "Input should be a valid integer" in str(response.json())
+
+async def test_run_task_too_many_concurrent(
+    async_client: AsyncClient, auth_headers: dict, test_user: User, db_session: AsyncSession
+):
+    """
+    Тест: проверяет ограничение на максимальное количество одновременно
+    выполняемых задач для пользователя.
+    """
+    # Arrange: Устанавливаем лимит в 1 задачу и создаем одну уже "запущенную"
+    test_user.plan.limits['max_concurrent_tasks'] = 1 # Модифицируем лимит для теста
+    
+    # Создаем фиктивную запущенную задачу в БД
+    running_task = TaskHistory(user_id=test_user.id, task_name="Уже работает", status="STARTED")
+    db_session.add(running_task)
+    await db_session.commit()
+
+    task_key = TaskKey.LIKE_FEED
+    task_params = {"count": 10, "filters": {}}
+
+    # Act
+    response = await async_client.post(f"/api/v1/tasks/run/{task_key.value}", headers=auth_headers, json=task_params)
+
+    # Assert
+    assert response.status_code == 429 # Too Many Requests
+    assert "Достигнут лимит на одновременное выполнение задач" in response.json()["detail"]

@@ -13,6 +13,7 @@ class PostCreate(PostBase):
         description="Список готовых attachment ID (photo_id, etc.). Не более 10.",
         max_length=10 # <--- ИЗМЕНЕНИЕ: max_items -> max_length
     )
+    from_group_id: Optional[int] = Field(None, description="ID группы, от имени которой нужно опубликовать пост.")
 
 class PostRead(PostBase):
     id: int

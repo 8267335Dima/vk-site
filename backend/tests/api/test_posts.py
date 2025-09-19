@@ -1,5 +1,6 @@
 # --- START OF FILE tests/api/test_posts.py ---
 
+import aiohttp
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -135,3 +136,30 @@ async def test_schedule_batch_posts_validation_errors(
     assert response.status_code == expected_status_code
     # Проверяем, что в тексте ошибки есть ожидаемая фраза
     assert expected_detail_substring in str(response.json()["detail"])
+
+async def test_upload_image_from_url_download_failure(async_client: AsyncClient, auth_headers: dict, mocker):
+    """
+    Тест на ошибку, если не удалось скачать изображение по URL.
+    Сервер должен вернуть ошибку 400 Bad Request.
+    """
+    # Мокаем функцию скачивания, чтобы она выбрасывала исключение
+    mocker.patch(
+        "app.api.endpoints.posts._download_image_from_url",
+        side_effect=aiohttp.ClientError("Could not connect")
+    )
+    
+    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+    # Мы должны мокать класс VKAPI и настроить его экземпляр
+    mock_vk_api_class = mocker.patch("app.api.endpoints.posts.VKAPI")
+    mock_instance = mock_vk_api_class.return_value
+    # Явно делаем метод close асинхронным
+    mock_instance.close = AsyncMock()
+    # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+    
+    request_data = {"image_url": "http://invalid-url-that-will-fail.com/image.jpg"}
+    response = await async_client.post(
+        "/api/v1/posts/upload-image-from-url", headers=auth_headers, json=request_data
+    )
+
+    assert response.status_code == 400
+    assert "Не удалось скачать изображение по URL" in response.json()["detail"]

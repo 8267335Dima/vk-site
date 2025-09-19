@@ -38,3 +38,15 @@ class AnalyticsSettingsRead(AnalyticsSettingsUpdate):
     model_config = ConfigDict(
         from_attributes=True
     )
+
+class LimitStatus(BaseModel):
+    used: int
+    limit: int
+
+class AllLimitsResponse(BaseModel):
+    likes: LimitStatus
+    add_friends: LimitStatus
+    messages: LimitStatus
+    posts: LimitStatus
+    join_groups: LimitStatus
+    leave_groups: LimitStatus

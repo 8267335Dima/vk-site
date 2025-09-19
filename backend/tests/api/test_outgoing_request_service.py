@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 from app.services.outgoing_request_service import OutgoingRequestService
 from app.db.models import User
-from app.api.schemas.actions import AddFriendsRequest
+from app.api.schemas.actions import AddFriendsRequest, LikeAfterAddConfig
 from app.services.event_emitter import RedisEventEmitter
 from app.core.exceptions import UserLimitReachedError
 from app.db.models import DailyStats
@@ -141,3 +141,85 @@ async def test_add_friends_redis_lock_prevents_duplicates(
     # Ключевая проверка: несмотря на двух одинаковых людей в ответе VK,
     # реальный вызов API для отправки заявки должен быть только один.
     mock_vk_api.add_friend.assert_called_once_with(123, None)
+
+async def test_add_friends_with_liking_closed_profile(
+    db_session: AsyncSession, test_user: User, mock_emitter: RedisEventEmitter, mocker
+):
+    """
+    Тест: проверяет, что при добавлении в друзья пользователя с закрытым
+    профилем, сервис не пытается ставить лайки, а сообщает об этом в лог.
+    """
+    # Arrange
+    service = OutgoingRequestService(db=db_session, user=test_user, emitter=mock_emitter)
+    mock_vk_api = AsyncMock()
+    # Профиль пользователя закрыт (is_closed=True)
+    mock_vk_api.get_recommended_friends.return_value = {"items": [{"id": 123, "is_closed": True, "first_name": "Закрытый"}]}
+    mock_vk_api.add_friend.return_value = 1
+    service.vk_api = mock_vk_api
+    service.humanizer = AsyncMock()
+    mocker.patch('app.services.outgoing_request_service.AsyncRedis.from_url').return_value = AsyncMock()
+
+    # Включаем опцию лайкинга
+    request_params = AddFriendsRequest(count=1, like_config=LikeAfterAddConfig(enabled=True))
+
+    # Act
+    await service._add_recommended_friends_logic(request_params)
+
+    # Assert
+    # Проверяем, что заявка была отправлена
+    mock_vk_api.add_friend.assert_called_once()
+    # Ключевая проверка: метод для простановки лайков не был вызван
+    mock_vk_api.add_like.assert_not_called()
+    
+    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+    # Логика находится в _add_recommended_friends_logic, а не _like_user_content.
+    # Проверяем, что было отправлено корректное сообщение о пропуске.
+    mock_emitter.send_log.assert_any_call(
+        "Профиль Закрытый закрыт, пропуск лайкинга.", "info", target_url="https://vk.com/id123"
+    )
+
+async def test_add_friends_with_message_limit_reached_mid_task(
+    db_session: AsyncSession, test_user: User, mock_emitter: RedisEventEmitter, mocker
+):
+    """
+    Тест: если во время добавления друзей с приветственным сообщением
+    заканчивается лимит на сообщения, заявки продолжают отправляться, но без текста.
+    """
+    # Arrange
+    test_user.daily_message_limit = 1 # Лимит всего на 1 сообщение
+    stats = DailyStats(user_id=test_user.id, friends_added_count=0, messages_sent_count=0)
+    db_session.add_all([test_user, stats])
+    await db_session.commit()
+
+    service = OutgoingRequestService(db=db_session, user=test_user, emitter=mock_emitter)
+    mock_vk_api = AsyncMock()
+    mock_vk_api.get_recommended_friends.return_value = {
+        "items": [
+            {"id": 101, "first_name": "Первый"},
+            {"id": 102, "first_name": "Второй"}
+        ]
+    }
+    mock_vk_api.add_friend.return_value = 1
+    service.vk_api = mock_vk_api
+    service.humanizer = AsyncMock()
+    mocker.patch('app.services.outgoing_request_service.AsyncRedis.from_url').return_value = AsyncMock()
+
+    request_params = AddFriendsRequest(count=2, send_message_on_add=True, message_text="Привет, {name}!")
+
+    # Act
+    await service._add_recommended_friends_logic(request_params)
+
+    # Assert
+    assert mock_vk_api.add_friend.call_count == 2
+    
+    # Проверяем вызовы: первый с сообщением, второй - без
+    calls = mock_vk_api.add_friend.call_args_list
+    assert calls[0].args[0] == 101
+    assert calls[0].kwargs['text'] == "Привет, Первый!"
+    assert calls[1].args[0] == 102
+    assert calls[1].kwargs['text'] is None
+
+    # Проверяем, что в лог было отправлено предупреждение
+    mock_emitter.send_log.assert_any_call(
+        "Достигнут лимит сообщений. Заявка для Второй будет отправлена без приветствия.", "warning"
+    )

@@ -16,6 +16,10 @@ class FeatureKey(str, enum.Enum):
     AUTOMATIONS_CENTER = "automations_center"
     AGENCY_MODE = "agency_mode"
     POST_SCHEDULER = "post_scheduler"
+    AI_AUTO_RESPONDER = "ai_auto_responder"
+    PARSE_GROUP_AUDIENCE = "parse_group_audience"
+    EXPORT_CONVERSATION = "export_conversation"
+    GROUP_ACTIONS = "group_actions"
 
 class TaskKey(str, enum.Enum):
     ACCEPT_FRIENDS = "accept_friends"
@@ -28,6 +32,9 @@ class TaskKey(str, enum.Enum):
     JOIN_GROUPS = "join_groups"
     BIRTHDAY_CONGRATULATION = "birthday_congratulation"
     ETERNAL_ONLINE = "eternal_online"
+    AI_AUTO_RESPONDER = "ai_auto_responder"
+    PARSE_GROUP_AUDIENCE = "parse_group_audience"
+    EXPORT_CONVERSATION = "export_conversation"
 
 class AutomationType(str, enum.Enum):
     ACCEPT_FRIENDS = "accept_friends"

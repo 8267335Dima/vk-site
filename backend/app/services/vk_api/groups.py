@@ -1,4 +1,4 @@
-from typing import Optional, Dict, Any
+from typing import List, Optional, Dict, Any
 from .base import BaseVKSection
 
 class GroupsAPI(BaseVKSection):
@@ -14,3 +14,14 @@ class GroupsAPI(BaseVKSection):
 
     async def join(self, group_id: int) -> Optional[int]:
         return await self._make_request("groups.join", params={"group_id": group_id})
+    
+    async def getById(self, group_id: str, fields: str = "") -> Optional[List[Dict[str, Any]]]:
+        """Возвращает информацию о сообществе по его ID."""
+        params = {"group_id": group_id, "fields": fields}
+        return await self._make_request("groups.getById", params=params)
+    
+    async def getMembers(self, group_id: int, count: int = 1000, fields: str = "") -> Optional[Dict[str, Any]]:
+        """Возвращает список участников сообщества."""
+        params = {"group_id": group_id, "count": count, "fields": fields}
+        return await self._make_request("groups.getMembers", params=params)
+    

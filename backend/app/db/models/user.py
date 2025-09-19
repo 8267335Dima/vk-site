@@ -5,9 +5,22 @@ from sqlalchemy import (
     Column, Integer, String, DateTime, ForeignKey, BigInteger,
     UniqueConstraint, Boolean, text, Enum, Text
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 from app.core.enums import DelayProfile, TeamMemberRole
+
+
+class Group(Base):
+    __tablename__ = "groups"
+    id = Column(Integer, primary_key=True)
+    vk_group_id = Column(BigInteger, unique=True, nullable=False, index=True)
+    name = Column(String, nullable=False)
+    photo_100 = Column(String)
+    
+    admin_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    admin = relationship("User", back_populates="managed_groups")
+
+    encrypted_access_token = Column(String, nullable=False)
 
 class User(Base):
     __tablename__ = "users"
@@ -51,6 +64,12 @@ class User(Base):
     scheduled_posts = relationship("ScheduledPost", back_populates="user", cascade="all, delete-orphan")
     task_history = relationship("TaskHistory", back_populates="user", cascade="all, delete-orphan")
     team_membership = relationship("TeamMember", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    managed_groups = relationship("Group", back_populates="admin", cascade="all, delete-orphan")
+
+    ai_provider: Mapped[str | None] = mapped_column(String, nullable=True, comment="e.g., 'openai', 'google'")
+    encrypted_ai_api_key: Mapped[str | None] = mapped_column(String, nullable=True)
+    ai_model_name: Mapped[str | None] = mapped_column(String, nullable=True, comment="e.g., 'gpt-4o', 'gemini-2.5-flash'")
+    ai_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class Team(Base):

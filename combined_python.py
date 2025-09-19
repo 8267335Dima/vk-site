@@ -38,7 +38,8 @@ from app.api.endpoints import (
     auth_router, users_router, proxies_router, tasks_router,
     stats_router, automations_router, billing_router, analytics_router,
     scenarios_router, notifications_router, posts_router, teams_router,
-    websockets_router, support_router, task_history_router, admin_router
+    websockets_router, support_router, task_history_router, admin_router, ai_router, 
+    groups_router, data_router
 )
 from fastapi_limiter import FastAPILimiter
 
@@ -178,6 +179,9 @@ def create_app(db_engine: AsyncEngine | None = None) -> FastAPI:
     app.include_router(tasks_router, prefix=f"{api_prefix}/tasks", tags=["Tasks"])
     app.include_router(task_history_router, prefix=f"{api_prefix}/tasks", tags=["Tasks"])
     app.include_router(admin_router, prefix=f"{api_prefix}/admin", tags=["Admin"])
+    app.include_router(ai_router, prefix=f"{api_prefix}/ai", tags=["AI"])
+    app.include_router(groups_router, prefix=f"{api_prefix}/groups", tags=["Groups"])
+    app.include_router(data_router, prefix=f"{api_prefix}/data", tags=["Data & Parsing"])
 
     return app
 
@@ -923,6 +927,146 @@ class GlobalSettingsAdmin(ModelView, model=GlobalSetting):
     column_list = [GlobalSetting.key, GlobalSetting.value, GlobalSetting.is_enabled, GlobalSetting.description]
     form_columns = [GlobalSetting.key, GlobalSetting.value, GlobalSetting.is_enabled, GlobalSetting.description]
 
+# --- backend/app\ai\base.py ---
+
+# backend/app/ai/base.py
+from abc import ABC, abstractmethod
+from typing import List, Dict
+
+class AIBaseService(ABC):
+    """Абстрактный базовый класс для всех сервисов ИИ."""
+
+    @abstractmethod
+    async def get_response(
+        self,
+        system_prompt: str,
+        message_history: List[Dict[str, str]],
+        user_input: str
+    ) -> str:
+        """
+        Генерирует ответ на основе промпта, истории и нового сообщения.
+
+        Args:
+            system_prompt: Инструкция для модели (например, "Ты - менеджер...").
+            message_history: Список сообщений в формате [{"role": "user/assistant", "content": "..."}].
+            user_input: Последнее сообщение от пользователя.
+
+        Returns:
+            Сгенерированный текстовый ответ.
+        """
+        pass
+
+# --- backend/app\ai\gemini.py ---
+
+# backend/app/ai/gemini.py
+import google.generativeai as genai
+from typing import List, Dict
+from app.ai.base import AIBaseService
+from app.core.config import settings # Нужно будет добавить GEMINI_API_KEY в Settings
+
+# ВНИМАНИЕ: Добавьте в ваш .env файл:
+# GEMINI_API_KEY=ваш_ключ
+
+class GeminiService(AIBaseService):
+    def __init__(self):
+        genai.configure(api_key=settings.GEMINI_API_KEY)
+        self.model = genai.GenerativeModel('gemini-1.5-flash')
+
+    async def get_response(
+        self,
+        system_prompt: str,
+        message_history: List[Dict[str, str]],
+        user_input: str
+    ) -> str:
+        try:
+            # Формируем историю для Gemini
+            history = []
+            for msg in message_history:
+                role = 'user' if msg['role'] == 'user' else 'model'
+                history.append({'role': role, 'parts': [msg['content']]})
+
+            chat = self.model.start_chat(history=history)
+            
+            # Добавляем системный промпт к последнему сообщению пользователя
+            full_prompt = f"{system_prompt}\n\n---\n\n{user_input}"
+            
+            response = await chat.send_message_async(full_prompt)
+            return response.text
+        except Exception as e:
+            # Логирование ошибки
+            print(f"Gemini API error: {e}")
+            return "Извините, произошла ошибка при генерации ответа."
+
+# --- backend/app\ai\unified_service.py ---
+
+# backend/app/ai/unified_service.py
+from openai import AsyncOpenAI
+from typing import List, Dict, Literal
+import structlog
+
+from app.core.exceptions import UserActionException
+
+log = structlog.get_logger(__name__)
+
+AIProvider = Literal["openai", "google"]
+
+PROVIDER_CONFIG = {
+    "openai": {
+        "base_url": None, # Используется по умолчанию
+    },
+    "google": {
+        "base_url": "https://generativelanguage.googleapis.com/v1beta",
+    }
+}
+
+class UnifiedAIService:
+    """
+    Унифицированный сервис для работы с различными LLM через OpenAI-совместимый клиент.
+    """
+    def __init__(self, provider: AIProvider, api_key: str, model: str):
+        if not api_key:
+            raise UserActionException("API ключ для нейросети не предоставлен.")
+        if provider not in PROVIDER_CONFIG:
+            raise UserActionException(f"Провайдер ИИ '{provider}' не поддерживается.")
+
+        config = PROVIDER_CONFIG[provider]
+        
+        # Для Google нужно добавить /models/{model}:generateContent
+        api_path = f"/models/{model}:generateContent" if provider == "google" else ""
+        
+        self.client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=f"{config['base_url']}{api_path}" if config['base_url'] else None
+        )
+        self.model = model
+
+    async def get_response(
+        self,
+        system_prompt: str,
+        message_history: List[Dict[str, str]],
+        user_input: str
+    ) -> str:
+        """
+        Генерирует ответ от LLM.
+        """
+        messages = [
+            {"role": "system", "content": system_prompt},
+            *message_history,
+            {"role": "user", "content": user_input}
+        ]
+        
+        try:
+            completion = await self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=0.7,
+            )
+            response = completion.choices[0].message.content
+            return response.strip() if response else "Нейросеть не смогла дать ответ."
+        except Exception as e:
+            log.error("ai.service.error", provider=self.client.base_url, model=self.model, error=str(e))
+            raise UserActionException(f"Ошибка при обращении к API нейросети: {e}")
+
 # --- backend/app\api\dependencies.py ---
 
 # backend/app/api/dependencies.py
@@ -1104,6 +1248,50 @@ async def get_performance_data(db: AsyncSession = Depends(get_db)):
         })
 
     return PerformanceDataResponse(data=performance_data)
+
+# --- backend/app\api\endpoints\ai.py ---
+
+# backend/app/api/endpoints/ai.py
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.db.session import get_db
+from app.db.models import User
+from app.api.dependencies import get_current_active_profile
+from app.api.schemas.ai import AISettingsUpdate, AISettingsRead
+from app.core.security import encrypt_data, decrypt_data
+
+router = APIRouter()
+
+@router.put("/settings", response_model=AISettingsRead)
+async def update_ai_settings(
+    settings_data: AISettingsUpdate,
+    user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
+    """Обновляет и шифрует настройки ИИ для пользователя."""
+    user.ai_provider = settings_data.provider
+    user.encrypted_ai_api_key = encrypt_data(settings_data.api_key)
+    user.ai_model_name = settings_data.model_name
+    user.ai_system_prompt = settings_data.system_prompt
+    
+    await db.commit()
+    
+    return AISettingsRead(
+        provider=user.ai_provider,
+        model_name=user.ai_model_name,
+        system_prompt=user.ai_system_prompt,
+        is_configured=bool(user.encrypted_ai_api_key)
+    )
+
+@router.get("/settings", response_model=AISettingsRead)
+async def get_ai_settings(user: User = Depends(get_current_active_profile)):
+    """Возвращает текущие настройки ИИ пользователя (без ключа)."""
+    return AISettingsRead(
+        provider=user.ai_provider,
+        model_name=user.ai_model_name,
+        system_prompt=user.ai_system_prompt,
+        is_configured=bool(user.encrypted_ai_api_key)
+    )
 
 # --- backend/app\api\endpoints\analytics.py ---
 
@@ -1721,6 +1909,100 @@ async def payment_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         await db.commit()
         
     return {"status": "ok"}
+
+# --- backend/app\api\endpoints\data.py ---
+
+# backend/app/api/endpoints/data.py
+from fastapi import APIRouter, Depends
+from starlette.responses import StreamingResponse
+from app.api.dependencies import get_current_active_profile
+from app.db.session import get_db
+from app.services.data_service import DataService
+from app.api.schemas.data import ParsingRequest
+
+router = APIRouter()
+
+@router.post("/parse/group-activity")
+async def parse_group_activity(
+    request: ParsingRequest,
+    user=Depends(get_current_active_profile),
+    db=Depends(get_db)
+):
+    """Запускает парсинг активной аудитории сообщества."""
+    service = DataService(db=db, user=user, emitter=None) # Эмиттер не нужен для парсинга
+    results = await service.parse_active_group_audience(request.group_id, request.filters)
+    return results
+
+@router.get("/export/conversation/{peer_id}")
+async def export_conversation(
+    peer_id: int,
+    user=Depends(get_current_active_profile),
+    db=Depends(get_db)
+):
+    """Скачивает историю переписки с указанным пользователем/чатом."""
+    service = DataService(db=db, user=user, emitter=None)
+    
+    file_name = f"conversation_{peer_id}.json"
+    headers = {'Content-Disposition': f'attachment; filename="{file_name}"'}
+    
+    return StreamingResponse(
+        service.export_conversation_as_json(peer_id),
+        media_type="application/json",
+        headers=headers
+    )
+
+# --- backend/app\api\endpoints\groups.py ---
+
+# backend/app/api/endpoints/groups.py
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+
+from app.db.session import get_db
+from app.db.models import User, Group
+from app.api.dependencies import get_current_active_profile
+from app.api.schemas.groups import AddGroupRequest, AvailableGroupsResponse, GroupRead
+from app.services.group_identity_service import GroupIdentityService
+from app.core.security import encrypt_data
+
+router = APIRouter()
+
+@router.post("", response_model=GroupRead, status_code=status.HTTP_201_CREATED)
+async def add_managed_group(
+    request_data: AddGroupRequest,
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
+    """Добавляет сообщество в список управляемых."""
+    group_info = await GroupIdentityService.get_group_info_by_token(
+        request_data.access_token, request_data.vk_group_id
+    )
+    if not group_info:
+        raise HTTPException(status_code=400, detail="Неверный токен доступа или ID сообщества.")
+
+    existing = (await db.execute(select(Group).where(Group.vk_group_id == request_data.vk_group_id))).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=409, detail="Это сообщество уже добавлено в систему.")
+
+    new_group = Group(
+        **group_info,
+        admin_user_id=current_user.id,
+        encrypted_access_token=encrypt_data(request_data.access_token)
+    )
+    db.add(new_group)
+    await db.commit()
+    await db.refresh(new_group)
+    
+    return new_group
+
+@router.get("", response_model=AvailableGroupsResponse)
+async def get_managed_groups(
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
+    """Возвращает список управляемых сообществ."""
+    await db.refresh(current_user, ['managed_groups'])
+    return {"groups": current_user.managed_groups}
 
 # --- backend/app\api\endpoints\notifications.py ---
 
@@ -3590,6 +3872,29 @@ class EternalOnlineRequest(BaseModel):
         default_factory=dict
     )
 
+# --- backend/app\api\schemas\ai.py ---
+
+# backend/app/api/schemas/ai.py
+from pydantic import BaseModel, Field
+from typing import Literal
+
+AIProvider = Literal["openai", "google"]
+
+class AISettingsUpdate(BaseModel):
+    provider: AIProvider = Field(..., description="Провайдер ИИ")
+    api_key: str = Field(..., min_length=10, description="API ключ от сервиса")
+    model_name: str = Field("gemini-2.5-flash", description="Название модели")
+    system_prompt: str = Field("Ты — полезный ассистент.", max_length=2000)
+
+class AISettingsRead(BaseModel):
+    provider: AIProvider | None = None
+    model_name: str | None = None
+    system_prompt: str | None = None
+    is_configured: bool = Field(False, description="Установлен ли API ключ")
+
+    class Config:
+        from_attributes = True
+
 # --- backend/app\api\schemas\analytics.py ---
 
 # --- START OF FILE backend/app/api/schemas/analytics.py ---
@@ -3708,6 +4013,42 @@ class CreatePaymentRequest(BaseModel):
 class CreatePaymentResponse(BaseModel):
     confirmation_url: str
 
+# --- backend/app\api\schemas\data.py ---
+
+# backend/app/api/schemas/data.py
+from pydantic import BaseModel, Field
+
+class ParsingFilters(BaseModel):
+    posts_depth: int = Field(10, ge=1, le=100, description="Глубина анализа постов на стене.")
+
+class ParsingRequest(BaseModel):
+    group_id: int = Field(..., gt=0)
+    filters: ParsingFilters = Field(default_factory=ParsingFilters)
+
+# --- backend/app\api\schemas\groups.py ---
+
+# backend/app/api/schemas/groups.py
+from pydantic import BaseModel, Field
+from typing import List
+
+class GroupBase(BaseModel):
+    vk_group_id: int
+    name: str
+    photo_100: str | None = None
+
+class GroupRead(GroupBase):
+    id: int
+
+    class Config:
+        from_attributes = True
+
+class AddGroupRequest(BaseModel):
+    vk_group_id: int = Field(..., gt=0)
+    access_token: str
+
+class AvailableGroupsResponse(BaseModel):
+    groups: List[GroupRead]
+
 # --- backend/app\api\schemas\notifications.py ---
 
 # --- backend/app/api/schemas/notifications.py ---
@@ -3744,6 +4085,7 @@ class PostCreate(PostBase):
         description="Список готовых attachment ID (photo_id, etc.). Не более 10.",
         max_length=10 # <--- ИЗМЕНЕНИЕ: max_items -> max_length
     )
+    from_group_id: Optional[int] = Field(None, description="ID группы, от имени которой нужно опубликовать пост.")
 
 class PostRead(PostBase):
     id: int
@@ -4105,6 +4447,9 @@ class Settings(BaseSettings):
 
     ALLOWED_ORIGINS: str
 
+    OPENAI_API_KEY: Optional[str] = None
+    GEMINI_API_KEY: Optional[str] = None
+
     model_config = SettingsConfigDict(
         env_file=ENV_FILE,
         env_file_encoding='utf-8',
@@ -4193,6 +4538,10 @@ class FeatureKey(str, enum.Enum):
     AUTOMATIONS_CENTER = "automations_center"
     AGENCY_MODE = "agency_mode"
     POST_SCHEDULER = "post_scheduler"
+    AI_AUTO_RESPONDER = "ai_auto_responder"
+    PARSE_GROUP_AUDIENCE = "parse_group_audience"
+    EXPORT_CONVERSATION = "export_conversation"
+    GROUP_ACTIONS = "group_actions"
 
 class TaskKey(str, enum.Enum):
     ACCEPT_FRIENDS = "accept_friends"
@@ -4205,6 +4554,9 @@ class TaskKey(str, enum.Enum):
     JOIN_GROUPS = "join_groups"
     BIRTHDAY_CONGRATULATION = "birthday_congratulation"
     ETERNAL_ONLINE = "eternal_online"
+    AI_AUTO_RESPONDER = "ai_auto_responder"
+    PARSE_GROUP_AUDIENCE = "parse_group_audience"
+    EXPORT_CONVERSATION = "export_conversation"
 
 class AutomationType(str, enum.Enum):
     ACCEPT_FRIENDS = "accept_friends"
@@ -5006,9 +5358,22 @@ from sqlalchemy import (
     Column, Integer, String, DateTime, ForeignKey, BigInteger,
     UniqueConstraint, Boolean, text, Enum, Text
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 from app.core.enums import DelayProfile, TeamMemberRole
+
+
+class Group(Base):
+    __tablename__ = "groups"
+    id = Column(Integer, primary_key=True)
+    vk_group_id = Column(BigInteger, unique=True, nullable=False, index=True)
+    name = Column(String, nullable=False)
+    photo_100 = Column(String)
+    
+    admin_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    admin = relationship("User", back_populates="managed_groups")
+
+    encrypted_access_token = Column(String, nullable=False)
 
 class User(Base):
     __tablename__ = "users"
@@ -5052,6 +5417,12 @@ class User(Base):
     scheduled_posts = relationship("ScheduledPost", back_populates="user", cascade="all, delete-orphan")
     task_history = relationship("TaskHistory", back_populates="user", cascade="all, delete-orphan")
     team_membership = relationship("TeamMember", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    managed_groups = relationship("Group", back_populates="admin", cascade="all, delete-orphan")
+
+    ai_provider: Mapped[str | None] = mapped_column(String, nullable=True, comment="e.g., 'openai', 'google'")
+    encrypted_ai_api_key: Mapped[str | None] = mapped_column(String, nullable=True)
+    ai_model_name: Mapped[str | None] = mapped_column(String, nullable=True, comment="e.g., 'gpt-4o', 'gemini-2.5-flash'")
+    ai_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class Team(Base):
@@ -5204,6 +5575,71 @@ class UserRepository(BaseRepository):
 # --- backend/app\repositories\__init__.py ---
 
 
+
+# --- backend/app\services\ai_message_service.py ---
+
+# backend/app/services/ai_message_service.py
+from app.services.base import BaseVKService
+from app.db.models import User
+from app.ai.unified_service import UnifiedAIService
+from app.services.message_humanizer import MessageHumanizer
+from app.core.security import decrypt_data
+from app.core.exceptions import UserActionException
+
+class AIMessageService(BaseVKService):
+
+    async def _initialize_ai_service(self) -> UnifiedAIService:
+        """Инициализирует ИИ-сервис на основе настроек пользователя."""
+        api_key = decrypt_data(self.user.encrypted_ai_api_key)
+        if not (self.user.ai_provider and api_key and self.user.ai_model_name):
+            raise UserActionException("Настройки ИИ не сконфигурированы.")
+        
+        return UnifiedAIService(
+            provider=self.user.ai_provider,
+            api_key=api_key,
+            model=self.user.ai_model_name
+        )
+
+    async def process_unanswered_conversations(self, params: dict):
+        """Обрабатывает непрочитанные диалоги с помощью ИИ."""
+        await self._initialize_vk_api()
+        ai_service = await self._initialize_ai_service()
+        
+        response = await self.vk_api.messages.getConversations(filter='unanswered', count=params.get('count', 10))
+        if not response or not response.get('items'):
+            await self.emitter.send_log("Новых диалогов для ИИ-ответа не найдено.", "info")
+            return
+            
+        system_prompt = self.user.ai_system_prompt or "Отвечай кратко и по делу."
+        
+        for conv in response['items']:
+            peer_id = conv.get('conversation', {}).get('peer', {}).get('id')
+            if not peer_id: continue
+
+            history_response = await self.vk_api.messages.getHistory(user_id=peer_id, count=20)
+            if not history_response or not history_response.get('items'): continue
+            
+            messages = history_response['items']
+            last_user_message = next((m['text'] for m in reversed(messages) if m['from_id'] == peer_id), None)
+            if not last_user_message: continue
+
+            message_history = []
+            for msg in reversed(messages[1:]):
+                role = "user" if msg['from_id'] == peer_id else "assistant"
+                message_history.append({"role": role, "content": msg['text']})
+
+            ai_response = await ai_service.get_response(
+                system_prompt=system_prompt,
+                message_history=message_history,
+                user_input=last_user_message
+            )
+
+            humanizer = MessageHumanizer(self.vk_api, self.emitter)
+            await humanizer.send_messages_sequentially(
+                targets=[{"id": peer_id}], message_template=ai_response,
+                speed="normal", simulate_typing=True
+            )
+            await self.vk_api.messages.markAsRead(peer_id=peer_id)
 
 # --- backend/app\services\analytics_service.py ---
 
@@ -5554,6 +5990,71 @@ class BaseVKService:
             if self.vk_api:
                 await self.vk_api.close()
 
+# --- backend/app\services\data_service.py ---
+
+# backend/app/services/data_service.py
+import json
+from typing import List, Dict, Any, AsyncGenerator
+from app.services.base import BaseVKService
+from app.api.schemas.data import ParsingFilters # Новая Pydantic-модель
+
+class DataService(BaseVKService):
+
+    async def parse_active_group_audience(self, group_id: int, filters: ParsingFilters) -> List[Dict[str, Any]]:
+        """Собирает активную аудиторию (лайки/комментарии) с постов сообщества."""
+        await self._initialize_vk_api()
+        
+        wall_response = await self.vk_api.wall.get(owner_id=-group_id, count=filters.posts_depth)
+        if not wall_response or not wall_response.get('items'):
+            return []
+
+        active_user_ids = set()
+        for post in wall_response['items']:
+            post_id = post['id']
+            # Собираем лайкнувших
+            likes_resp = await self.vk_api.likes.getList(type='post', owner_id=-group_id, item_id=post_id)
+            if likes_resp and likes_resp.get('items'):
+                active_user_ids.update(likes_resp['items'])
+            
+            # Собираем комментаторов
+            comments_resp = await self.vk_api.wall.getComments(owner_id=-group_id, post_id=post_id)
+            if comments_resp and comments_resp.get('items'):
+                active_user_ids.update(c['from_id'] for c in comments_resp['items'])
+
+        if not active_user_ids:
+            return []
+
+        # Получаем профили собранных ID
+        profiles = await self.vk_api.users.get(user_ids=",".join(map(str, list(active_user_ids)[:1000])))
+        return profiles or []
+
+    async def export_conversation_as_json(self, peer_id: int) -> AsyncGenerator[str, None]:
+        """Экспортирует историю диалога в виде JSON-строк."""
+        await self._initialize_vk_api()
+        offset = 0
+        count = 200
+        
+        yield '[\n' # Начало JSON-массива
+        
+        is_first_chunk = True
+        while True:
+            response = await self.vk_api.messages.getHistory(user_id=peer_id, count=count, offset=offset, rev=1)
+            if not response or not response.get('items'):
+                break
+
+            items = response['items']
+            for message in items:
+                if not is_first_chunk:
+                    yield ',\n'
+                yield json.dumps(message, ensure_ascii=False, indent=2)
+                is_first_chunk = False
+
+            if len(items) < count:
+                break
+            offset += count
+            
+        yield '\n]\n' # Конец JSON-массива
+
 # --- backend/app\services\event_emitter.py ---
 
 # --- backend/app/services/event_emitter.py ---
@@ -5840,6 +6341,44 @@ class FriendManagementService(BaseVKService):
                     await self.emitter.send_log(f"Не удалось удалить друга {name}. Причина: {error_msg}", "error", target_url=url)
 
         await self.emitter.send_log(f"Чистка завершена. Удалено друзей: {processed_count}.", "success")
+
+# --- backend/app\services\group_identity_service.py ---
+
+# backend/app/services/group_identity_service.py
+from typing import Dict, Any
+from app.services.vk_api import VKAPI, VKAPIError
+import structlog
+
+log = structlog.get_logger(__name__)
+
+class GroupIdentityService:
+    @staticmethod
+    async def get_group_info_by_token(group_token: str, group_id: int) -> Dict[str, Any] | None:
+        """Проверяет токен группы и возвращает информацию о ней."""
+        vk_api = VKAPI(access_token=group_token)
+        try:
+            # Выполняем запрос от имени группы, чтобы проверить токен
+            response = await vk_api.groups.getById(group_id=str(group_id), fields="photo_100")
+            if not response or not isinstance(response, list) or len(response) == 0:
+                return None
+            
+            group_info = response[0]
+            
+            # Дополнительная проверка, что токен принадлежит именно этой группе
+            if group_info.get("id") != group_id:
+                log.warn("group_token.mismatch", expected_id=group_id, actual_id=group_info.get("id"))
+                return None
+            
+            return {
+                "vk_group_id": group_info["id"],
+                "name": group_info["name"],
+                "photo_100": group_info.get("photo_100")
+            }
+        except VKAPIError as e:
+            log.error("group_token.validation_failed", error=str(e))
+            return None
+        finally:
+            await vk_api.close()
 
 # --- backend/app\services\group_management_service.py ---
 
@@ -6882,6 +7421,41 @@ class SystemService:
             return setting["value"]
         return 5
 
+# --- backend/app\services\test_data.py ---
+
+# tests/api/test_data.py
+import pytest
+from httpx import AsyncClient
+from unittest.mock import AsyncMock
+
+pytestmark = pytest.mark.anyio
+
+@pytest.fixture
+def mock_data_service(mocker):
+    """Мокает DataService для изоляции тестов API."""
+    # Патчим сам класс в том модуле, где он используется (в эндпоинте)
+    mock_service_class = mocker.patch("app.api.endpoints.data.DataService")
+    # Настраиваем экземпляр, который будет возвращаться при создании
+    mock_instance = mock_service_class.return_value
+    mock_instance.parse_active_group_audience = AsyncMock(return_value=[{"id": 1, "first_name": "Активный"}])
+    return mock_instance
+
+async def test_parse_group_activity_endpoint(
+    async_client: AsyncClient, auth_headers: dict, mock_data_service: AsyncMock
+):
+    """Тест эндпоинта для парсинга."""
+    response = await async_client.post(
+        "/api/v1/data/parse/group-activity",
+        headers=auth_headers,
+        json={"group_id": 123, "filters": {"posts_depth": 5}}
+    )
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["first_name"] == "Активный"
+    mock_data_service.parse_active_group_audience.assert_awaited_once()
+
 # --- backend/app\services\vk_user_filter.py ---
 
 # backend/app/services/vk_user_filter.py
@@ -7110,7 +7684,7 @@ class FriendsAPI(BaseVKSection):
 
 # --- backend/app\services\vk_api\groups.py ---
 
-from typing import Optional, Dict, Any
+from typing import List, Optional, Dict, Any
 from .base import BaseVKSection
 
 class GroupsAPI(BaseVKSection):
@@ -7126,6 +7700,11 @@ class GroupsAPI(BaseVKSection):
 
     async def join(self, group_id: int) -> Optional[int]:
         return await self._make_request("groups.join", params={"group_id": group_id})
+    
+    async def getById(self, group_id: str, fields: str = "") -> Optional[List[Dict[str, Any]]]:
+        """Возвращает информацию о сообществе по его ID."""
+        params = {"group_id": group_id, "fields": fields}
+        return await self._make_request("groups.getById", params=params)
 
 # --- backend/app\services\vk_api\likes.py ---
 
@@ -7136,6 +7715,10 @@ class LikesAPI(BaseVKSection):
     async def add(self, item_type: str, owner_id: int, item_id: int) -> Optional[Dict[str, Any]]:
         params = {"type": item_type, "owner_id": owner_id, "item_id": item_id}
         return await self._make_request("likes.add", params=params)
+    
+    async def getList(self, type: str, owner_id: int, item_id: int, count: int = 1000) -> Optional[Dict[str, Any]]:
+        params = {"type": type, "owner_id": owner_id, "item_id": item_id, "filter": "likes", "count": count}
+        return await self._make_request("likes.getList", params=params)
 
 # --- backend/app\services\vk_api\messages.py ---
 
@@ -7296,6 +7879,10 @@ class WallAPI(BaseVKSection):
         if owner_id:
             params["owner_id"] = owner_id
         return await self._make_request("wall.delete", params=params)
+    
+    async def getComments(self, owner_id: int, post_id: int, count: int = 100) -> Optional[Dict[str, Any]]:
+        params = {"owner_id": owner_id, "post_id": post_id, "count": count, "thread_items_count": 0}
+        return await self._make_request("wall.getComments", params=params)
 
 # --- backend/app\services\vk_api\__init__.py ---
 
@@ -8311,7 +8898,7 @@ import structlog
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from contextlib import asynccontextmanager
-
+from sqlalchemy.orm import selectinload
 from app.db.session import AsyncSessionFactory
 from app.db.models import TaskHistory, User, Automation, Notification
 from app.core.plans import get_limits_for_plan
@@ -8357,20 +8944,27 @@ async def _clear_old_task_history_async():
 
 async def _check_expired_plans_async(session: AsyncSession | None = None):
     """Проверяет и деактивирует истекшие тарифные планы пользователей."""
-    async with get_session(session) as db_session: # Используем db_session внутри
+    async with get_session(session) as db_session:
         now = datetime.datetime.now(datetime.UTC)
 
-        # --- ИСПРАВЛЕНИЕ 1: Получаем ID истекшего плана один раз ---
+        # --- НАЧАЛО ИСПРАВЛЕНИЯ ---
         expired_plan_stmt = select(Plan.id).where(Plan.name_id == PlanName.EXPIRED.name)
-        expired_plan_id = (await db_session.execute(expired_plan_stmt)).scalar_one()
+        expired_plan_id = (await db_session.execute(expired_plan_stmt)).scalar_one_or_none()
 
-        # --- ИСПРАВЛЕНИЕ 2: Сравниваем plan_id, а не объект plan ---
+        # Если системный тариф 'Expired' не найден в БД, это критическая ошибка конфигурации.
+        # Задача не может продолжать работу.
+        if not expired_plan_id:
+            log.critical("maintenance.fatal_error", message="Expired plan not found in the database. Cannot process expired users.")
+            return
+        # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+        
         stmt = select(User).where(
             User.plan_id != expired_plan_id,
             User.plan_expires_at != None,
             User.plan_expires_at < now
-        )
-        expired_users = (await db_session.execute(stmt)).scalars().all()
+        ).options(selectinload(User.plan)) # Добавил selectinload для оптимизации
+        
+        expired_users = (await db_session.execute(stmt)).scalars().unique().all()
 
         if not expired_users:
             return
@@ -8392,7 +8986,6 @@ async def _check_expired_plans_async(session: AsyncSession | None = None):
             update(Automation).where(Automation.user_id.in_(user_ids_to_deactivate)).values(is_active=False)
         )
 
-        # --- ИСПРАВЛЕНИЕ 3: Обновляем plan_id, а не plan ---
         await db_session.execute(
             update(User).where(User.id.in_(user_ids_to_deactivate)).values(
                 plan_id=expired_plan_id,
@@ -8400,8 +8993,7 @@ async def _check_expired_plans_async(session: AsyncSession | None = None):
             )
         )
 
-        # ▼▼▼ ГЛАВНОЕ ИСПРАВЛЕНИЕ ЗДЕСЬ ▼▼▼
-        if not session: # Если сессия не была передана (production), то коммитим
+        if not session:
             await db_session.commit()
-        else: # Если сессия была передана (тесты), делаем flush
+        else:
             await db_session.flush()

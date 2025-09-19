@@ -21,7 +21,8 @@ from app.api.endpoints import (
     auth_router, users_router, proxies_router, tasks_router,
     stats_router, automations_router, billing_router, analytics_router,
     scenarios_router, notifications_router, posts_router, teams_router,
-    websockets_router, support_router, task_history_router, admin_router
+    websockets_router, support_router, task_history_router, admin_router, ai_router, 
+    groups_router, data_router
 )
 from fastapi_limiter import FastAPILimiter
 
@@ -161,6 +162,9 @@ def create_app(db_engine: AsyncEngine | None = None) -> FastAPI:
     app.include_router(tasks_router, prefix=f"{api_prefix}/tasks", tags=["Tasks"])
     app.include_router(task_history_router, prefix=f"{api_prefix}/tasks", tags=["Tasks"])
     app.include_router(admin_router, prefix=f"{api_prefix}/admin", tags=["Admin"])
+    app.include_router(ai_router, prefix=f"{api_prefix}/ai", tags=["AI"])
+    app.include_router(groups_router, prefix=f"{api_prefix}/groups", tags=["Groups"])
+    app.include_router(data_router, prefix=f"{api_prefix}/data", tags=["Data & Parsing"])
 
     return app
 

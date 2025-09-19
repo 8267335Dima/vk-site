@@ -1,8 +1,7 @@
-# docker-compose.yml (Финальная версия для локальной разработки)
+# docker-compose.yml
 
 services:
   postgres:
-    # ... без изменений ...
     image: postgres:16-alpine
     container_name: social_pilot_postgres_local_dev
     env_file: ./.env
@@ -18,7 +17,6 @@ services:
       retries: 5
 
   redis:
-    # ... без изменений ...
     image: redis:7-alpine
     container_name: social_pilot_redis_local_dev
     ports:
@@ -32,7 +30,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # Сервис для ARQ Worker, работающий с вашим локальным кодом
   worker:
     build:
       context: .
@@ -41,23 +38,23 @@ services:
     volumes:
       - ./backend:/app
     env_file:
-      - ./.env # <-- Сначала загружаем все переменные из .env
+      - ./.env
 
-    # --- ДОБАВЬТЕ ЭТОТ БЛОК ---
-    # Переопределяем адрес сервера БД специально для этого контейнера
+    # --- НАЧАЛО ИСПРАВЛЕНИЯ ---
+    # Этот блок переопределяет переменные из .env специально для этого контейнера.
+    # Теперь worker будет искать БД и Redis по их сервисным именам внутри Docker-сети.
     environment:
-      - POSTGRES_SERVER=postgres # <-- Используем имя сервиса
-      - REDIS_HOST=redis # <-- Также делаем это и для Redis, это лучшая практика
-    # ---------------------------
+      - POSTGRES_SERVER=postgres
+      - REDIS_HOST=redis
+    # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
 
     restart: always
     depends_on:
       redis:
         condition: service_healthy
-      postgres: # <-- Добавим зависимость и от postgres
+      postgres:
         condition: service_healthy
 
-# ... блок volumes без изменений ...
 volumes:
   postgres_data_dev: {}
   redis_data_dev: {}

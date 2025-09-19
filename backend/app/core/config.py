@@ -39,6 +39,9 @@ class Settings(BaseSettings):
 
     ALLOWED_ORIGINS: str
 
+    OPENAI_API_KEY: Optional[str] = None
+    GEMINI_API_KEY: Optional[str] = None
+
     model_config = SettingsConfigDict(
         env_file=ENV_FILE,
         env_file_encoding='utf-8',

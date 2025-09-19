@@ -34,7 +34,7 @@ npm run dev (запустит весь ваш код)
 
 cd frontend && yarn dev
 
-cd backend && alembic revision --autogenerate -m "add timezone" && alembic upgrade head
+cd backend && alembic revision --autogenerate -m "Initial schema creation" && alembic upgrade head
 
 
 

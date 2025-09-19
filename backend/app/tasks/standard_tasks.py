@@ -4,7 +4,8 @@ import structlog
 from sqlalchemy import select, update
 from sqlalchemy.orm import joinedload
 from datetime import datetime, UTC
-
+from app.repositories.stats import StatsRepository # <-- ДОБАВЬТЕ ЭТОТ ИМПОРТ
+from app.api.schemas.users import AllLimitsResponse, LimitStatus
 from app.db.models import User, TaskHistory, Automation
 from app.db.session import AsyncSessionFactory
 from app.services.event_emitter import RedisEventEmitter
@@ -34,11 +35,10 @@ def arq_task_runner(func):
         async with get_session_context() as session:
             task_history = None
             emitter = None
-            task_name = "Неизвестная задача"
-            created_at = None
-            user_id = None
+            user = None
             
             try:
+                # Загружаем сразу все необходимые данные
                 stmt = select(TaskHistory).where(TaskHistory.id == task_history_id).options(
                     joinedload(TaskHistory.user).selectinload(User.proxies)
                 )
@@ -48,24 +48,23 @@ def arq_task_runner(func):
                     log.error("task.runner.not_found_final", task_history_id=task_history_id)
                     return
 
-                task_name = task_history.task_name
-                created_at = task_history.created_at
-                user_id = task_history.user.id
-
+                user = task_history.user
                 emitter = emitter_for_test or RedisEventEmitter(ctx['redis_pool'])
-                emitter.set_context(user_id, task_history_id)
+                emitter.set_context(user.id, task_history_id)
                 
+                # Обновляем статус задачи на "ВЫПОЛНЯЕТСЯ"
                 task_history.status = "STARTED"
                 task_history.started_at = datetime.now(UTC)
                 await session.commit()
-                
-                await emitter.send_task_status_update(status="STARTED", task_name=task_name, created_at=created_at)
+                await emitter.send_task_status_update(status="STARTED", task_name=task_history.task_name, created_at=task_history.created_at)
 
-                if task_history.user.is_shadow_banned:
+                if user.is_shadow_banned:
                     raise UserActionException("Действие отменено (теневой бан).")
 
-                summary_result = await func(session, task_history.user, task_history.parameters or {}, emitter)
+                # Выполняем основную логику задачи
+                summary_result = await func(session, user, task_history.parameters or {}, emitter)
 
+                # Обновляем статус на "УСПЕШНО"
                 task_history.status = "SUCCESS"
                 task_history.result = summary_result if isinstance(summary_result, str) else "Задача успешно выполнена."
 
@@ -75,13 +74,13 @@ def arq_task_runner(func):
                     task_history.status = "FAILURE"
                     if isinstance(e, VKAuthError):
                         task_history.result = "Ошибка авторизации VK. Токен невалиден."
-                        log.error("task_runner.auth_error_critical", user_id=user_id)
-                        if emitter: await emitter.send_system_notification(session, f"Критическая ошибка: токен VK недействителен для задачи '{task_name}'. Автоматизации остановлены.", "error")
-                        await session.execute(update(Automation).where(Automation.user_id == user_id).values(is_active=False))
+                        log.error("task_runner.auth_error_critical", user_id=user.id)
+                        if emitter: await emitter.send_system_notification(session, f"Критическая ошибка: токен VK недействителен для задачи '{task_history.task_name}'. Автоматизации остановлены.", "error")
+                        await session.execute(update(Automation).where(Automation.user_id == user.id).values(is_active=False))
                     else:
                         error_message = str(getattr(e, 'message', e))
                         task_history.result = f"Ошибка: {error_message}"
-                        if emitter: await emitter.send_system_notification(session, f"Задача '{task_name}' завершилась с ошибкой: {error_message}", "error")
+                        if emitter: await emitter.send_system_notification(session, f"Задача '{task_history.task_name}' завершилась с ошибкой: {error_message}", "error")
 
             except Exception as e:
                 if task_history:
@@ -89,23 +88,33 @@ def arq_task_runner(func):
                     task_history.status = "FAILURE"
                     task_history.result = f"Внутренняя ошибка сервера: {type(e).__name__}"
                     log.exception("task_runner.unhandled_exception", id=task_history_id)
-                    if emitter: await emitter.send_system_notification(session, f"Задача '{task_name}' завершилась из-за внутренней ошибки сервера.", "error")
+                    if emitter: await emitter.send_system_notification(session, f"Задача '{task_history.task_name}' завершилась из-за внутренней ошибки сервера.", "error")
             
             finally:
-                if task_history:
+                if task_history and user and emitter:
                     task_history.finished_at = datetime.now(UTC)
-                    final_status = task_history.status
-                    final_result = task_history.result
-                    
                     await session.commit()
                     
-                    if emitter:
-                        await emitter.send_task_status_update(
-                            status=final_status,
-                            result=final_result,
-                            task_name=task_name,
-                            created_at=created_at
-                        )
+                    # Отправляем финальный статус задачи
+                    await emitter.send_task_status_update(
+                        status=task_history.status,
+                        result=task_history.result,
+                        task_name=task_history.task_name,
+                        created_at=task_history.created_at
+                    )
+                    
+                    # <<< ИЗМЕНЕНИЕ: Отправляем полный срез лимитов после КАЖДОЙ задачи >>>
+                    stats_repo = StatsRepository(session)
+                    today_stats = await stats_repo.get_or_create_today_stats(user.id)
+                    all_limits = AllLimitsResponse(
+                        likes=LimitStatus(used=today_stats.likes_count, limit=user.daily_likes_limit),
+                        add_friends=LimitStatus(used=today_stats.friends_added_count, limit=user.daily_add_friends_limit),
+                        messages=LimitStatus(used=today_stats.messages_sent_count, limit=user.daily_message_limit),
+                        posts=LimitStatus(used=today_stats.posts_created_count, limit=user.daily_posts_limit),
+                        join_groups=LimitStatus(used=today_stats.groups_joined_count, limit=user.daily_join_groups_limit),
+                        leave_groups=LimitStatus(used=today_stats.groups_left_count, limit=user.daily_leave_groups_limit),
+                    )
+                    await emitter.send_stats_update(all_limits.model_dump())
     return wrapper
 
 

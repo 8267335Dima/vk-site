@@ -1,3 +1,4 @@
+# --- Standard Group ---
 - id: "like_feed"
   name: "Лайки в ленте новостей"
   description: "Анализирует вашу ленту новостей и проставляет лайки на посты, соответствующие фильтрам."
@@ -64,6 +65,8 @@
   modal_count_label: "Максимум вступлений"
   default_count: 20
   group: "standard"
+
+# --- Online Group ---
 - id: "eternal_online"
   name: "Статус 'Онлайн'"
   description: "Поддерживает статус 'онлайн' для вашего аккаунта по гибкому расписанию с имитацией человеческого поведения."
@@ -81,3 +84,27 @@
       "5": { "is_active": true, "start_time": "09:00", "end_time": "22:00" }
       "6": { "is_active": false, "start_time": "11:00", "end_time": "20:00" }
       "7": { "is_active": false, "start_time": "11:00", "end_time": "20:00" }
+
+# --- NEW: AI Group ---
+- id: "ai_auto_responder"
+  name: "ИИ-Автоответчик"
+  description: "Автоматически отвечает на новые сообщения с помощью нейросети (Gemini/GPT), используя заданную личность."
+  has_filters: true # Фильтры на диалоги (непрочитанные/новые)
+  has_count_slider: true
+  modal_count_label: "Максимум ответов за запуск"
+  default_count: 10
+  group: "ai"
+
+# --- NEW: Parsing Group ---
+- id: "parse_group_audience"
+  name: "Парсер аудитории групп"
+  description: "Собирает активную аудиторию (лайки, комментарии) из указанных сообществ конкурентов."
+  has_filters: true
+  has_count_slider: false
+  group: "parsing"
+- id: "export_conversation"
+  name: "Экспорт диалогов"
+  description: "Скачивает полную историю переписки с пользователем или из чата в формате JSON."
+  has_filters: false
+  has_count_slider: false
+  group: "parsing"
