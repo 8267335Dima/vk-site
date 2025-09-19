@@ -1,3 +1,5 @@
+# backend/app/admin/__init__.py
+
 from sqladmin import Admin
 from app.core.config import settings
 from .auth import AdminAuth
@@ -11,7 +13,6 @@ def init_admin(app, engine):
     from .views.monitoring.task_history import TaskHistoryAdmin
     from .views.monitoring.daily_stats import DailyStatsAdmin
     from .views.monitoring.action_log import ActionLogAdmin
-    from .views.monitoring.dashboard import DashboardView
 
     from .views.support.ticket import SupportTicketAdmin
     from .views.support.message import TicketMessageAdmin
@@ -24,7 +25,6 @@ def init_admin(app, engine):
     
     admin = Admin(app, engine, authentication_backend=authentication_backend, title="SMM Combine Admin")
 
-    admin.add_view(DashboardView)
 
     admin.add_view(UserAdmin)
     admin.add_view(PaymentAdmin)
