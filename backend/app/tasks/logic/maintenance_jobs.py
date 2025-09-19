@@ -4,7 +4,7 @@ import structlog
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from contextlib import asynccontextmanager
-
+from sqlalchemy.orm import selectinload
 from app.db.session import AsyncSessionFactory
 from app.db.models import TaskHistory, User, Automation, Notification
 from app.core.plans import get_limits_for_plan
@@ -50,20 +50,27 @@ async def _clear_old_task_history_async():
 
 async def _check_expired_plans_async(session: AsyncSession | None = None):
     """Проверяет и деактивирует истекшие тарифные планы пользователей."""
-    async with get_session(session) as db_session: # Используем db_session внутри
+    async with get_session(session) as db_session:
         now = datetime.datetime.now(datetime.UTC)
 
-        # --- ИСПРАВЛЕНИЕ 1: Получаем ID истекшего плана один раз ---
+        # --- НАЧАЛО ИСПРАВЛЕНИЯ ---
         expired_plan_stmt = select(Plan.id).where(Plan.name_id == PlanName.EXPIRED.name)
-        expired_plan_id = (await db_session.execute(expired_plan_stmt)).scalar_one()
+        expired_plan_id = (await db_session.execute(expired_plan_stmt)).scalar_one_or_none()
 
-        # --- ИСПРАВЛЕНИЕ 2: Сравниваем plan_id, а не объект plan ---
+        # Если системный тариф 'Expired' не найден в БД, это критическая ошибка конфигурации.
+        # Задача не может продолжать работу.
+        if not expired_plan_id:
+            log.critical("maintenance.fatal_error", message="Expired plan not found in the database. Cannot process expired users.")
+            return
+        # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+        
         stmt = select(User).where(
             User.plan_id != expired_plan_id,
             User.plan_expires_at != None,
             User.plan_expires_at < now
-        )
-        expired_users = (await db_session.execute(stmt)).scalars().all()
+        ).options(selectinload(User.plan)) # Добавил selectinload для оптимизации
+        
+        expired_users = (await db_session.execute(stmt)).scalars().unique().all()
 
         if not expired_users:
             return
@@ -85,7 +92,6 @@ async def _check_expired_plans_async(session: AsyncSession | None = None):
             update(Automation).where(Automation.user_id.in_(user_ids_to_deactivate)).values(is_active=False)
         )
 
-        # --- ИСПРАВЛЕНИЕ 3: Обновляем plan_id, а не plan ---
         await db_session.execute(
             update(User).where(User.id.in_(user_ids_to_deactivate)).values(
                 plan_id=expired_plan_id,
@@ -93,8 +99,7 @@ async def _check_expired_plans_async(session: AsyncSession | None = None):
             )
         )
 
-        # ▼▼▼ ГЛАВНОЕ ИСПРАВЛЕНИЕ ЗДЕСЬ ▼▼▼
-        if not session: # Если сессия не была передана (production), то коммитим
+        if not session:
             await db_session.commit()
-        else: # Если сессия была передана (тесты), делаем flush
+        else:
             await db_session.flush()
