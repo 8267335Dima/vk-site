@@ -24,7 +24,6 @@ AnyTaskRequest = Union[
     BirthdayCongratulationRequest, EternalOnlineRequest
 ]
 
-# --- ЕДИНЫЙ ИСТОЧНИК ИСТИНЫ ДЛЯ ВСЕХ ЗАДАЧ ARQ ---
 TASK_FUNC_MAP = {
     TaskKey.ACCEPT_FRIENDS: "accept_friend_requests_task",
     TaskKey.LIKE_FEED: "like_feed_task",

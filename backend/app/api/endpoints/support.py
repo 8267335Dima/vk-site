@@ -1,3 +1,5 @@
+# backend/app/api/endpoints/support.py
+
 import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +11,7 @@ from app.db.session import get_db
 from app.db.models import User, SupportTicket, TicketMessage, TicketStatus
 from app.api.dependencies import get_current_active_profile
 from app.api.schemas.support import SupportTicketCreate, SupportTicketRead, TicketMessageCreate, SupportTicketList
+from app.services.system_service import SystemService
 
 router = APIRouter()
 
@@ -17,7 +20,6 @@ async def get_my_tickets(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    """Получить список всех тикетов текущего пользователя."""
     stmt = select(SupportTicket).where(SupportTicket.user_id == current_user.id).order_by(SupportTicket.updated_at.desc())
     result = await db.execute(stmt)
     return result.scalars().all()
@@ -28,7 +30,6 @@ async def create_ticket(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    """Создать новый тикет в техподдержку."""
     new_ticket = SupportTicket(
         user_id=current_user.id,
         subject=ticket_data.subject,
@@ -38,7 +39,8 @@ async def create_ticket(
     first_message = TicketMessage(
         ticket=new_ticket,
         author_id=current_user.id,
-        message=ticket_data.message
+        message=ticket_data.message,
+        attachment_url=str(ticket_data.attachment_url) if ticket_data.attachment_url else None
     )
     
     db.add(new_ticket)
@@ -53,7 +55,6 @@ async def get_ticket_details(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    """Получить детали тикета и всю переписку по нему."""
     stmt = select(SupportTicket).where(
         SupportTicket.id == ticket_id,
         SupportTicket.user_id == current_user.id
@@ -74,8 +75,6 @@ async def reply_to_ticket(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    """Ответить на тикет."""
-    # Получаем тикет и блокируем его для обновления
     stmt = select(SupportTicket).where(
         SupportTicket.id == ticket_id,
         SupportTicket.user_id == current_user.id
@@ -85,18 +84,29 @@ async def reply_to_ticket(
     if not ticket:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Тикет не найден.")
     if ticket.status == TicketStatus.CLOSED:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Этот тикет закрыт.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Этот тикет закрыт навсегда и не может быть переоткрыт.")
+
+    if ticket.status == TicketStatus.RESOLVED:
+        reopen_limit = await SystemService.get_ticket_reopen_limit()
+        if ticket.reopen_count >= reopen_limit:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Достигнут лимит на переоткрытие решенных тикетов ({reopen_limit})."
+            )
+        ticket.reopen_count += 1
+        ticket.status = TicketStatus.OPEN
+    else:
+        ticket.status = TicketStatus.OPEN
 
     new_message = TicketMessage(
         ticket_id=ticket.id,
         author_id=current_user.id,
-        message=message_data.message
+        message=message_data.message,
+        attachment_url=str(message_data.attachment_url) if message_data.attachment_url else None
     )
     db.add(new_message)
     
-    # Меняем статус на OPEN, если на него ответил пользователь (вдруг админ поставил IN_PROGRESS)
-    ticket.status = TicketStatus.OPEN
-    ticket.updated_at = datetime.datetime.utcnow()
+    ticket.updated_at = datetime.datetime.now(datetime.UTC)
     
     await db.commit()
     await db.refresh(ticket, attribute_names=['messages'])

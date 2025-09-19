@@ -1,4 +1,3 @@
-# backend/app/api/endpoints/users.py
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
@@ -69,27 +68,26 @@ async def read_users_me(current_user: User = Depends(get_current_active_profile)
     
     user_info_vk = user_info_vk_list[0]
 
-
     is_plan_active = True
-    plan_name = current_user.plan
+    plan_name = current_user.plan.name_id
     if current_user.plan_expires_at and current_user.plan_expires_at < datetime.utcnow():
         is_plan_active = False
-        plan_name = PlanName.EXPIRED
+        plan_name = PlanName.EXPIRED.name
 
     features = get_features_for_plan(plan_name)
     
-    # Теперь user_info_vk - это словарь, и распаковка пройдет успешно
     return {
         **user_info_vk,
         "id": current_user.id,
         "vk_id": current_user.vk_id,
-        "plan": current_user.plan,
+        "plan": current_user.plan.display_name,
         "plan_expires_at": current_user.plan_expires_at,
         "is_admin": current_user.is_admin,
         "delay_profile": current_user.delay_profile.value,
         "is_plan_active": is_plan_active,
         "available_features": features,
     }
+
 @router.get("/me/limits", response_model=DailyLimitsResponse)
 async def get_daily_limits(
     current_user: User = Depends(get_current_active_profile),
@@ -111,144 +109,10 @@ async def update_user_delay_profile(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    if request_data.delay_profile != DelayProfile.normal and not is_feature_available_for_plan(current_user.plan, FeatureKey.FAST_SLOW_DELAY_PROFILE):
+    if request_data.delay_profile != DelayProfile.normal and not await is_feature_available_for_plan(current_user.plan.name_id, FeatureKey.FAST_SLOW_DELAY_PROFILE, user=current_user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Смена скорости доступна только на PRO тарифе.")
         
     current_user.delay_profile = request_data.delay_profile
     await db.commit()
     await db.refresh(current_user)
-    # Переиспользуем эндпоинт, чтобы не дублировать логику
     return await read_users_me(current_user)
-
-@router.put("/me/analytics-settings", response_model=AnalyticsSettingsRead)
-async def update_analytics_settings(
-    settings_data: AnalyticsSettingsUpdate,
-    current_user: User = Depends(get_current_active_profile),
-    db: AsyncSession = Depends(get_db)
-):
-    """Обновляет персональные настройки пользователя для сбора аналитики."""
-    current_user.analytics_settings_posts_count = settings_data.posts_count
-    current_user.analytics_settings_photos_count = settings_data.photos_count
-    await db.commit()
-    await db.refresh(current_user)
-    return AnalyticsSettingsRead(
-        posts_count=current_user.analytics_settings_posts_count,
-        photos_count=current_user.analytics_settings_photos_count
-    )
-
-@router.get("/task-info", response_model=TaskInfoResponse)
-async def get_task_info(
-    task_key: str = Query(...),
-    current_user: User = Depends(get_current_active_profile)
-):
-    vk_token = decrypt_data(current_user.encrypted_vk_token)
-    vk_api = VKAPI(access_token=vk_token)
-    count = 0
-
-    try:
-        if task_key == "accept_friends":
-            response = await vk_api.friends.getRequests() # Метод VK API для заявок
-            count = response.get("count", 0) if response else 0
-        
-        elif task_key == "remove_friends":
-            # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
-            user_info_list = await vk_api.users.get(user_ids=str(current_user.vk_id), fields="counters")
-            if user_info_list:
-                user_info = user_info_list[0]
-                count = user_info.get("counters", {}).get("friends", 0)
-    except VKAPIError as e:
-        print(f"Could not fetch task info for {task_key} due to VK API error: {e}")
-        count = 0
-    finally:
-        await vk_api.close()
-
-    return TaskInfoResponse(count=count)
-
-@router.get("/me/filter-presets", response_model=List[FilterPresetRead])
-async def get_filter_presets(
-    action_type: str = Query(...),
-    current_user: User = Depends(get_current_active_profile),
-    db: AsyncSession = Depends(get_db)
-):
-    stmt = select(FilterPreset).where(
-        FilterPreset.user_id == current_user.id,
-        FilterPreset.action_type == action_type
-    ).order_by(FilterPreset.name)
-    result = await db.execute(stmt)
-    return result.scalars().all()
-
-@router.post("/me/filter-presets", response_model=FilterPresetRead, status_code=status.HTTP_201_CREATED)
-async def create_filter_preset(
-    preset_data: FilterPresetCreate,
-    current_user: User = Depends(get_current_active_profile),
-    db: AsyncSession = Depends(get_db)
-):
-    new_preset = FilterPreset(user_id=current_user.id, **preset_data.model_dump())
-    db.add(new_preset)
-    try:
-        await db.commit()
-        await db.refresh(new_preset)
-        return new_preset
-    except IntegrityError:
-        await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Пресет с таким названием для данного действия уже существует."
-        )
-
-@router.delete("/me/filter-presets/{preset_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_filter_preset(
-    preset_id: int,
-    current_user: User = Depends(get_current_active_profile),
-    db: AsyncSession = Depends(get_db)
-):
-    stmt = delete(FilterPreset).where(
-        FilterPreset.id == preset_id,
-        FilterPreset.user_id == current_user.id
-    )
-    result = await db.execute(stmt)
-    if result.rowcount == 0:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пресет не найден.")
-    await db.commit()
-
-
-@router.get("/me/managed-profiles", response_model=List[ManagedProfileRead], summary="Получить список профилей для переключения")
-async def get_managed_profiles(
-    manager: User = Depends(get_current_manager_user),
-    db: AsyncSession = Depends(get_db)
-):
-    result = await db.execute(
-        select(User)
-        .options(selectinload(User.managed_profiles).selectinload(ManagedProfile.profile))
-        .where(User.id == manager.id)
-    )
-    manager_with_profiles = result.scalar_one()
-
-    all_users_map = {manager.id: manager}
-    for rel in manager_with_profiles.managed_profiles:
-        all_users_map[rel.profile.id] = rel.profile
-
-    all_vk_ids = [user.vk_id for user in all_users_map.values()]
-    vk_info_map = {}
-    if all_vk_ids:
-        vk_api = VKAPI(decrypt_data(manager.encrypted_vk_token))
-        try:
-            # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
-            user_infos = await vk_api.users.get(user_ids=",".join(map(str, all_vk_ids)), fields="photo_50")
-            if user_infos:
-                vk_info_map = {info['id']: info for info in user_infos}
-        finally:
-            await vk_api.close()
-
-    profiles_info = []
-    for user in all_users_map.values():
-        vk_info = vk_info_map.get(user.vk_id, {})
-        profiles_info.append({
-            "id": user.id,
-            "vk_id": user.vk_id,
-            "first_name": vk_info.get("first_name", "N/A"),
-            "last_name": vk_info.get("last_name", ""),
-            "photo_50": vk_info.get("photo_50", "")
-        })
-
-    return sorted(profiles_info, key=lambda p: p['id'] != manager.id)

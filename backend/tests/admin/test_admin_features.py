@@ -1,94 +1,55 @@
-# tests/admin/test_admin_features.py
-
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
-from datetime import datetime, timezone
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from unittest.mock import MagicMock
 
-from app.admin.views.user import UserAdmin
-from app.admin.views.support import SupportTicketAdmin
+from app.admin.views.management.user import UserAdmin
+from app.admin.views.support.ticket import SupportTicketAdmin
 from app.db.models import User, SupportTicket, TicketStatus, LoginHistory, BannedIP
-from app.core.enums import PlanName, TicketStatus
 
 ASYNC_TEST = pytest.mark.asyncio
 
-class TestUserAdminNewActions:
-    @ASYNC_TEST
-    async def test_delete_account_action(self):
-        mock_session = AsyncMock()
-        mock_user = MagicMock(spec=User)
-        mock_session.get.return_value = mock_user
-        mock_request = MagicMock(state=MagicMock(session=mock_session))
-        admin_view = UserAdmin()
-
-        response = await admin_view.delete_account(mock_request, pks=[1])
-
-        mock_session.delete.assert_awaited_with(mock_user)
-        mock_session.commit.assert_awaited_once()
-        assert response["message"] == "Удалено аккаунтов: 1"
+class TestUserAdminActions:
 
     @ASYNC_TEST
-    async def test_ban_user_ip_action(self):
-        mock_session = AsyncMock()
-        # Симулируем, что IP в базе есть, но бана еще нет
-        mock_session.execute.side_effect = [
-            MagicMock(scalar_one_or_none=lambda: "192.168.1.1"), # Находим IP
-            MagicMock(scalar_one_or_none=lambda: None)           # Проверяем - бана нет
-        ]
-        mock_request = MagicMock(state=MagicMock(session=mock_session))
+    async def test_soft_delete_and_restore_action(self, db_session: AsyncSession, test_user: User):
+        mock_request = MagicMock(state=MagicMock(session=db_session))
         admin_view = UserAdmin()
 
-        response = await admin_view.ban_user_ip(mock_request, pks=[1])
+        await admin_view.soft_delete(mock_request, pks=[test_user.id])
+        await db_session.refresh(test_user)
+        assert test_user.is_deleted is True
 
-        # Проверяем, что был вызван add для объекта BannedIP
-        assert mock_session.add.call_count == 1
-        added_object = mock_session.add.call_args[0][0]
-        assert isinstance(added_object, BannedIP)
-        assert added_object.ip_address == "192.168.1.1"
-        
-        mock_session.commit.assert_awaited_once()
-        assert response["message"] == "Заблокировано IP-адресов: 1"
-
-    @ASYNC_TEST
-    async def test_ban_user_ip_when_already_banned(self):
-        mock_session = AsyncMock()
-        mock_session.execute.side_effect = [
-            MagicMock(scalar_one_or_none=lambda: "192.168.1.1"), # Находим IP
-            MagicMock(scalar_one_or_none=lambda: MagicMock(spec=BannedIP)) # Проверяем - бан есть
-        ]
-        mock_request = MagicMock(state=MagicMock(session=mock_session))
-        admin_view = UserAdmin()
-
-        response = await admin_view.ban_user_ip(mock_request, pks=[1])
-
-        mock_session.add.assert_not_called()
-        mock_session.commit.assert_awaited_once() # commit все равно вызывается
-        assert response["message"] == "Заблокировано IP-адресов: 0"
+        await admin_view.restore(mock_request, pks=[test_user.id])
+        await db_session.refresh(test_user)
+        assert test_user.is_deleted is False
 
 class TestSupportTicketNewActions:
-    @ASYNC_TEST
-    async def test_resolve_tickets_action(self):
-        mock_session = AsyncMock()
-        mock_ticket = MagicMock(spec=SupportTicket)
-        mock_session.get.return_value = mock_ticket
-        mock_request = MagicMock(state=MagicMock(session=mock_session))
-        admin_view = SupportTicketAdmin()
-
-        await admin_view.resolve_tickets(mock_request, pks=[1])
-
-        assert mock_ticket.status == TicketStatus.RESOLVED
-        assert mock_ticket.updated_at is not None
-        mock_session.commit.assert_awaited_once()
 
     @ASYNC_TEST
-    async def test_close_permanently_action(self):
-        mock_session = AsyncMock()
-        mock_ticket = MagicMock(spec=SupportTicket)
-        mock_session.get.return_value = mock_ticket
-        mock_request = MagicMock(state=MagicMock(session=mock_session))
+    async def test_resolve_tickets_action(self, db_session: AsyncSession, test_user: User):
+        ticket = SupportTicket(user_id=test_user.id, subject="Test", status=TicketStatus.OPEN)
+        db_session.add(ticket)
+        await db_session.commit()
+        
+        mock_request = MagicMock(state=MagicMock(session=db_session))
         admin_view = SupportTicketAdmin()
+        
+        await admin_view.resolve_tickets(mock_request, pks=[ticket.id])
+        
+        await db_session.refresh(ticket)
+        assert ticket.status == TicketStatus.RESOLVED
 
-        await admin_view.close_permanently(mock_request, pks=[1])
+    @ASYNC_TEST
+    async def test_close_permanently_action(self, db_session: AsyncSession, test_user: User):
+        ticket = SupportTicket(user_id=test_user.id, subject="Test", status=TicketStatus.OPEN)
+        db_session.add(ticket)
+        await db_session.commit()
 
-        assert mock_ticket.status == TicketStatus.CLOSED
-        assert mock_ticket.updated_at is not None
-        mock_session.commit.assert_awaited_once()
+        mock_request = MagicMock(state=MagicMock(session=db_session))
+        admin_view = SupportTicketAdmin()
+        
+        await admin_view.close_permanently(mock_request, pks=[ticket.id])
+        
+        await db_session.refresh(ticket)
+        assert ticket.status == TicketStatus.CLOSED

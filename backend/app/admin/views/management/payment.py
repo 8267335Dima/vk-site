@@ -1,10 +1,10 @@
-# backend/app/admin/views/payment.py
 from sqladmin import ModelView
 from app.db.models import Payment, PaymentStatus
 from sqladmin.filters import AllUniqueStringValuesFilter
 
 class PaymentAdmin(ModelView, model=Payment):
-    identity = "payment"
+    category = "Управление"
+    name = "Платеж"
     name_plural = "Платежи"
     icon = "fa-solid fa-ruble-sign"
     can_create = False
@@ -20,3 +20,6 @@ class PaymentAdmin(ModelView, model=Payment):
     ]
     
     column_default_sort = ("created_at", True)
+    column_labels = {
+        "plan_name": "Название тарифа"
+    }

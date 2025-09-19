@@ -1,13 +1,12 @@
-# backend/app/api/endpoints/auth.py
-
 from datetime import timedelta, datetime, UTC
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy.orm import selectinload
 
 from app.db.session import get_db
-from app.db.models import User, LoginHistory
+from app.db.models import User, LoginHistory, Plan
 from app.api.schemas.auth import EnrichedTokenResponse
 from app.services.vk_api import is_token_valid
 from app.core.security import create_access_token, encrypt_data
@@ -48,24 +47,26 @@ async def login_via_vk(
     user = result.scalar_one_or_none()
 
     encrypted_token = encrypt_data(vk_token)
-    base_plan_limits = get_limits_for_plan(PlanName.BASE)
-
+    
     if user:
         user.encrypted_vk_token = encrypted_token
     else:
+        base_plan_stmt = select(Plan).where(Plan.name_id == PlanName.BASE.name)
+        base_plan = (await db.execute(base_plan_stmt)).scalar_one_or_none()
+        if not base_plan:
+            raise HTTPException(status_code=500, detail="Базовый тарифный план не найден в системе.")
+
         user_data = {
             "vk_id": vk_id,
             "encrypted_vk_token": encrypted_token,
-            "plan": PlanName.BASE.name,
+            "plan_id": base_plan.id,
             "plan_expires_at": datetime.now(UTC) + timedelta(days=14),
         }
-        
-        base_plan_limits = get_limits_for_plan(PlanName.BASE)
         
         user_model_columns = {c.name for c in User.__table__.columns}
         valid_limits_for_db = {
             key: value
-            for key, value in base_plan_limits.items()
+            for key, value in base_plan.limits.items()
             if key in user_model_columns
         }
         user_data.update(valid_limits_for_db)
@@ -74,14 +75,17 @@ async def login_via_vk(
         db.add(user)
 
     if str(vk_id) == settings.ADMIN_VK_ID:
-        admin_limits = get_limits_for_plan(PlanName.PRO)
+        admin_plan_stmt = select(Plan).where(Plan.name_id == PlanName.PRO.name)
+        admin_plan = (await db.execute(admin_plan_stmt)).scalar_one_or_none()
+        if not admin_plan:
+             raise HTTPException(status_code=500, detail="PRO тарифный план не найден в системе.")
+
         user.is_admin = True
-        # ИЗМЕНЕНО: Используем .name, чтобы в БД записалась строка "PRO"
-        user.plan = PlanName.PRO.name
+        user.plan_id = admin_plan.id
         user.plan_expires_at = None
         
         user_model_columns = {c.name for c in User.__table__.columns}
-        for key, value in admin_limits.items():
+        for key, value in admin_plan.limits.items():
             if key in user_model_columns:
                 setattr(user, key, value)
 
@@ -125,27 +129,20 @@ async def switch_profile(
     db: AsyncSession = Depends(get_db)
 ) -> EnrichedTokenResponse:
     
-    # --- НАЧАЛО ИСПРАВЛЕННОЙ ЛОГИКИ ---
-    # Загружаем все необходимые связи для проверки прав
     await db.refresh(manager, attribute_names=["managed_profiles", "team_membership"])
     if manager.team_membership:
         await db.refresh(manager.team_membership, attribute_names=["profile_accesses"])
 
-    # 1. Начинаем собирать все ID профилей, к которым у пользователя есть доступ
-    allowed_profile_ids = {manager.id} # Пользователь всегда может "переключиться" на себя
+    allowed_profile_ids = {manager.id}
 
-    # 2. Добавляем профили, которыми он управляет напрямую
     if manager.managed_profiles:
         allowed_profile_ids.update({p.profile_user_id for p in manager.managed_profiles})
 
-    # 3. Добавляем профили, к которым ему дали доступ как члену команды
     if manager.team_membership and manager.team_membership.profile_accesses:
         allowed_profile_ids.update({p.profile_user_id for p in manager.team_membership.profile_accesses})
 
-    # 4. Проверяем, есть ли желаемый ID в собранном списке
     if request_data.profile_id not in allowed_profile_ids:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступ к этому профилю запрещен.")
-    # --- КОНЕЦ ИСПРАВЛЕННОЙ ЛОГИКИ ---
 
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     token_data = {

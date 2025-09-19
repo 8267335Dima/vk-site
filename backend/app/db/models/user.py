@@ -1,5 +1,3 @@
-# backend/app/db/models/user.py
-
 from datetime import datetime, UTC
 from sqlalchemy import (
     Column, Integer, String, DateTime, ForeignKey, BigInteger,
@@ -7,8 +5,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 from app.db.base import Base
-from app.core.enums import DelayProfile, TeamMemberRole, PlanName
-
+from app.core.enums import DelayProfile, TeamMemberRole
 
 class User(Base):
     __tablename__ = "users"
@@ -16,7 +13,13 @@ class User(Base):
     vk_id = Column(BigInteger, unique=True, index=True, nullable=False)
     encrypted_vk_token = Column(String, nullable=False)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
-    plan = Column(String, nullable=False, server_default=PlanName.BASE.value)
+    last_active_at = Column(DateTime(timezone=True), onupdate=lambda: datetime.now(UTC), nullable=True, index=True)
+    is_frozen = Column(Boolean, nullable=False, server_default='false')
+    is_deleted = Column(Boolean, nullable=False, server_default='false', index=True)
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
+    is_shadow_banned = Column(Boolean, nullable=False, server_default='false', index=True)
+    
+    plan_id = Column(Integer, ForeignKey("plans.id"), nullable=True)
     plan_expires_at = Column(DateTime(timezone=True), nullable=True)
     is_admin = Column(Boolean, nullable=False, server_default='false')
     daily_likes_limit = Column(Integer, nullable=False, server_default=text('0'))
@@ -28,6 +31,9 @@ class User(Base):
     delay_profile = Column(Enum(DelayProfile), nullable=False, server_default=DelayProfile.normal.name)
     analytics_settings_posts_count = Column(Integer, nullable=False, server_default=text('100'))
     analytics_settings_photos_count = Column(Integer, nullable=False, server_default=text('200'))
+    
+    plan = relationship("Plan", back_populates="users", lazy="joined")
+    login_history = relationship("LoginHistory", back_populates="user", cascade="all, delete-orphan", order_by="desc(LoginHistory.timestamp)")
     proxies = relationship("Proxy", back_populates="user", cascade="all, delete-orphan", lazy="select")
     task_history = relationship("TaskHistory", back_populates="user", cascade="all, delete-orphan")
     daily_stats = relationship("DailyStats", back_populates="user", cascade="all, delete-orphan")
@@ -87,4 +93,4 @@ class LoginHistory(Base):
     timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
     ip_address = Column(String, nullable=True)
     user_agent = Column(Text, nullable=True)
-    user = relationship("User")
+    user = relationship("User", back_populates="login_history")

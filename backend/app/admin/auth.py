@@ -1,5 +1,3 @@
-# backend/app/admin/auth.py
-
 from sqladmin.authentication import AuthenticationBackend
 from fastapi import Request
 from sqlalchemy import select

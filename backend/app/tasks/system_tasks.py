@@ -1,9 +1,9 @@
 # backend/app/tasks/system_tasks.py
 
 import structlog
-from sqlalchemy import select
-from sqlalchemy.orm import selectinload, Session
+from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager
+from sqlalchemy.orm import selectinload
 
 from app.db.models import ScheduledPost, ScheduledPostStatus
 from app.db.session import AsyncSessionFactory
@@ -86,10 +86,8 @@ async def publish_scheduled_post_task(ctx, post_id: int, db_session_for_test: Se
         finally:
             await vk_api.close()
 
-        # Коммитим изменения только если мы не в режиме теста
         if db_session_for_test:
             await session.flush()
-        # В рабочем режиме коммитим транзакцию
         else:
             await session.commit()
 

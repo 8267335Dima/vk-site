@@ -19,19 +19,24 @@ redis_settings = RedisSettings(
 
 import asyncio
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from redis.asyncio import Redis as AsyncRedis
 from arq.connections import create_pool
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy import update
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.responses import JSONResponse
+from datetime import datetime, UTC
 
 from app.arq_config import redis_settings
 from app.core.config import settings
 from app.core.logging import configure_logging
-from app.db.session import engine as main_engine
+from app.db.session import engine as main_engine, get_db as get_db_session
+from app.db.models import User
 from app.admin import init_admin
 from app.services.websocket_manager import redis_listener
+from app.api.dependencies import get_current_active_profile, get_token_payload
 from app.api.endpoints import (
     auth_router, users_router, proxies_router, tasks_router,
     stats_router, automations_router, billing_router, analytics_router,
@@ -72,6 +77,8 @@ def create_app(db_engine: AsyncEngine | None = None) -> FastAPI:
             decode_responses=True
         )
         app.state.redis_client = redis_client
+        app.state.activity_redis = AsyncRedis.from_url(f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/3")
+
 
         listener_task = asyncio.create_task(run_redis_listener(redis_client))
 
@@ -83,7 +90,8 @@ def create_app(db_engine: AsyncEngine | None = None) -> FastAPI:
             await listener_task
         except asyncio.CancelledError:
             pass
-
+        
+        await app.state.activity_redis.aclose()
         await redis_client.aclose()
         await limiter_redis.aclose()
         await arq_pool.aclose()
@@ -111,8 +119,46 @@ def create_app(db_engine: AsyncEngine | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
+    @app.middleware("http")
+    async def user_status_middleware(request: Request, call_next):
+        is_api_route = request.url.path.startswith("/api/v1/")
+        is_auth_route = request.url.path.startswith("/api/v1/auth")
+        is_excluded_route = "webhook" in request.url.path or "/admin" in request.url.path or "/ws" in request.url.path
+
+        if not is_api_route or is_auth_route or is_excluded_route:
+            return await call_next(request)
+
+        token = request.headers.get("authorization")
+        if not token or "bearer" not in token.lower():
+            return await call_next(request)
+        
+        db: AsyncSession = await anext(get_db_session())
+        try:
+            payload = await get_token_payload(token.split(" ")[1])
+            user = await get_current_active_profile(payload=payload, db=db)
+            
+            if user.is_deleted:
+                return JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content={"detail": "Аккаунт был удален."})
+            if user.is_frozen:
+                return JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content={"detail": "Ваш аккаунт временно заморожен администратором."})
+
+            activity_redis = request.app.state.activity_redis
+            last_update = await activity_redis.get(f"last_active:{user.id}")
+            now_ts = datetime.now(UTC).timestamp()
+            if not last_update or (now_ts - float(last_update)) > 60:
+                await db.execute(update(User).where(User.id == user.id).values(last_active_at=datetime.now(UTC)))
+                await db.commit()
+                await activity_redis.set(f"last_active:{user.id}", now_ts, ex=65)
+        except HTTPException:
+             pass
+        except Exception:
+            pass 
+        finally:
+            await db.close()
+            
+        return await call_next(request)
+
     # --- Подключаем админку ---
-    # Используем переданный движок для тестов, или основной движок для продакшена
     engine_to_use = db_engine or main_engine
     init_admin(app, engine_to_use)
 
@@ -252,32 +298,39 @@ class AdminAuth(AuthenticationBackend):
 # --- backend/app\admin\__init__.py ---
 
 # backend/app/admin/__init__.py
-
 from sqladmin import Admin
 from app.core.config import settings
 from .auth import AdminAuth
 
 def init_admin(app, engine):
     from .views.user import UserAdmin
-    from .views.support import SupportTicketAdmin
+    from .views.support import SupportTicketAdmin, TicketMessageAdmin
     from .views.payment import PaymentAdmin
-    from .views.stats import AutomationAdmin, DailyStatsAdmin, ActionLogAdmin
-    from .views.system import GlobalSettingsAdmin, BannedIPAdmin
+    from .views.stats import AutomationAdmin, DailyStatsAdmin, ActionLogAdmin, TaskHistoryAdmin
+    from .views.system import GlobalSettingsAdmin, BannedIPAdmin, AdminActions
     
     authentication_backend = AdminAuth(secret_key=settings.SECRET_KEY)
     
-    admin = Admin(
-        app, engine, authentication_backend=authentication_backend, title="SMM Combine Admin",
-    )
+    admin = Admin(app, engine, authentication_backend=authentication_backend, title="SMM Combine Admin")
 
+    # Категория "Управление"
     admin.add_view(UserAdmin)
-    admin.add_view(SupportTicketAdmin)
     admin.add_view(PaymentAdmin)
     admin.add_view(AutomationAdmin)
+    admin.add_view(TaskHistoryAdmin)
+
+    # Категория "Техподдержка"
+    admin.add_view(SupportTicketAdmin)
+    admin.add_view(TicketMessageAdmin)
+
+    # Категория "Статистика и Логи"
     admin.add_view(DailyStatsAdmin)
     admin.add_view(ActionLogAdmin)
+    
+    # Категория "Система"
     admin.add_view(GlobalSettingsAdmin)
     admin.add_view(BannedIPAdmin)
+    admin.add_view(AdminActions)
 
     app.state.admin = admin
 
@@ -309,49 +362,35 @@ class PaymentAdmin(ModelView, model=Payment):
 # --- backend/app\admin\views\stats.py ---
 
 # backend/app/admin/views/stats.py
-from sqladmin import ModelView
+from sqladmin import ModelView, action # <--- Убедитесь, что 'action' импортирован
 from app.db.models import (
-    Automation, DailyStats, ActionLog
+    Automation, DailyStats, ActionLog, TaskHistory # <--- Добавьте TaskHistory
 )
 from sqladmin.filters import AllUniqueStringValuesFilter, BooleanFilter
 import enum
+# --- ДОБАВЬТЕ ЭТИ ИМПОРТЫ ---
+from fastapi import Request
+from sqlalchemy.ext.asyncio import AsyncSession
+# --- КОНЕЦ ДОБАВЛЕНИЙ ---
+
 
 class AutomationAdmin(ModelView, model=Automation):
+    # ... (код этого класса без изменений) ...
     identity = "automation"
     name_plural = "Автоматизации"
     icon = "fa-solid fa-robot"
     can_create = False
     can_edit = True
     can_delete = False
-
-    # Используем СТРОКУ для имени связи
-    column_list = [
-        Automation.id,
-        "user",
-        Automation.automation_type,
-        Automation.is_active,
-        Automation.last_run_at
-    ]
-
-    # Явно указываем, что для списка нужно ЗАГРУЗИТЬ связь
+    column_list = [ Automation.id, "user", Automation.automation_type, Automation.is_active, Automation.last_run_at ]
     column_joined_list = [Automation.user]
-    
     column_searchable_list = [Automation.user_id, "user.vk_id"]
-
-    # Используем СТРОКУ в качестве ключа для форматтера
-    column_formatters = {
-        "user": lambda m, a: f"User {m.user.vk_id}" if m.user else "Unknown",
-        Automation.automation_type: lambda m, a: m.automation_type.value if isinstance(m.automation_type, enum.Enum) else (m.automation_type or "Не указан"),
-        Automation.is_active: lambda m, a: "Active" if m.is_active else "Inactive",
-    }
-
-    column_filters = [
-        BooleanFilter(Automation.is_active),
-    ]
+    column_formatters = { "user": lambda m, a: f"User {m.user.vk_id}" if m.user else "Unknown", Automation.automation_type: lambda m, a: m.automation_type.value if isinstance(m.automation_type, enum.Enum) else (m.automation_type or "Не указан"), Automation.is_active: lambda m, a: "Active" if m.is_active else "Inactive", }
+    column_filters = [ BooleanFilter(Automation.is_active), ]
 
 
-# !!! ВОЗВРАЩАЕМ НЕДОСТАЮЩИЙ КЛАСС !!!
 class DailyStatsAdmin(ModelView, model=DailyStats):
+    # ... (код этого класса без изменений) ...
     identity = "daily-stats"
     name_plural = "Дневная статистика"
     icon = "fa-solid fa-chart-line"
@@ -360,33 +399,60 @@ class DailyStatsAdmin(ModelView, model=DailyStats):
     column_list = [c.name for c in DailyStats.__table__.c]
     column_default_sort = ("date", True)
     column_searchable_list = [DailyStats.user_id]
-    
-    column_formatters = {
-        DailyStats.user_id: lambda m, a: f"User {m.user_id}"
-    }
+    column_formatters = { DailyStats.user_id: lambda m, a: f"User {m.user_id}" }
 
 
 class ActionLogAdmin(ModelView, model=ActionLog):
+    # ... (код этого класса без изменений) ...
     identity = "action-log"
     name_plural = "Логи действий"
     icon = "fa-solid fa-clipboard-list"
     can_create = False
     can_edit = False
-    # Применяем тот же паттерн
     column_list = [ActionLog.id, "user", ActionLog.action_type, ActionLog.message, ActionLog.status, ActionLog.timestamp]
-    
     column_joined_list = [ActionLog.user]
-    
     column_searchable_list = [ActionLog.user_id, "user.vk_id"]
-    column_filters = [
-        AllUniqueStringValuesFilter(ActionLog.action_type),
-        AllUniqueStringValuesFilter(ActionLog.status),
-    ]
+    column_filters = [ AllUniqueStringValuesFilter(ActionLog.action_type), AllUniqueStringValuesFilter(ActionLog.status), ]
     column_default_sort = ("timestamp", True)
+    column_formatters = { "user": lambda m, a: f"User {m.user.vk_id}" if m.user else "Unknown" }
+
+# --- ДОБАВЬТЕ ЭТОТ НОВЫЙ КЛАСС В КОНЕЦ ФАЙЛА ---
+class TaskHistoryAdmin(ModelView, model=TaskHistory):
+    identity = "task-history"
+    name_plural = "История Задач"
+    icon = "fa-solid fa-history"
+    can_create = False
+    can_edit = False
+    can_delete = True
     
-    column_formatters = {
-        "user": lambda m, a: f"User {m.user.vk_id}" if m.user else "Unknown"
-    }
+    column_list = [TaskHistory.id, "user", TaskHistory.task_name, TaskHistory.status, TaskHistory.created_at, TaskHistory.updated_at]
+    column_joined_list = [TaskHistory.user]
+    column_searchable_list = [TaskHistory.user_id, "user.vk_id", TaskHistory.task_name]
+    column_filters = [AllUniqueStringValuesFilter(TaskHistory.status)]
+    column_default_sort = ("created_at", True)
+    column_formatters = { "user": lambda m, a: f"User {m.user.vk_id}" if m.user else "Unknown" }
+
+    @action(name="mark_as_successful", label="✅ Пометить как Успешная", confirmation_message="Уверены? Это изменит статус задачи на SUCCESS.", add_in_list=True)
+    async def mark_as_successful(self, request: Request, pks: list[int]):
+        session: AsyncSession = request.state.session
+        for pk in pks:
+            task = await session.get(TaskHistory, pk)
+            if task and task.status == "FAILURE":
+                task.status = "SUCCESS"
+                task.result = "Статус изменен администратором."
+        await session.commit()
+        return {"message": f"Статус изменен для {len(pks)} задач."}
+
+    @action(name="cancel_manually", label="↩️ Отменить (административно)", confirmation_message="Это действие изменит статус на CANCELLED. Оно не отменяет уже выполненные действия.", add_in_list=True)
+    async def cancel_manually(self, request: Request, pks: list[int]):
+        session: AsyncSession = request.state.session
+        for pk in pks:
+            task = await session.get(TaskHistory, pk)
+            if task and task.status in ["SUCCESS", "FAILURE"]:
+                task.status = "CANCELLED"
+                task.result = "Задача отменена администратором."
+        await session.commit()
+        return {"message": f"Отменено (административно) {len(pks)} задач."}
 
 # --- backend/app\admin\views\support.py ---
 
@@ -449,6 +515,22 @@ class SupportTicketAdmin(ModelView, model=SupportTicket):
         
         model.updated_at = datetime.datetime.now(timezone.utc)
 
+    # --- НОВОЕ ДЕЙСТВИЕ ---
+    @action(
+        name="reopen_tickets", label="↩️ Переоткрыть",
+        confirmation_message="Уверены? Статус тикета изменится на 'OPEN'.",
+        add_in_list=True, add_in_detail=True
+    )
+    async def reopen_tickets(self, request: Request, pks: list[int]):
+        session: AsyncSession = request.state.session
+        for pk in pks:
+            ticket = await session.get(SupportTicket, pk)
+            if ticket and ticket.status != TicketStatus.OPEN:
+                ticket.status = TicketStatus.OPEN
+                ticket.updated_at = datetime.datetime.now(timezone.utc)
+        await session.commit()
+        return {"message": f"Переоткрыто тикетов: {len(pks)}"}
+
     @action(
         name="resolve_tickets", label="✅ Решить и закрыть (можно переоткрыть)",
         confirmation_message="Уверены? Пользователь сможет переоткрыть тикет.",
@@ -459,7 +541,7 @@ class SupportTicketAdmin(ModelView, model=SupportTicket):
         for pk in pks:
             ticket = await session.get(SupportTicket, pk)
             if ticket:
-                ticket.status = TicketStatus.RESOLVED # --- ИЗМЕНЕНИЕ ---
+                ticket.status = TicketStatus.RESOLVED
                 ticket.updated_at = datetime.datetime.now(timezone.utc)
         await session.commit()
         return {"message": f"Решено тикетов: {len(pks)}"}
@@ -474,7 +556,7 @@ class SupportTicketAdmin(ModelView, model=SupportTicket):
         for pk in pks:
             ticket = await session.get(SupportTicket, pk)
             if ticket:
-                ticket.status = TicketStatus.CLOSED # --- НОВОЕ ДЕЙСТВИЕ ---
+                ticket.status = TicketStatus.CLOSED
                 ticket.updated_at = datetime.datetime.now(timezone.utc)
         await session.commit()
         return {"message": f"Закрыто навсегда тикетов: {len(pks)}"}
@@ -482,76 +564,98 @@ class SupportTicketAdmin(ModelView, model=SupportTicket):
 # --- backend/app\admin\views\system.py ---
 
 # backend/app/admin/views/system.py
-from sqladmin import ModelView
+from sqladmin import ModelView, action, BaseView, expose
 from app.db.models.system import GlobalSetting, BannedIP
+from fastapi import Request
+from sqlalchemy.ext.asyncio import AsyncSession
 
 class GlobalSettingsAdmin(ModelView, model=GlobalSetting):
-    identity = "global-settings"
+    category = "Система"
     name = "Настройка"
     name_plural = "Глобальные настройки"
     icon = "fa-solid fa-cogs"
-    
     can_create = True
     can_delete = True
     can_edit = True
-    
     column_list = [GlobalSetting.key, GlobalSetting.value, GlobalSetting.is_enabled, GlobalSetting.description]
     form_columns = [GlobalSetting.key, GlobalSetting.value, GlobalSetting.is_enabled, GlobalSetting.description]
 
 class BannedIPAdmin(ModelView, model=BannedIP):
-    identity = "banned-ips"
+    category = "Система"
     name = "Блокировка"
     name_plural = "Заблокированные IP"
     icon = "fa-solid fa-gavel"
-    
     can_create = True
     can_delete = True
     can_edit = True
-    
     column_list = [BannedIP.ip_address, BannedIP.reason, BannedIP.banned_at, BannedIP.admin]
     column_searchable_list = [BannedIP.ip_address]
     column_default_sort = ("banned_at", True)
 
+    @action(name="unban_ips", label="🟢 Разблокировать")
+    async def unban_ips(self, request: Request, pks: list[int]):
+        session: AsyncSession = request.state.session
+        for pk in pks:
+            ban = await session.get(BannedIP, pk)
+            if ban:
+                await session.delete(ban)
+        await session.commit()
+        return {"message": f"Разблокировано IP-адресов: {len(pks)}"}
+
+
+class AdminActions(BaseView):
+    name = "Действия"
+    category = "Система"
+    icon = "fa-solid fa-bolt"
+
+    @expose("/admin/actions", methods=["GET", "POST"])
+    async def actions_page(self, request: Request):
+        if request.method == "POST":
+            form = await request.form()
+            if "panic_button" in form:
+                arq_pool = request.app.state.arq_pool
+                all_jobs = await arq_pool.all_jobs()
+                for job in all_jobs:
+                    await arq_pool.abort_job(job.job_id)
+                # Тут можно добавить логику деактивации всех автоматизаций
+                return self.templates.TemplateResponse("admin/actions.html", {"request": request, "message": "Все задачи в очереди были отменены."})
+        return self.templates.TemplateResponse("admin/actions.html", {"request": request})
+
 # --- backend/app\admin\views\user.py ---
 
-#backend/app/admin/views/user.py
+# backend/app/admin/views/user.py
 from sqladmin import ModelView, action
-from fastapi import Request, HTTPException, status
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi import Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, update, text
+from sqlalchemy.orm import selectinload
 
-# --- ИСПРАВЛЕНИЕ: Добавлен импорт ---
 from app.core.config import settings
-from app.db.models import User, LoginHistory, BannedIP, TaskHistory
+from app.db.models import User, LoginHistory, BannedIP, TaskHistory, DailyStats, Automation
 from sqladmin.filters import AllUniqueStringValuesFilter, BooleanFilter
 from app.core.plans import get_limits_for_plan
-from app.core.enums import PlanName
-from app.core.security import decrypt_data, create_access_token
+from app.core.enums import PlanName, AutomationType
+from app.core.security import encrypt_data, create_access_token
+from app.tasks.task_maps import TASK_FUNC_MAP
+from app.core.config_loader import AUTOMATIONS_CONFIG
 
 class UserAdmin(ModelView, model=User):
-    identity = "user"
+    category = "Управление"
+    name = "Пользователь"
     name_plural = "Пользователи"
     icon = "fa-solid fa-users"
     can_edit = True
-
-    column_list = [
-        User.id, User.vk_id, User.plan, User.plan_expires_at, User.is_admin, User.created_at,
-    ]
-    column_searchable_list = [User.id, User.vk_id]
-    column_filters = [AllUniqueStringValuesFilter(User.plan), BooleanFilter(User.is_admin)]
-    column_default_sort = ("created_at", True)
- 
-    form_columns = [
-        User.plan, User.plan_expires_at, User.is_admin,
-        User.daily_likes_limit, User.daily_add_friends_limit, User.daily_message_limit, User.daily_posts_limit,
-    ]
     
-    column_formatters = {
-        User.plan: lambda m, a: m.plan or "Не указан",
-        User.plan_expires_at: lambda m, a: m.plan_expires_at.strftime('%Y-%m-%d %H:%M') if m.plan_expires_at else "Не истекает",
-    }
+    column_list = [User.id, User.vk_id, User.plan, User.is_frozen, User.last_active_at, User.created_at]
+    column_details_list = [User.id, User.vk_id, User.plan, User.plan_expires_at, User.is_admin, User.is_frozen, User.created_at, User.last_active_at, User.login_history]
+    column_searchable_list = [User.id, User.vk_id]
+    column_filters = [User.plan, User.is_admin, User.is_frozen]
+    column_default_sort = ("created_at", True)
+    
+    form_columns = [User.plan, User.plan_expires_at, User.is_admin, User.encrypted_vk_token, User.is_frozen]
+    column_labels = {User.vk_id: "VK ID", User.plan: "Тариф", User.is_frozen: "Заморожен", User.last_active_at: "Был онлайн", User.created_at: "Дата регистрации", User.login_history: "История входов"}
 
     async def on_model_change(self, data: dict, model: User, is_created: bool, request: Request):
         if 'plan' in data and not is_created:
@@ -561,6 +665,8 @@ class UserAdmin(ModelView, model=User):
                 for key, value in new_limits.items():
                     if hasattr(model, key):
                         setattr(model, key, value)
+        if 'encrypted_vk_token' in data and data['encrypted_vk_token']:
+            model.encrypted_vk_token = encrypt_data(data['encrypted_vk_token'])
 
     @action(name="impersonate", label="👤 Войти как пользователь", add_in_detail=True, add_in_list=True)
     async def impersonate(self, request: Request, pks: list[int]):
@@ -569,14 +675,28 @@ class UserAdmin(ModelView, model=User):
         
         session: AsyncSession = request.state.session
         admin_user_stmt = select(User).where(User.vk_id == int(settings.ADMIN_VK_ID))
-        admin = (await session.execute(admin_user_stmt)).scalar_one()
+        admin = (await session.execute(admin_user_stmt)).scalar_one_or_none()
+        if not admin:
+             return JSONResponse({"status": "error", "message": "Admin user not found in DB."}, status_code=500)
+
         target_user_id = int(pks[0])
 
         token_data = {"sub": str(admin.id), "profile_id": str(target_user_id), "scope": "impersonate"}
         access_token = create_access_token(data=token_data, expires_delta=timedelta(minutes=15))
         
-        message = f"Токен для входа от имени пользователя ID {target_user_id} создан. Действует 15 минут."
-        return JSONResponse({"status": "success", "message": message, "access_token": access_token})
+        script = f"""
+            <script>
+                const token = '{access_token}';
+                alert('Токен для входа от имени пользователя ID {target_user_id} создан и скопирован в буфер обмена. Действует 15 минут.');
+                navigator.clipboard.writeText(token).then(() => {{
+                    console.log('Token copied to clipboard');
+                }}).catch(err => {{
+                    console.error('Failed to copy token: ', err);
+                }});
+                window.history.back();
+            </script>
+        """
+        return HTMLResponse(content=script)
 
     @action(name="extend_subscription", label="✅ Продлить подписку (+30 дней)", add_in_list=True, add_in_detail=True)
     async def extend_subscription(self, request: Request, pks: list[int]):
@@ -599,14 +719,50 @@ class UserAdmin(ModelView, model=User):
         await session.commit()
         return {"message": f"Подписка продлена для {successful_count} пользователей."}
 
+    # --- НОВОЕ ДЕЙСТВИЕ ---
+    @action(name="expire_subscription", label="⛔️ Завершить подписку", confirmation_message="Уверены? Подписка пользователя станет неактивной.", add_in_list=True, add_in_detail=True)
+    async def expire_subscription(self, request: Request, pks: list[int]):
+        session: AsyncSession = request.state.session
+        for pk in pks:
+            user = await session.get(User, int(pk))
+            if user:
+                user.plan = PlanName.EXPIRED.name
+                user.plan_expires_at = datetime.now(timezone.utc) - timedelta(days=1)
+        await session.commit()
+        return {"message": f"Подписка завершена для {len(pks)} пользователей."}
+
+    # --- НОВОЕ ДЕЙСТВИЕ ---
+    @action(name="grant_admin", label="👑 Выдать права администратора", add_in_list=True, add_in_detail=True)
+    async def grant_admin(self, request: Request, pks: list[int]):
+        session: AsyncSession = request.state.session
+        for pk in pks:
+            user = await session.get(User, int(pk))
+            if user:
+                user.is_admin = True
+        await session.commit()
+        return {"message": f"Права администратора выданы для {len(pks)} пользователей."}
+
+    # --- НОВОЕ ДЕЙСТВИЕ ---
+    @action(name="revoke_admin", label="🛡 Забрать права администратора", add_in_list=True, add_in_detail=True)
+    async def revoke_admin(self, request: Request, pks: list[int]):
+        session: AsyncSession = request.state.session
+        for pk in pks:
+            user = await session.get(User, int(pk))
+            # Нельзя забрать права у главного админа
+            if user and str(user.vk_id) != settings.ADMIN_VK_ID:
+                user.is_admin = False
+        await session.commit()
+        return {"message": f"Права администратора отозваны для {len(pks)} пользователей."}
+
     @action(name="ban_user_ip", label="🚫 Забанить по IP", confirmation_message="Уверены? Пользователь потеряет доступ к сайту с этого IP.", add_in_list=True, add_in_detail=True)
     async def ban_user_ip(self, request: Request, pks: list[int]):
         session: AsyncSession = request.state.session
         banned_count = 0
         
-        # --- УЛУЧШЕНИЕ: Получаем реального админа ---
         admin_user_stmt = select(User).where(User.vk_id == int(settings.ADMIN_VK_ID))
-        admin = (await session.execute(admin_user_stmt)).scalar_one()
+        admin = (await session.execute(admin_user_stmt)).scalar_one_or_none()
+        if not admin:
+            return {"message": "Ошибка: админ не найден в БД."}
 
         for pk in pks:
             stmt = select(LoginHistory.ip_address).where(LoginHistory.user_id == int(pk)).order_by(LoginHistory.timestamp.desc()).limit(1)
@@ -634,6 +790,51 @@ class UserAdmin(ModelView, model=User):
                 deleted_count += 1
         await session.commit()
         return {"message": f"Удалено аккаунтов: {deleted_count}"}
+    
+    @action(name="reset_limits", label="🔄 Сбросить дневные лимиты")
+    async def reset_daily_limits(self, request: Request, pks: list[int]):
+        session: AsyncSession = request.state.session
+        today = datetime.now(timezone.utc).date()
+        stmt = update(DailyStats).where(DailyStats.user_id.in_(pks), DailyStats.date == today).values(
+            likes_count=0, friends_added_count=0, friend_requests_accepted_count=0, stories_viewed_count=0,
+            friends_removed_count=0, messages_sent_count=0, posts_created_count=0, groups_joined_count=0, groups_left_count=0
+        )
+        await session.execute(stmt)
+        await session.commit()
+        return {"message": "Дневные лимиты сброшены."}
+
+    @action(name="run_automations", label="🚀 Запустить автоматизации")
+    async def run_automations(self, request: Request, pks: list[int]):
+        session: AsyncSession = request.state.session
+        arq_pool = request.app.state.arq_pool
+        users = (await session.execute(select(User).where(User.id.in_(pks)).options(selectinload(User.automations)))).scalars().all()
+        
+        for user in users:
+            active_automations = [a for a in user.automations if a.is_active]
+            for automation in active_automations:
+                task_key_enum = AutomationType(automation.automation_type)
+                task_func_name = TASK_FUNC_MAP.get(task_key_enum)
+                if not task_func_name: continue
+                
+                task_config = next((item for item in AUTOMATIONS_CONFIG if item.id == automation.automation_type), None)
+                display_name = f"[Ручной запуск] {task_config.name}" if task_config else "Автоматическая задача"
+
+                task_history = TaskHistory(user_id=user.id, task_name=display_name, status="PENDING", parameters=automation.settings)
+                session.add(task_history)
+                await session.flush()
+
+                job = await arq_pool.enqueue_job(task_func_name, task_history_id=task_history.id, **(automation.settings or {}))
+                task_history.arq_job_id = job.job_id
+        await session.commit()
+        return {"message": "Запрос на запуск автоматизаций отправлен."}
+        
+    @action(name="toggle_freeze", label="🧊 Заморозить/Разморозить")
+    async def toggle_freeze(self, request: Request, pks: list[int]):
+        session: AsyncSession = request.state.session
+        stmt = update(User).where(User.id.in_(pks)).values(is_frozen=text("NOT is_frozen"))
+        await session.execute(stmt)
+        await session.commit()
+        return {"message": "Статус заморозки изменен."}
 
 # --- backend/app\admin\views\__init__.py ---
 
@@ -2184,6 +2385,8 @@ async def get_activity_stats(
 
 # --- backend/app\api\endpoints\support.py ---
 
+# backend/app/api/endpoints/support.py
+
 import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -2195,6 +2398,7 @@ from app.db.session import get_db
 from app.db.models import User, SupportTicket, TicketMessage, TicketStatus
 from app.api.dependencies import get_current_active_profile
 from app.api.schemas.support import SupportTicketCreate, SupportTicketRead, TicketMessageCreate, SupportTicketList
+from app.services.system_service import SystemService
 
 router = APIRouter()
 
@@ -2203,7 +2407,6 @@ async def get_my_tickets(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    """Получить список всех тикетов текущего пользователя."""
     stmt = select(SupportTicket).where(SupportTicket.user_id == current_user.id).order_by(SupportTicket.updated_at.desc())
     result = await db.execute(stmt)
     return result.scalars().all()
@@ -2214,7 +2417,6 @@ async def create_ticket(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    """Создать новый тикет в техподдержку."""
     new_ticket = SupportTicket(
         user_id=current_user.id,
         subject=ticket_data.subject,
@@ -2224,7 +2426,8 @@ async def create_ticket(
     first_message = TicketMessage(
         ticket=new_ticket,
         author_id=current_user.id,
-        message=ticket_data.message
+        message=ticket_data.message,
+        attachment_url=str(ticket_data.attachment_url) if ticket_data.attachment_url else None
     )
     
     db.add(new_ticket)
@@ -2239,7 +2442,6 @@ async def get_ticket_details(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    """Получить детали тикета и всю переписку по нему."""
     stmt = select(SupportTicket).where(
         SupportTicket.id == ticket_id,
         SupportTicket.user_id == current_user.id
@@ -2260,8 +2462,6 @@ async def reply_to_ticket(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    """Ответить на тикет."""
-    # Получаем тикет и блокируем его для обновления
     stmt = select(SupportTicket).where(
         SupportTicket.id == ticket_id,
         SupportTicket.user_id == current_user.id
@@ -2271,18 +2471,29 @@ async def reply_to_ticket(
     if not ticket:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Тикет не найден.")
     if ticket.status == TicketStatus.CLOSED:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Этот тикет закрыт.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Этот тикет закрыт навсегда и не может быть переоткрыт.")
+
+    if ticket.status == TicketStatus.RESOLVED:
+        reopen_limit = await SystemService.get_ticket_reopen_limit()
+        if ticket.reopen_count >= reopen_limit:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Достигнут лимит на переоткрытие решенных тикетов ({reopen_limit})."
+            )
+        ticket.reopen_count += 1
+        ticket.status = TicketStatus.OPEN
+    else:
+        ticket.status = TicketStatus.OPEN
 
     new_message = TicketMessage(
         ticket_id=ticket.id,
         author_id=current_user.id,
-        message=message_data.message
+        message=message_data.message,
+        attachment_url=str(message_data.attachment_url) if message_data.attachment_url else None
     )
     db.add(new_message)
     
-    # Меняем статус на OPEN, если на него ответил пользователь (вдруг админ поставил IN_PROGRESS)
-    ticket.status = TicketStatus.OPEN
-    ticket.updated_at = datetime.datetime.utcnow()
+    ticket.updated_at = datetime.datetime.now(datetime.UTC)
     
     await db.commit()
     await db.refresh(ticket, attribute_names=['messages'])
@@ -3533,22 +3744,24 @@ class FriendsDynamicResponse(BaseModel):
 
 # --- backend/app\api\schemas\support.py ---
 
-from pydantic import BaseModel, Field, ConfigDict
-from datetime import datetime
-from typing import List
+# backend/app/api/schemas/support.py
 
-# --- Схемы для сообщений ---
+from pydantic import BaseModel, Field, ConfigDict, HttpUrl
+from datetime import datetime
+from typing import List, Optional
+
 class TicketMessageRead(BaseModel):
     id: int
     author_id: int
     message: str
+    attachment_url: Optional[str] = None
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
 
 class TicketMessageCreate(BaseModel):
     message: str = Field(..., min_length=1, max_length=5000)
+    attachment_url: Optional[HttpUrl] = None
 
-# --- Схемы для тикетов ---
 class SupportTicketRead(BaseModel):
     id: int
     user_id: int
@@ -3562,9 +3775,9 @@ class SupportTicketRead(BaseModel):
 class SupportTicketCreate(BaseModel):
     subject: str = Field(..., min_length=5, max_length=100)
     message: str = Field(..., min_length=10, max_length=5000)
+    attachment_url: Optional[HttpUrl] = None
 
 class SupportTicketList(BaseModel):
-    """Схема для отображения в списке, без сообщений."""
     id: int
     subject: str
     status: str
@@ -3718,8 +3931,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 from pathlib import Path
 
-# --- ИЗМЕНЕНИЕ: Определяем абсолютный путь к .env файлу ---
-# Это гарантирует, что .env будет найден, независимо от точки запуска приложения.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 ENV_FILE = BASE_DIR / ".env"
 
@@ -3742,7 +3953,7 @@ class Settings(BaseSettings):
     SECRET_KEY: str
     ENCRYPTION_KEY: str
     ALGORITHM: str
-    ACCESS_TOKEN_EXPIRE_MINUTES: int
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 525600
 
     VK_API_VERSION: str
     ADMIN_VK_ID: str
@@ -4001,32 +4212,39 @@ def configure_logging():
 # --- backend/app\core\plans.py ---
 
 # backend/app/core/plans.py
+
 from functools import lru_cache
+# --- ДОБАВЬТЕ ЭТИ ИМПОРТЫ ---
+from typing import Optional
+from app.db.models import User
+# --- КОНЕЦ ДОБАВЛЕНИЙ ---
 from app.core.config_loader import PLAN_CONFIG, AUTOMATIONS_CONFIG
 from app.core.enums import PlanName, FeatureKey
+from app.services.system_service import SystemService # <--- ДОБАВЬТЕ ЭТОТ ИМПОРТ
+
 
 @lru_cache(maxsize=16)
 def get_plan_config(plan_name: PlanName | str) -> dict:
-    # Эта функция теперь будет корректно работать, т.к. user.plan
-    # будет хранить системное имя ("BASE", "PRO" и т.д.)
     key = plan_name.name if isinstance(plan_name, PlanName) else plan_name
-    plan_model = PLAN_CONFIG.get(key, PLAN_CONFIG["EXPIRED"]) # Используем строковый ключ "EXPIRED"
+    plan_model = PLAN_CONFIG.get(key, PLAN_CONFIG["EXPIRED"])
     return plan_model.model_dump()
+
 
 def get_limits_for_plan(plan_name: PlanName | str) -> dict:
     """Возвращает словарь с лимитами для указанного плана."""
     plan_data = get_plan_config(plan_name)
     return plan_data.get("limits", {}).copy()
 
+
 @lru_cache(maxsize=1)
 def get_all_feature_keys() -> list[str]:
     """Возвращает список всех возможных ключей фич из конфига."""
     automation_ids = [item.id for item in AUTOMATIONS_CONFIG]
-    
+
     other_features = [
-        FeatureKey.PROXY_MANAGEMENT, 
-        FeatureKey.SCENARIOS, 
-        FeatureKey.PROFILE_GROWTH_ANALYTICS, 
+        FeatureKey.PROXY_MANAGEMENT,
+        FeatureKey.SCENARIOS,
+        FeatureKey.PROFILE_GROWTH_ANALYTICS,
         FeatureKey.FAST_SLOW_DELAY_PROFILE,
         FeatureKey.AUTOMATIONS_CENTER,
         FeatureKey.AGENCY_MODE,
@@ -4034,11 +4252,20 @@ def get_all_feature_keys() -> list[str]:
     ]
     return list(set(automation_ids + [f.value for f in other_features]))
 
-@lru_cache(maxsize=256)
-def is_feature_available_for_plan(plan_name: PlanName | str, feature_id: str) -> bool:
-    """Проверяет, доступна ли указанная фича для данного тарифного плана."""
-    # ИЗМЕНЕНО: Ключевое исправление.
-    # Мы используем .name для получения строкового ключа, чтобы избежать KeyError.
+
+async def is_feature_available_for_plan(plan_name: PlanName | str, feature_id: str, user: Optional[User] = None) -> bool:
+    """
+    Проверяет, доступна ли фича для тарифа, с учетом глобальных настроек и прав администратора.
+    """
+    # 1. Администратор имеет доступ ко всему, всегда.
+    if user and user.is_admin:
+        return True
+
+    # 2. Проверяем, не отключена ли фича глобально.
+    if not await SystemService.is_feature_enabled(feature_id):
+        return False
+
+    # 3. Проверяем доступность по тарифному плану.
     key = plan_name if isinstance(plan_name, str) else plan_name.name
     plan_model = PLAN_CONFIG.get(key, PLAN_CONFIG[PlanName.EXPIRED.name])
     
@@ -4049,12 +4276,12 @@ def is_feature_available_for_plan(plan_name: PlanName | str, feature_id: str) ->
     
     return feature_id in available_features
 
+
 def get_features_for_plan(plan_name: PlanName | str) -> list[str]:
     """
     Возвращает полный список доступных ключей фич для тарифного плана.
     Обрабатывает wildcard '*' для PRO тарифов.
     """
-    # ИЗМЕНЕНО: Аналогичное исправление для консистентности.
     key = plan_name if isinstance(plan_name, str) else plan_name.name
     plan_model = PLAN_CONFIG.get(key, PLAN_CONFIG[PlanName.EXPIRED.name])
     available = plan_model.available_features
@@ -4062,7 +4289,7 @@ def get_features_for_plan(plan_name: PlanName | str) -> list[str]:
     if available == "*":
         return get_all_feature_keys()
     
-    return available if isinstance(available, list) else [] 
+    return available if isinstance(available, list) else []
 
 # --- backend/app\core\security.py ---
 
@@ -4381,23 +4608,31 @@ class FriendRequestLog(Base):
 # --- backend/app\db\models\payment.py ---
 
 # backend/app/db/models/payment.py
-
 import datetime
-# --- НАЧАЛО ИСПРАВЛЕНИЯ ---
 import enum
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Float, Enum
-# --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Float, Enum, JSON, Boolean, Text
 from sqlalchemy.orm import relationship
 from app.db.base import Base
 
-# --- НАЧАЛО ИСПРАВЛЕНИЯ: Добавлено отсутствующее перечисление ---
 class PaymentStatus(str, enum.Enum):
     PENDING = "pending"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"
-# --- КОНЕЦ ИСПРАВЛЕНИЯ ---
 
+class Plan(Base):
+    __tablename__ = "plans"
+    id = Column(Integer, primary_key=True)
+    name_id = Column(String, unique=True, nullable=False, index=True) # e.g., "BASE", "PRO"
+    display_name = Column(String, nullable=False)
+    description = Column(Text, nullable=False)
+    base_price = Column(Float, nullable=True) # None for free plans
+    limits = Column(JSON, nullable=False)
+    available_features = Column(JSON, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False) # Can be disabled from purchase
+    is_popular = Column(Boolean, default=False)
+    
+    users = relationship("User", back_populates="plan")
 
 class Payment(Base):
     __tablename__ = "payments"
@@ -4406,7 +4641,7 @@ class Payment(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     amount = Column(Float, nullable=False)
     status = Column(Enum(PaymentStatus), default=PaymentStatus.PENDING, nullable=False)
-    plan_name = Column(String, nullable=False)
+    plan_name_id = Column(String, nullable=False) # Stores "PRO", "PLUS" etc.
     months = Column(Integer, nullable=False, default=1)
     created_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
@@ -4532,6 +4767,8 @@ class TaskHistory(Base):
     parameters = Column(JSON, nullable=True)
     result = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
     user = relationship("User", back_populates="task_history")
     __table_args__ = (Index('ix_task_history_user_status', 'user_id', 'status'),)
@@ -4545,7 +4782,7 @@ class Automation(Base):
     settings = Column(JSON, nullable=True)
     last_run_at = Column(DateTime(timezone=True), nullable=True)
     user = relationship("User", back_populates="automations")
-    __table__args__ = (UniqueConstraint('user_id', 'automation_type', name='_user_automation_uc'),)
+    __table_args__ = (UniqueConstraint('user_id', 'automation_type', name='_user_automation_uc'),)
 
 class Scenario(Base):
     __tablename__ = "scenarios"
@@ -4609,7 +4846,7 @@ class SentCongratulation(Base):
     friend_vk_id = Column(BigInteger, nullable=False, index=True)
     year = Column(Integer, nullable=False)
     user = relationship("User")
-    __table__args__ = (UniqueConstraint('user_id', 'friend_vk_id', 'year', name='_user_friend_year_uc'),)
+    __table_args__ = (UniqueConstraint('user_id', 'friend_vk_id', 'year', name='_user_friend_year_uc'),)
 
 class ActionLog(Base):
     __tablename__ = "action_logs"
@@ -4619,7 +4856,7 @@ class ActionLog(Base):
     message = Column(Text, nullable=False)
     status = Column(Enum(ActionStatus), nullable=False)
     timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
-    user = relationship("User")
+    user = relationship("User", back_populates="action_logs")
 
 # --- backend/app\db\models\user.py ---
 
@@ -4641,6 +4878,12 @@ class User(Base):
     vk_id = Column(BigInteger, unique=True, index=True, nullable=False)
     encrypted_vk_token = Column(String, nullable=False)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    last_active_at = Column(DateTime(timezone=True), onupdate=lambda: datetime.now(UTC), nullable=True, index=True)
+    is_frozen = Column(Boolean, nullable=False, server_default='false')
+    is_deleted = Column(Boolean, nullable=False, server_default='false', index=True)
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
+    is_shadow_banned = Column(Boolean, nullable=False, server_default='false', index=True)
+    
     plan = Column(String, nullable=False, server_default=PlanName.BASE.value)
     plan_expires_at = Column(DateTime(timezone=True), nullable=True)
     is_admin = Column(Boolean, nullable=False, server_default='false')
@@ -4653,6 +4896,8 @@ class User(Base):
     delay_profile = Column(Enum(DelayProfile), nullable=False, server_default=DelayProfile.normal.name)
     analytics_settings_posts_count = Column(Integer, nullable=False, server_default=text('100'))
     analytics_settings_photos_count = Column(Integer, nullable=False, server_default=text('200'))
+    
+    login_history = relationship("LoginHistory", back_populates="user", cascade="all, delete-orphan", order_by="desc(LoginHistory.timestamp)")
     proxies = relationship("Proxy", back_populates="user", cascade="all, delete-orphan", lazy="select")
     task_history = relationship("TaskHistory", back_populates="user", cascade="all, delete-orphan")
     daily_stats = relationship("DailyStats", back_populates="user", cascade="all, delete-orphan")
@@ -4712,7 +4957,7 @@ class LoginHistory(Base):
     timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
     ip_address = Column(String, nullable=True)
     user_agent = Column(Text, nullable=True)
-    user = relationship("User")
+    user = relationship("User", back_populates="login_history")
 
 # --- backend/app\db\models\__init__.py ---
 
@@ -7318,18 +7563,17 @@ TASK_CONFIG_MAP = {
 # --- backend/app\tasks\standard_tasks.py ---
 
 # backend/app/tasks/standard_tasks.py
-
 import functools
 import structlog
 from sqlalchemy import select, update
 from sqlalchemy.orm import joinedload
+from datetime import datetime, UTC
 
 from app.db.models import User, TaskHistory, Automation
 from app.db.session import AsyncSessionFactory
 from app.services.event_emitter import RedisEventEmitter
 from app.core.exceptions import UserActionException
 from app.services.vk_api import VKAPIError, VKAuthError
-# --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
 from app.core.enums import TaskKey 
 from app.tasks.service_maps import TASK_CONFIG_MAP
 from contextlib import asynccontextmanager
@@ -7359,7 +7603,6 @@ def arq_task_runner(func):
             user_id = None
             
             try:
-                # --- УЛУЧШЕНИЕ: Используем selectinload для прокси ---
                 stmt = select(TaskHistory).where(TaskHistory.id == task_history_id).options(
                     joinedload(TaskHistory.user).selectinload(User.proxies)
                 )
@@ -7377,9 +7620,13 @@ def arq_task_runner(func):
                 emitter.set_context(user_id, task_history_id)
                 
                 task_history.status = "STARTED"
+                task_history.started_at = datetime.now(UTC)
                 await session.commit()
                 
                 await emitter.send_task_status_update(status="STARTED", task_name=task_name, created_at=created_at)
+
+                if task_history.user.is_shadow_banned:
+                    raise UserActionException("Действие отменено (теневой бан).")
 
                 summary_result = await func(session, task_history.user, task_history.parameters or {}, emitter)
 
@@ -7410,6 +7657,7 @@ def arq_task_runner(func):
             
             finally:
                 if task_history:
+                    task_history.finished_at = datetime.now(UTC)
                     final_status = task_history.status
                     final_result = task_history.result
                     
@@ -7477,9 +7725,9 @@ async def join_groups_by_criteria_task(session, user, params, emitter):
 # backend/app/tasks/system_tasks.py
 
 import structlog
-from sqlalchemy import select
-from sqlalchemy.orm import selectinload, Session
+from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager
+from sqlalchemy.orm import selectinload
 
 from app.db.models import ScheduledPost, ScheduledPostStatus
 from app.db.session import AsyncSessionFactory
@@ -7562,10 +7810,8 @@ async def publish_scheduled_post_task(ctx, post_id: int, db_session_for_test: Se
         finally:
             await vk_api.close()
 
-        # Коммитим изменения только если мы не в режиме теста
         if db_session_for_test:
             await session.flush()
-        # В рабочем режиме коммитим транзакцию
         else:
             await session.commit()
 
@@ -7613,7 +7859,6 @@ AnyTaskRequest = Union[
     BirthdayCongratulationRequest, EternalOnlineRequest
 ]
 
-# --- ЕДИНЫЙ ИСТОЧНИК ИСТИНЫ ДЛЯ ВСЕХ ЗАДАЧ ARQ ---
 TASK_FUNC_MAP = {
     TaskKey.ACCEPT_FRIENDS: "accept_friend_requests_task",
     TaskKey.LIKE_FEED: "like_feed_task",
@@ -7643,100 +7888,173 @@ PREVIEW_SERVICE_MAP = {
 
 # --- backend/app\tasks\logic\analytics_jobs.py ---
 
-# backend/app/tasks/logic/automation_jobs.py
+# --- backend/app/tasks/logic/analytics_jobs.py ---
+
 import datetime
 import structlog
 import pytz
-import random
-from sqlalchemy import select, or_
-from sqlalchemy.orm import selectinload
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from arq.connections import ArqRedis
+from sqlalchemy.orm import selectinload
 
-from app.db.models import Automation, TaskHistory, User
-from app.core.config_loader import AUTOMATIONS_CONFIG
-from app.core.constants import CronSettings
-from app.core.enums import TaskKey, AutomationType
-from app.tasks.task_maps import TASK_FUNC_MAP
+from app.db.models import (
+    DailyStats, WeeklyStats, MonthlyStats, User, FriendRequestLog, FriendRequestStatus,
+    ProfileMetric
+)
+from app.services.vk_api import VKAPI, VKAuthError
+from app.core.security import decrypt_data
+from app.services.analytics_service import AnalyticsService
+from app.services.profile_analytics_service import ProfileAnalyticsService
+from app.services.event_emitter import SystemLogEmitter
 
 log = structlog.get_logger(__name__)
 
+# --- ИЗМЕНЕНИЕ: Все функции теперь принимают `session` как аргумент ---
 
-
-async def _create_and_run_arq_task(session: AsyncSession, arq_pool: ArqRedis, user_id: int, task_name_key: str, settings_dict: dict):
-    try:
-        task_key_enum = TaskKey(task_name_key)
-        task_func_name = TASK_FUNC_MAP.get(task_key_enum)
-    except ValueError:
-        log.warn("cron.invalid_task_key", task_name=task_name_key)
-        return
-
-    if not task_func_name:
-        log.warn("cron.arq_task_not_found", task_name=task_name_key)
-        return
-
-    task_config = next((item for item in AUTOMATIONS_CONFIG if item.id == task_name_key), None)
-    display_name = task_config.name if task_config else "Автоматическая задача"
-
-    task_history = TaskHistory(user_id=user_id, task_name=display_name, status="PENDING", parameters=settings_dict)
-    session.add(task_history)
-    await session.flush()
-
-    job = await arq_pool.enqueue_job(task_func_name, task_history_id=task_history.id, **(settings_dict or {}))
-    task_history.arq_job_id = job.job_id
-
-async def _run_daily_automations_async(session: AsyncSession, arq_pool: ArqRedis, automation_group: str):
-    now_utc = datetime.datetime.now(pytz.utc)
-    moscow_tz = pytz.timezone("Europe/Moscow")
-    now_moscow = now_utc.astimezone(moscow_tz)
-
-    automation_ids = [item.id for item in AUTOMATIONS_CONFIG if item.group == automation_group]
-    if not automation_ids:
-        return
-        
-    automation_enums = [AutomationType(aid) for aid in automation_ids]
-
-    stmt = select(Automation).join(User).where(
-        Automation.is_active == True,
-        Automation.automation_type.in_(automation_enums),
-        or_(User.plan_expires_at.is_(None), User.plan_expires_at > now_utc)
-    ).options(selectinload(Automation.user))
+async def _aggregate_daily_stats_async(session: AsyncSession):
+    """Агрегирует вчерашнюю дневную статистику в недельную и месячную."""
+    yesterday = datetime.date.today() - datetime.timedelta(days=1)
     
-    automations = (await session.execute(stmt)).scalars().unique().all()
-    if not automations:
+    stmt = select(
+        DailyStats.user_id,
+        func.sum(DailyStats.likes_count).label("likes"),
+        func.sum(DailyStats.friends_added_count).label("friends"),
+        func.sum(DailyStats.friend_requests_accepted_count).label("accepted")
+    ).where(DailyStats.date == yesterday).group_by(DailyStats.user_id)
+    
+    daily_sums = (await session.execute(stmt)).all()
+    if not daily_sums:
         return
+
+    week_id, month_id = yesterday.strftime('%Y-%W'), yesterday.strftime('%Y-%m')
+
+    for stat_type, identifier in [(WeeklyStats, week_id), (MonthlyStats, month_id)]:
+        values_to_upsert = []
+        for r in daily_sums:
+            values_to_upsert.append({
+                "user_id": r.user_id,
+                f"{'weekly_stats'.replace('s', '') if stat_type is WeeklyStats else 'monthly_stats'.replace('s', '')}_identifier": identifier,
+                "likes_count": r.likes,
+                "friends_added_count": r.friends,
+                "friend_requests_accepted_count": r.accepted
+            })
+
+        if not values_to_upsert:
+            continue
         
-    log.info("run_daily_automations.start", count=len(automations), group=automation_group)
-
-    for automation in automations:
-        automation_type_value = automation.automation_type.value
-
-        if automation_type_value == 'eternal_online':
-            automation_settings = automation.settings or {}
-            if automation_settings.get('mode', 'schedule') == 'schedule':
-                day_key = str(now_moscow.isoweekday())
-                day_schedule = automation_settings.get('schedule_weekly', {}).get(day_key)
-
-                if not day_schedule or not day_schedule.get('is_active'):
-                    continue
-
-                try:
-                    start = datetime.datetime.strptime(day_schedule.get('start_time', '00:00'), '%H:%M').time()
-                    end = datetime.datetime.strptime(day_schedule.get('end_time', '23:59'), '%H:%M').time()
-                    
-                    if not (start <= now_moscow.time() <= end):
-                        continue
-                    
-                    if automation_settings.get('humanize', True) and random.random() < CronSettings.HUMANIZE_ONLINE_SKIP_CHANCE:
-                        log.info("eternal_online.humanizer_skip", user_id=automation.user_id)
-                        continue
-                except (ValueError, TypeError):
-                    log.error("eternal_online.schedule_parse_error", user_id=automation.user_id, schedule=day_schedule)
-                    continue
+        from sqlalchemy.dialects.postgresql import insert
         
-        automation.last_run_at = now_utc
-        async with session.begin_nested():
-            await _create_and_run_arq_task(session, arq_pool, automation.user_id, automation_type_value, automation.settings)
+        insert_stmt = insert(stat_type).values(values_to_upsert)
+        
+        update_dict = {
+            'likes_count': getattr(stat_type, 'likes_count') + insert_stmt.excluded.likes_count,
+            'friends_added_count': getattr(stat_type, 'friends_added_count') + insert_stmt.excluded.friends_added_count,
+            'friend_requests_accepted_count': getattr(stat_type, 'friend_requests_accepted_count') + insert_stmt.excluded.friend_requests_accepted_count
+        }
+        
+        index_elements_key = 'weekly_stats_identifier' if stat_type is WeeklyStats else 'monthly_stats_identifier'
+        final_stmt = insert_stmt.on_conflict_do_update(
+            index_elements=['user_id', index_elements_key],
+            set_=update_dict
+        )
+        await session.execute(final_stmt)
+
+    log.info("analytics.aggregated_daily_stats", count=len(daily_sums), date=yesterday.isoformat())
+
+
+async def _snapshot_all_users_metrics_async(session: AsyncSession):
+    """Создает снимок ключевых метрик профиля для всех активных пользователей."""
+    now = datetime.datetime.now(pytz.utc)
+    stmt = select(User).where(
+        (User.plan_expires_at == None) | (User.plan_expires_at > now)
+    )
+    result = await session.execute(stmt)
+    active_users = result.scalars().all()
+
+    if not active_users:
+        log.info("snapshot_metrics_task.no_active_users")
+        return
+
+    log.info("snapshot_metrics_task.start", count=len(active_users))
+
+    for user in active_users:
+        try:
+            async with session.begin_nested():
+                service = ProfileAnalyticsService(db=session, user=user, emitter=SystemLogEmitter("snapshot_metrics"))
+                await service.snapshot_profile_metrics()
+        except VKAuthError:
+            log.warn("snapshot_metrics_task.auth_error", user_id=user.id)
+        except Exception as e:
+            log.error("snapshot_metrics_task.user_error", user_id=user.id, error=str(e), exc_info=True)
+    log.info("snapshot_metrics_task.finished")
+
+
+async def _generate_all_heatmaps_async(session: AsyncSession):
+    """Генерирует тепловые карты активности для всех пользователей с доступом к фиче."""
+    users = (await session.execute(select(User).where(User.plan.in_(['PLUS', 'PRO', 'AGENCY'])))).scalars().all()
+    if not users: return
+    
+    log.info("analytics.heatmap_generation_started", count=len(users))
+    for user in users:
+        try:
+            async with session.begin_nested():
+                emitter = SystemLogEmitter(task_name="heatmap_generator")
+                emitter.set_context(user_id=user.id)
+                service = AnalyticsService(db=session, user=user, emitter=emitter)
+                await service.generate_post_activity_heatmap()
+        except Exception as e:
+            log.error("analytics.heatmap_generation_user_error", user_id=user.id, error=str(e))
+
+
+async def _update_friend_request_statuses_async(session: AsyncSession):
+    """Проверяет статусы отправленных заявок в друзья (приняты или нет)."""
+    stmt = select(User).options(selectinload(User.friend_requests)).where(
+        User.friend_requests.any(FriendRequestLog.status == FriendRequestStatus.pending)
+    )
+    users_with_pending_reqs = (await session.execute(stmt)).scalars().unique().all()
+    
+    if not users_with_pending_reqs:
+        return
+
+    log.info("analytics.conversion_tracker_started", count=len(users_with_pending_reqs))
+    
+    for user in users_with_pending_reqs:
+        pending_reqs = [req for req in user.friend_requests if req.status == FriendRequestStatus.pending]
+        if not pending_reqs:
+            continue
+
+        vk_api = None
+        try:
+            vk_token = decrypt_data(user.encrypted_vk_token)
+            if not vk_token:
+                log.warn("analytics.conversion_tracker_no_token", user_id=user.id)
+                continue
+
+            vk_api = VKAPI(access_token=vk_token)
+            
+            friends_response = await vk_api.get_user_friends(user_id=user.vk_id, fields="")
+            if not friends_response or 'items' not in friends_response:
+                continue
+            
+            friend_ids = set(friends_response['items'])
+            
+            accepted_req_ids = [req.id for req in pending_reqs if req.target_vk_id in friend_ids]
+            
+            if accepted_req_ids:
+                update_stmt = update(FriendRequestLog).where(FriendRequestLog.id.in_(accepted_req_ids)).values(
+                    status=FriendRequestStatus.accepted, 
+                    resolved_at=datetime.datetime.now(pytz.utc)
+                )
+                await session.execute(update_stmt)
+                log.info("analytics.conversion_tracker_updated", user_id=user.id, count=len(accepted_req_ids))
+
+        except Exception as e:
+            # Читаем ID до возможной ошибки, чтобы избежать MissingGreenlet
+            user_id_for_log = user.id 
+            log.error("analytics.conversion_tracker_user_error", user_id=user_id_for_log, error=str(e))
+        finally:
+            if vk_api:
+                await vk_api.close()
 
 # --- backend/app\tasks\logic\automation_jobs.py ---
 

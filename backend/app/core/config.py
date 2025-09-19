@@ -3,8 +3,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 from pathlib import Path
 
-# --- ИЗМЕНЕНИЕ: Определяем абсолютный путь к .env файлу ---
-# Это гарантирует, что .env будет найден, независимо от точки запуска приложения.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 ENV_FILE = BASE_DIR / ".env"
 
@@ -27,7 +25,7 @@ class Settings(BaseSettings):
     SECRET_KEY: str
     ENCRYPTION_KEY: str
     ALGORITHM: str
-    ACCESS_TOKEN_EXPIRE_MINUTES: int
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 525600
 
     VK_API_VERSION: str
     ADMIN_VK_ID: str

@@ -1,6 +1,3 @@
-# Единый источник правды обо всех возможных действиях (задачах),
-# которые пользователь может запустить. Используется для построения UI.
-
 - id: "like_feed"
   name: "Лайки в ленте новостей"
   description: "Анализирует вашу ленту новостей и проставляет лайки на посты, соответствующие фильтрам."
@@ -9,7 +6,6 @@
   modal_count_label: "Количество лайков"
   default_count: 50
   group: "standard"
-
 - id: "add_recommended"
   name: "Добавление друзей"
   description: "Отправляет заявки в друзья пользователям из списка 'Возможные друзья', повышая охваты."
@@ -18,14 +14,12 @@
   modal_count_label: "Количество заявок"
   default_count: 20
   group: "standard"
-
 - id: "accept_friends"
   name: "Прием заявок в друзья"
   description: "Автоматически принимает входящие заявки в друзья на основе заданных критериев."
   has_filters: true
   has_count_slider: false
   group: "standard"
-
 - id: "remove_friends"
   name: "Очистка списка друзей"
   description: "Удаляет друзей по критериям: 'собачки', неактивность, пол. Поддерживает актуальность списка контактов."
@@ -34,21 +28,18 @@
   modal_count_label: "Максимум удалений"
   default_count: 100
   group: "standard"
-
 - id: "view_stories"
   name: "Просмотр историй"
   description: "Автоматически просматривает все доступные истории, сигнализируя об активности вашего аккаунта."
   has_filters: false
   has_count_slider: false
   group: "standard"
-
 - id: "birthday_congratulation"
   name: "Поздравления с Днем Рождения"
   description: "Автоматически отправляет персональные поздравления вашим друзьям в их день рождения."
-  has_filters: false # Фильтры здесь не нужны, т.к. логика специфична
+  has_filters: false
   has_count_slider: false
   group: "standard"
-
 - id: "mass_messaging"
   name: "Массовая рассылка"
   description: "Отправляет заданное сообщение вашим друзьям по гибким фильтрам. Идеально для информирования."
@@ -57,7 +48,6 @@
   modal_count_label: "Количество сообщений"
   default_count: 50
   group: "standard"
-
 - id: "leave_groups"
   name: "Отписка от сообществ"
   description: "Автоматически покидает сообщества по заданным критериям (ключевые слова в названии)."
@@ -66,7 +56,6 @@
   modal_count_label: "Максимум отписок"
   default_count: 50
   group: "standard"
-
 - id: "join_groups"
   name: "Вступление в группы"
   description: "Вступает в группы по ключевым словам для повышения информированности."
@@ -75,7 +64,6 @@
   modal_count_label: "Максимум вступлений"
   default_count: 20
   group: "standard"
-
 - id: "eternal_online"
   name: "Статус 'Онлайн'"
   description: "Поддерживает статус 'онлайн' для вашего аккаунта по гибкому расписанию с имитацией человеческого поведения."

@@ -4,16 +4,16 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock
 from datetime import datetime, timedelta, timezone
 
-# Импортируем все классы админки, которые будем тестировать
-from app.admin.views.stats import AutomationAdmin, ActionLogAdmin, DailyStatsAdmin
-from app.admin.views.support import SupportTicketAdmin
-from app.admin.views.user import UserAdmin
+# Обновленные импорты:
+from app.admin.views.management.automation import AutomationAdmin
+from app.admin.views.monitoring.action_log import ActionLogAdmin
+from app.admin.views.monitoring.daily_stats import DailyStatsAdmin
+from app.admin.views.support.ticket import SupportTicketAdmin
+from app.admin.views.management.user import UserAdmin
 
-# Импортируем необходимые модели и Enum'ы для симуляции
 from app.db.models import User
 from app.core.enums import PlanName, AutomationType
 
-# Маркер для асинхронных тестов
 ASYNC_TEST = pytest.mark.asyncio
 
 

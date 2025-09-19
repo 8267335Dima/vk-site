@@ -20,6 +20,8 @@ class TaskHistory(Base):
     parameters = Column(JSON, nullable=True)
     result = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
     user = relationship("User", back_populates="task_history")
     __table_args__ = (Index('ix_task_history_user_status', 'user_id', 'status'),)
@@ -33,7 +35,7 @@ class Automation(Base):
     settings = Column(JSON, nullable=True)
     last_run_at = Column(DateTime(timezone=True), nullable=True)
     user = relationship("User", back_populates="automations")
-    __table__args__ = (UniqueConstraint('user_id', 'automation_type', name='_user_automation_uc'),)
+    __table_args__ = (UniqueConstraint('user_id', 'automation_type', name='_user_automation_uc'),)
 
 class Scenario(Base):
     __tablename__ = "scenarios"
@@ -97,7 +99,7 @@ class SentCongratulation(Base):
     friend_vk_id = Column(BigInteger, nullable=False, index=True)
     year = Column(Integer, nullable=False)
     user = relationship("User")
-    __table__args__ = (UniqueConstraint('user_id', 'friend_vk_id', 'year', name='_user_friend_year_uc'),)
+    __table_args__ = (UniqueConstraint('user_id', 'friend_vk_id', 'year', name='_user_friend_year_uc'),)
 
 class ActionLog(Base):
     __tablename__ = "action_logs"
@@ -107,4 +109,4 @@ class ActionLog(Base):
     message = Column(Text, nullable=False)
     status = Column(Enum(ActionStatus), nullable=False)
     timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
-    user = relationship("User")
+    user = relationship("User", back_populates="action_logs")

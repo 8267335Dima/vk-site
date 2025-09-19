@@ -1,16 +1,15 @@
 # backend/app/tasks/standard_tasks.py
-
 import functools
 import structlog
 from sqlalchemy import select, update
 from sqlalchemy.orm import joinedload
+from datetime import datetime, UTC
 
 from app.db.models import User, TaskHistory, Automation
 from app.db.session import AsyncSessionFactory
 from app.services.event_emitter import RedisEventEmitter
 from app.core.exceptions import UserActionException
 from app.services.vk_api import VKAPIError, VKAuthError
-# --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
 from app.core.enums import TaskKey 
 from app.tasks.service_maps import TASK_CONFIG_MAP
 from contextlib import asynccontextmanager
@@ -40,7 +39,6 @@ def arq_task_runner(func):
             user_id = None
             
             try:
-                # --- УЛУЧШЕНИЕ: Используем selectinload для прокси ---
                 stmt = select(TaskHistory).where(TaskHistory.id == task_history_id).options(
                     joinedload(TaskHistory.user).selectinload(User.proxies)
                 )
@@ -58,9 +56,13 @@ def arq_task_runner(func):
                 emitter.set_context(user_id, task_history_id)
                 
                 task_history.status = "STARTED"
+                task_history.started_at = datetime.now(UTC)
                 await session.commit()
                 
                 await emitter.send_task_status_update(status="STARTED", task_name=task_name, created_at=created_at)
+
+                if task_history.user.is_shadow_banned:
+                    raise UserActionException("Действие отменено (теневой бан).")
 
                 summary_result = await func(session, task_history.user, task_history.parameters or {}, emitter)
 
@@ -91,6 +93,7 @@ def arq_task_runner(func):
             
             finally:
                 if task_history:
+                    task_history.finished_at = datetime.now(UTC)
                     final_status = task_history.status
                     final_result = task_history.result
                     

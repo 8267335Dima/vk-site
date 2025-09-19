@@ -1,6 +1,3 @@
-# Единый источник правды о тарифных планах.
-# Ключи: BASE, PLUS, PRO - соответствуют PlanName Enum в коде.
-
 BASE:
   display_name: "Базовый"
   description: "Начальный тариф для ознакомления с базовыми возможностями."
@@ -21,7 +18,6 @@ BASE:
     - "mass_messaging"
     - "leave_groups"
     - "join_groups"
-
 PLUS:
   display_name: "Plus"
   description: "Расширенные возможности и увеличенные лимиты для активного продвижения."
@@ -62,7 +58,6 @@ PLUS:
     - "automations_center"
     - "post_scheduler"
     - "profile_growth_analytics"
-
 PRO:
   display_name: "PRO"
   description: "Максимальные лимиты и все функции для профессионалов и SMM-специалистов."
@@ -88,7 +83,6 @@ PRO:
     daily_leave_groups_limit: 200
     max_concurrent_tasks: 5
   available_features: "*"
-
 AGENCY:
   display_name: "Agency"
   description: "Для агентств и команд. Управление несколькими аккаунтами."
@@ -115,7 +109,6 @@ AGENCY:
     max_profiles: 5
     max_team_members: 5
   available_features: "*"
-
 EXPIRED:
   display_name: "Expired"
   description: "Срок действия вашего тарифа истек."

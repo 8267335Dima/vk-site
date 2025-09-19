@@ -1,15 +1,12 @@
-# tests/conftest.py
-
 import os
 import uuid
+import json
 from typing import AsyncGenerator
 from unittest.mock import AsyncMock
 
-from sqlalchemy import StaticPool
+from sqlalchemy import StaticPool, select
 
 from app.services.event_emitter import RedisEventEmitter
-
-# Устанавливаем переменную окружения ДО импорта приложения
 os.environ['ENV_FILE'] = os.path.join(os.path.dirname(__file__), '..', '.env.test')
 
 import pytest
@@ -22,17 +19,12 @@ from starlette.requests import Request
 
 from app.main import create_app
 from app.db.base import Base
-from app.db.models import User
+from app.db.models import User, Plan
 from app.core.config import settings
-
-# --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
-# Импортируем Enum из правильного места
 from app.core.enums import PlanName
-from app.core.plans import get_limits_for_plan
 from app.core.security import create_access_token, encrypt_data
 from app.api.dependencies import get_db, get_arq_pool
-
-# --- НАСТРОЙКА ТЕСТОВОГО ОКРУЖЕНИЯ ---
+from app.core.config_loader import PLAN_CONFIG
 
 @pytest_asyncio.fixture(scope="function")
 async def db_engine() -> AsyncGenerator[AsyncEngine, None]:
@@ -56,6 +48,14 @@ async def db_engine() -> AsyncGenerator[AsyncEngine, None]:
 @pytest_asyncio.fixture(scope="function")
 async def db_session(db_engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSession(db_engine, expire_on_commit=False) as session:
+        plans_to_create = []
+        for plan_id, config in PLAN_CONFIG.items():
+            plan_data = config.model_dump()
+            plan_data['name_id'] = plan_id
+            plans_to_create.append(Plan(**plan_data))
+        
+        session.add_all(plans_to_create)
+        await session.commit()
         yield session
 
 
@@ -82,7 +82,6 @@ def test_app(db_engine: AsyncEngine, db_session: AsyncSession, mock_arq_pool: As
 
     app.add_middleware(SQLAdminTestSessionMiddleware)
 
-
     def override_get_db():
         yield db_session
     app.dependency_overrides[get_db] = override_get_db
@@ -97,13 +96,11 @@ async def async_client(test_app: FastAPI) -> AsyncGenerator[AsyncClient, None]:
     async with AsyncClient(transport=transport, base_url="http://test", follow_redirects=True) as client:
         yield client
 
-# --- ФИКСТУРЫ ДАННЫХ ---
-
 @pytest_asyncio.fixture(scope="function")
 async def test_user(db_session: AsyncSession) -> User:
-    user_data = { "vk_id": 12345678, "encrypted_vk_token": encrypt_data("test_vk_token"), "plan": PlanName.PRO.name }
-    limits = get_limits_for_plan(PlanName.PRO)
-    user = User(**user_data, **{k: v for k, v in limits.items() if hasattr(User, k)})
+    pro_plan = (await db_session.execute(select(Plan).where(Plan.name_id == PlanName.PRO.name))).scalar_one()
+    user_data = { "vk_id": 12345678, "encrypted_vk_token": encrypt_data("test_vk_token"), "plan_id": pro_plan.id }
+    user = User(**user_data, **{k: v for k, v in pro_plan.limits.items() if hasattr(User, k)})
     db_session.add(user)
     await db_session.commit()
     await db_session.refresh(user)
@@ -111,39 +108,9 @@ async def test_user(db_session: AsyncSession) -> User:
 
 @pytest_asyncio.fixture(scope="function")
 async def admin_user(db_session: AsyncSession) -> User:
-    user_data = { "vk_id": int(settings.ADMIN_VK_ID), "encrypted_vk_token": encrypt_data("admin_vk_token"), "plan": PlanName.PRO.name, "is_admin": True }
-    limits = get_limits_for_plan(PlanName.PRO)
-    user = User(**user_data, **{k: v for k, v in limits.items() if hasattr(User, k)})
-    db_session.add(user)
-    await db_session.commit()
-    await db_session.refresh(user)
-    return user
-
-@pytest_asyncio.fixture(scope="function")
-async def manager_user(db_session: AsyncSession) -> User:
-    user_data = {"vk_id": 111111, "encrypted_vk_token": encrypt_data("manager_token"), "plan": PlanName.AGENCY.name}
-    limits = get_limits_for_plan(PlanName.AGENCY)
-    user = User(**user_data, **{k: v for k, v in limits.items() if hasattr(User, k)})
-    db_session.add(user)
-    await db_session.commit()
-    await db_session.refresh(user)
-    return user
-
-@pytest_asyncio.fixture(scope="function")
-async def managed_profile_user(db_session: AsyncSession) -> User:
-    user_data = {"vk_id": 222222, "encrypted_vk_token": encrypt_data("managed_profile_token"), "plan": PlanName.PRO.name}
-    limits = get_limits_for_plan(PlanName.PRO)
-    user = User(**user_data, **{k: v for k, v in limits.items() if hasattr(User, k)})
-    db_session.add(user)
-    await db_session.commit()
-    await db_session.refresh(user)
-    return user
-
-@pytest_asyncio.fixture(scope="function")
-async def team_member_user(db_session: AsyncSession) -> User:
-    user_data = {"vk_id": 333333, "encrypted_vk_token": encrypt_data("team_member_token"), "plan": PlanName.BASE.name}
-    limits = get_limits_for_plan(PlanName.BASE)
-    user = User(**user_data, **{k: v for k, v in limits.items() if hasattr(User, k)})
+    pro_plan = (await db_session.execute(select(Plan).where(Plan.name_id == PlanName.PRO.name))).scalar_one()
+    user_data = { "vk_id": int(settings.ADMIN_VK_ID), "encrypted_vk_token": encrypt_data("admin_vk_token"), "plan_id": pro_plan.id, "is_admin": True }
+    user = User(**user_data, **{k: v for k, v in pro_plan.limits.items() if hasattr(User, k)})
     db_session.add(user)
     await db_session.commit()
     await db_session.refresh(user)
@@ -164,11 +131,3 @@ async def mock_emitter(mocker) -> RedisEventEmitter:
     emitter.send_task_status_update = mocker.AsyncMock()
     emitter.send_system_notification = mocker.AsyncMock()
     return emitter
-
-@pytest.fixture(scope="function")
-def get_auth_headers_for():
-    def _get_auth_headers(user: User) -> dict[str, str]:
-        token_data = {"sub": str(user.id), "profile_id": str(user.id)}
-        access_token = create_access_token(data=token_data)
-        return {"Authorization": f"Bearer {access_token}"}
-    return _get_auth_headers
