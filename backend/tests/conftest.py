@@ -1,6 +1,10 @@
+import asyncio
+import sys
 import os
 import uuid
 import json
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 from typing import AsyncGenerator, Generator
 from unittest.mock import AsyncMock
 
@@ -105,9 +109,43 @@ async def mock_arq_pool(mocker) -> AsyncMock:
     mock_pool.abort_job = AsyncMock()
     return mock_pool
 
+@pytest_asyncio.fixture(scope="function")
+async def mock_redis() -> AsyncMock:
+    """
+    Эта фикстура создает и предоставляет мок-объект для клиента Redis.
+    Она нужна, чтобы заменить реальное подключение к Redis в тестах.
+    """
+    mock = AsyncMock()
+    # Настраиваем поведение мока по умолчанию
+    mock.get.return_value = None
+    mock.set.return_value = True
+    return mock
+
+# ▼▼▼ ШАГ 2: ЗАМЕНИТЕ ВАШУ ФИКСТУРУ test_app НА ЭТУ ▼▼▼
 @pytest.fixture(scope="function")
-def test_app(db_engine: AsyncEngine, db_session: AsyncSession, mock_arq_pool: AsyncMock) -> FastAPI:
+def test_app(
+    db_engine: AsyncEngine,
+    db_session: AsyncSession,
+    mock_arq_pool: AsyncMock,
+    mock_redis: AsyncMock, # <--- Теперь pytest сможет найти эту фикстуру
+    mocker
+) -> FastAPI:
+    # Патчим (заменяем) функции, которые создают реальные подключения в lifespan,
+    # чтобы они не выполнялись во время тестов. Это не обязательно, но делает тесты
+    # более надежными и независимыми от кода в lifespan.
+    mocker.patch("app.main.create_pool", return_value=mock_arq_pool)
+    mocker.patch("app.main.AsyncRedis.from_url", return_value=mock_redis)
+    mocker.patch("app.main.FastAPILimiter.init", return_value=None)
+    mocker.patch("app.main.run_redis_listener", return_value=None)
+
     app = create_app(db_engine=db_engine)
+
+    # Явно устанавливаем моки в состояние приложения. Это ключевой момент,
+    # который исправляет ошибку `AttributeError`. Теперь middleware
+    # найдет `app.state.activity_redis`.
+    app.state.arq_pool = mock_arq_pool
+    app.state.activity_redis = mock_redis
+    app.state.redis_client = mock_redis
 
     class SQLAdminTestSessionMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next):
@@ -117,8 +155,6 @@ def test_app(db_engine: AsyncEngine, db_session: AsyncSession, mock_arq_pool: As
 
     app.add_middleware(SQLAdminTestSessionMiddleware)
 
-    # ▼▼▼ ОБНОВЛЕННЫЙ OVERRIDE ▼▼▼
-    # Этот override теперь асинхронный генератор, как и оригинальная зависимость.
     async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
         yield db_session
 
@@ -127,7 +163,9 @@ def test_app(db_engine: AsyncEngine, db_session: AsyncSession, mock_arq_pool: As
     
     return app
 
-
+# ▼▼▼ ШАГ 3: УБЕДИТЕСЬ, ЧТО ФИКСТУРА async_client ИСПОЛЬЗУЕТ КОНТЕКСТНЫЙ МЕНЕДЖЕР ▼▼▼
+# Это гарантирует, что lifespan приложения (который мы теперь мокаем) будет
+# корректно запущен и завершен для каждого теста.
 @pytest_asyncio.fixture(scope="function")
 async def async_client(test_app: FastAPI) -> AsyncGenerator[AsyncClient, None]:
     transport = ASGITransport(app=test_app)

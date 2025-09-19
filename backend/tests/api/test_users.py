@@ -11,6 +11,7 @@ from app.db.models import User, DailyStats, FilterPreset
 from app.core.enums import PlanName, FeatureKey
 from app.db.models.user import ManagedProfile
 from app.db.models.payment import Plan
+from app.services.vk_api.base import VKAPIError
 
 # Все тесты в этом файле должны использовать anyio
 pytestmark = pytest.mark.anyio
@@ -257,3 +258,45 @@ async def test_create_duplicate_filter_preset_fails(
     # Assert: Ожидаем ошибку 409 Conflict
     assert response_second.status_code == 409
     assert "Пресет с таким названием для данного действия уже существует" in response_second.json()["detail"]
+
+async def test_read_users_me_vk_api_error(async_client: AsyncClient, auth_headers: dict, test_user: User, mocker):
+    """
+    Тест проверяет, что эндпоинт /me возвращает корректную ошибку 424,
+    если VK API недоступен или токен невалиден.
+    """
+    # Arrange
+    # Мокаем VK API так, чтобы он выбрасывал исключение
+    mock_vk_api_class = mocker.patch('app.api.endpoints.users.VKAPI')
+    mock_instance = mock_vk_api_class.return_value
+    mock_instance.users.get.side_effect = VKAPIError("Invalid token", 5)
+    mock_instance.close = AsyncMock()
+    
+    # Act
+    response = await async_client.get("/api/v1/users/me", headers=auth_headers)
+    
+    # Assert
+    assert response.status_code == 424 # Failed Dependency
+    assert "Ошибка VK API: Invalid token" in response.json()["detail"]
+
+@pytest.mark.parametrize(
+    "payload, expected_status, expected_detail",
+    [
+        # Невалидное значение для posts_count (меньше 10)
+        ({"analytics_settings_posts_count": 5, "analytics_settings_photos_count": 200}, 422, "Input should be greater than or equal to 10"),
+        # Невалидное значение для posts_count (больше 500)
+        ({"analytics_settings_posts_count": 501, "analytics_settings_photos_count": 200}, 422, "Input should be less than or equal to 500"),
+        # Невалидное значение для photos_count (меньше 10)
+        ({"analytics_settings_posts_count": 100, "analytics_settings_photos_count": 9}, 422, "Input should be greater than or equal to 10"),
+        # Невалидное значение для photos_count (больше 1000)
+        ({"analytics_settings_posts_count": 100, "analytics_settings_photos_count": 1001}, 422, "Input should be less than or equal to 1000"),
+    ]
+)
+async def test_update_analytics_settings_validation(
+    async_client: AsyncClient, auth_headers: dict, payload, expected_status, expected_detail
+):
+    """Проверяет Pydantic-валидацию для эндпоинта настроек аналитики."""
+    response = await async_client.put(
+        "/api/v1/users/me/analytics-settings", headers=auth_headers, json=payload
+    )
+    assert response.status_code == expected_status
+    assert expected_detail in str(response.json())

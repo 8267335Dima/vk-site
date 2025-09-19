@@ -40,10 +40,11 @@ async def _aggregate_daily_stats_async(session: AsyncSession):
 
     for stat_type, identifier in [(WeeklyStats, week_id), (MonthlyStats, month_id)]:
         values_to_upsert = []
+        id_key = 'week_identifier' if stat_type is WeeklyStats else 'month_identifier'
         for r in daily_sums:
             values_to_upsert.append({
                 "user_id": r.user_id,
-                f"{'weekly_stats'.replace('s', '') if stat_type is WeeklyStats else 'monthly_stats'.replace('s', '')}_identifier": identifier,
+                id_key: identifier,
                 "likes_count": r.likes,
                 "friends_added_count": r.friends,
                 "friend_requests_accepted_count": r.accepted
@@ -62,9 +63,9 @@ async def _aggregate_daily_stats_async(session: AsyncSession):
             'friend_requests_accepted_count': getattr(stat_type, 'friend_requests_accepted_count') + insert_stmt.excluded.friend_requests_accepted_count
         }
         
-        index_elements_key = 'weekly_stats_identifier' if stat_type is WeeklyStats else 'monthly_stats_identifier'
+        # ▼▼▼ ИЗМЕНЕНИЕ 2: Используем исправленный ключ ▼▼▼
         final_stmt = insert_stmt.on_conflict_do_update(
-            index_elements=['user_id', index_elements_key],
+            index_elements=['user_id', id_key],
             set_=update_dict
         )
         await session.execute(final_stmt)

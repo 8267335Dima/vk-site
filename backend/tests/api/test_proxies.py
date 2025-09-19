@@ -98,3 +98,23 @@ async def test_proxy_access_denied_for_base_plan(
 
     assert response.status_code == 403
     assert "доступно только на PRO-тарифе" in response.json()["detail"]
+
+async def test_delete_another_users_proxy(
+    async_client: AsyncClient, auth_headers: dict, test_user: User, db_session: AsyncSession
+):
+    """
+    Тест безопасности: пользователь не может удалить прокси, принадлежащий другому пользователю.
+    """
+    # Arrange: Создаем второго пользователя и его прокси
+    other_user = User(vk_id=999, encrypted_vk_token="other")
+    db_session.add(other_user)
+    await db_session.flush()
+    other_proxy = Proxy(user_id=other_user.id, encrypted_proxy_url="secret_url")
+    db_session.add(other_proxy)
+    await db_session.commit()
+    
+    # Act: Пытаемся удалить чужой прокси под своими учетными данными
+    response = await async_client.delete(f"/api/v1/proxies/{other_proxy.id}", headers=auth_headers)
+
+    # Assert: Ожидаем ошибку 404, так как для нас этого прокси "не существует"
+    assert response.status_code == 404

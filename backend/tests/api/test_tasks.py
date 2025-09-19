@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timedelta, UTC
 from unittest.mock import AsyncMock
-
+from app.db.models import DailyStats
 from app.db.models import User, TaskHistory
 from app.core.enums import PlanName, TaskKey
 from app.tasks.logic.maintenance_jobs import _check_expired_plans_async
@@ -116,7 +116,7 @@ async def test_run_task_with_expired_plan(
     await db_session.commit()
     await db_session.refresh(test_user)
 
-    await _check_expired_plans_async(session_for_test=db_session)
+    await _check_expired_plans_async(session=db_session)
     await db_session.refresh(test_user, ['plan'])
     
     assert test_user.plan.name_id == PlanName.EXPIRED.name
@@ -132,3 +132,40 @@ async def test_run_task_with_expired_plan(
     # Assert
     assert response.status_code == 403
     assert "Действие недоступно на вашем тарифе" in response.json()["detail"]
+
+@pytest.mark.parametrize("task_key, daily_limit_field, stat_field, used_today, expected_max_val", [
+    # Лайки: лимит 100, использовано 30 -> можно еще 70
+    (TaskKey.LIKE_FEED, "daily_likes_limit", "likes_count", 30, 70),
+    # Добавление друзей: лимит 40, использовано 0 -> можно 40
+    (TaskKey.ADD_RECOMMENDED, "daily_add_friends_limit", "friends_added_count", 0, 40),
+    # Сообщения: лимит 50, использовано 50 -> можно 0
+    (TaskKey.MASS_MESSAGING, "daily_message_limit", "messages_sent_count", 50, 0),
+    # Удаление друзей (использует тот же лимит, что и выход из групп в конфиге)
+    (TaskKey.REMOVE_FRIENDS, "daily_leave_groups_limit", "friends_removed_count", 10, 190),
+])
+async def test_get_task_config_calculates_remaining_limit(
+    async_client: AsyncClient, auth_headers: dict, test_user: User, db_session: AsyncSession,
+    task_key, daily_limit_field, stat_field, used_today, expected_max_val
+):
+    """
+    Тест проверяет, что эндпоинт /config правильно рассчитывает
+    максимальное доступное значение для слайдера на основе дневных лимитов и текущего использования.
+    """
+    # Arrange
+    # Устанавливаем лимиты и сегодняшнее использование в БД
+    setattr(test_user, daily_limit_field, used_today + expected_max_val)
+    stats = DailyStats(user_id=test_user.id)
+    setattr(stats, stat_field, used_today)
+    db_session.add_all([test_user, stats])
+    await db_session.commit()
+
+    # Act
+    response = await async_client.get(f"/api/v1/tasks/{task_key.value}/config", headers=auth_headers)
+
+    # Assert
+    assert response.status_code == 200
+    data = response.json()
+    slider_field = next((field for field in data["fields"] if field["name"] == "count"), None)
+    
+    assert slider_field is not None
+    assert slider_field["max_value"] == expected_max_val

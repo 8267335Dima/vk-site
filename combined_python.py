@@ -26,11 +26,10 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import JSONResponse
 from datetime import datetime, UTC
-
 from app.arq_config import redis_settings
 from app.core.config import settings
 from app.core.logging import configure_logging
-from app.db.session import engine as main_engine, get_db as get_db_session
+from app.db.session import engine as main_engine, get_db as get_db_session, get_db
 from app.db.models import User
 from app.admin import init_admin
 from app.services.websocket_manager import redis_listener
@@ -42,6 +41,8 @@ from app.api.endpoints import (
     websockets_router, support_router, task_history_router, admin_router
 )
 from fastapi_limiter import FastAPILimiter
+
+
 
 configure_logging()
 
@@ -116,9 +117,12 @@ def create_app(db_engine: AsyncEngine | None = None) -> FastAPI:
         if not token or "bearer" not in token.lower():
             return await call_next(request)
         
-        db: AsyncSession = await anext(get_db_session())
+        # ▼▼▼ ИЗМЕНЕНИЕ ЗДЕСЬ ▼▼▼
+        db_generator = get_db()
+        db: AsyncSession = await anext(db_generator)
         try:
             payload = await get_token_payload(token.split(" ")[1])
+            # Мы ожидаем, что get_current_active_profile вернет пользователя или выбросит HTTPException
             user = await get_current_active_profile(payload=payload, db=db)
             
             if user.is_deleted:
@@ -126,6 +130,7 @@ def create_app(db_engine: AsyncEngine | None = None) -> FastAPI:
             if user.is_frozen:
                 return JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content={"detail": "Ваш аккаунт временно заморожен администратором."})
 
+            # Логика обновления last_active_at остается
             activity_redis = request.app.state.activity_redis
             last_update = await activity_redis.get(f"last_active:{user.id}")
             now_ts = datetime.now(UTC).timestamp()
@@ -133,14 +138,10 @@ def create_app(db_engine: AsyncEngine | None = None) -> FastAPI:
                 await db.execute(update(User).where(User.id == user.id).values(last_active_at=datetime.now(UTC)))
                 await db.commit()
                 await activity_redis.set(f"last_active:{user.id}", now_ts, ex=65)
-        except HTTPException:
-             pass
-        except Exception:
-            pass 
-        finally:
-            await db.close()
-            
+        except HTTPException as e:
+            pass
         return await call_next(request)
+
 
     engine_to_use = db_engine or main_engine
     init_admin(app, engine_to_use)
@@ -7571,24 +7572,38 @@ async def clear_old_task_history_job(ctx):
 
 # backend/app/tasks/profile_parser.py
 import asyncio
-import datetime
 import structlog
 from sqlalchemy import select, or_
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+from datetime import datetime, UTC
 
-# Импорты Celery удалены
-from app.db.session import AsyncSessionFactory
 from app.db.models import User
 from app.services.profile_analytics_service import ProfileAnalyticsService
 from app.services.vk_api import VKAuthError
+from app.tasks.logic.maintenance_jobs import get_session
+# <--- ИЗМЕНЕНИЕ 1: Добавляем импорт SystemLogEmitter
+from app.services.event_emitter import SystemLogEmitter
 
 log = structlog.get_logger(__name__)
 
-async def _snapshot_all_users_metrics_async():
-    async with AsyncSessionFactory() as session:
-        now = datetime.datetime.utcnow()
-        stmt = select(User).where(or_(User.plan_expires_at == None, User.plan_expires_at > now))
-        result = await session.execute(stmt)
-        active_users = result.scalars().all()
+
+async def _snapshot_all_users_metrics_async(session: AsyncSession | None = None):
+    """
+    Создает "снимок" метрик для всех активных пользователей.
+    Может принимать существующую сессию БД для целей тестирования.
+    """
+    async with get_session(session) as db_session:
+        now = datetime.now(UTC)
+        
+        stmt = (
+            select(User)
+            .options(selectinload(User.proxies))
+            .where(or_(User.plan_expires_at == None, User.plan_expires_at > now))
+        )
+        
+        result = await db_session.execute(stmt)
+        active_users = result.scalars().unique().all()
 
         if not active_users:
             log.info("snapshot_metrics_task.no_active_users")
@@ -7596,22 +7611,20 @@ async def _snapshot_all_users_metrics_async():
 
         log.info("snapshot_metrics_task.start", count=len(active_users))
 
-        tasks = [_process_user(user) for user in active_users]
-        await asyncio.gather(*tasks)
+        for user in active_users:
+            try:
+                emitter = SystemLogEmitter("snapshot_metrics")
+                emitter.set_context(user.id) # Привязываем логгер к пользователю
+                
+                service = ProfileAnalyticsService(db=db_session, user=user, emitter=emitter)
+                
+                await service.snapshot_profile_metrics()
+            except VKAuthError:
+                log.warn("snapshot_metrics_task.auth_error", user_id=user.id)
+            except Exception as e:
+                log.error("snapshot_metrics_task.user_error", user_id=user.id, error=str(e))
 
         log.info("snapshot_metrics_task.finished")
-
-async def _process_user(user: User):
-    async with AsyncSessionFactory() as user_session:
-        try:
-            service = ProfileAnalyticsService(db=user_session, user=user, emitter=None)
-            await service.snapshot_profile_metrics()
-        except VKAuthError:
-            log.warn("snapshot_metrics_task.auth_error", user_id=user.id)
-        except Exception as e:
-            log.error("snapshot_metrics_task.user_error", user_id=user.id, error=str(e))
-
-
 
 # --- backend/app\tasks\profile_parser_jobs.py ---
 
@@ -8039,10 +8052,11 @@ async def _aggregate_daily_stats_async(session: AsyncSession):
 
     for stat_type, identifier in [(WeeklyStats, week_id), (MonthlyStats, month_id)]:
         values_to_upsert = []
+        id_key = 'week_identifier' if stat_type is WeeklyStats else 'month_identifier'
         for r in daily_sums:
             values_to_upsert.append({
                 "user_id": r.user_id,
-                f"{'weekly_stats'.replace('s', '') if stat_type is WeeklyStats else 'monthly_stats'.replace('s', '')}_identifier": identifier,
+                id_key: identifier,
                 "likes_count": r.likes,
                 "friends_added_count": r.friends,
                 "friend_requests_accepted_count": r.accepted
@@ -8061,9 +8075,9 @@ async def _aggregate_daily_stats_async(session: AsyncSession):
             'friend_requests_accepted_count': getattr(stat_type, 'friend_requests_accepted_count') + insert_stmt.excluded.friend_requests_accepted_count
         }
         
-        index_elements_key = 'weekly_stats_identifier' if stat_type is WeeklyStats else 'monthly_stats_identifier'
+        # ▼▼▼ ИЗМЕНЕНИЕ 2: Используем исправленный ключ ▼▼▼
         final_stmt = insert_stmt.on_conflict_do_update(
-            index_elements=['user_id', index_elements_key],
+            index_elements=['user_id', id_key],
             set_=update_dict
         )
         await session.execute(final_stmt)
@@ -8177,7 +8191,7 @@ from sqlalchemy import String, select, or_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from arq.connections import ArqRedis
-
+from app.core.enums import AutomationType
 from app.db.models import Automation, TaskHistory, User
 from app.core.config_loader import AUTOMATIONS_CONFIG
 from app.core.constants import CronSettings
@@ -8219,7 +8233,8 @@ async def _run_daily_automations_async(session: AsyncSession, arq_pool: ArqRedis
 
     stmt = select(Automation).join(User).where(
         Automation.is_active == True,
-        Automation.automation_type.cast(String).in_(automation_ids),
+        # Сравниваем напрямую с Enum объектами
+        Automation.automation_type.in_([AutomationType(aid) for aid in automation_ids]),
         or_(User.plan_expires_at.is_(None), User.plan_expires_at > now_utc)
     ).options(selectinload(Automation.user))
     

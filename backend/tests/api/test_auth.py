@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from unittest.mock import MagicMock
 from fastapi import HTTPException
-
+from httpx import AsyncClient
 # Импортируем саму функцию эндпоинта и Pydantic-модель для запроса
 from app.api.endpoints.auth import login_via_vk, TokenRequest
 from app.db.models import User, LoginHistory
@@ -103,3 +103,29 @@ async def test_login_via_vk_invalid_token_logic(
     # Проверяем детали исключения
     assert exc_info.value.status_code == 401
     assert "Неверный или просроченный токен VK" in exc_info.value.detail
+
+async def test_switch_to_unmanaged_profile_fails(
+    async_client: AsyncClient, 
+    db_session: AsyncSession, 
+    manager_user: User, 
+    team_member_user: User, # Просто как пользователь, которым не управляют
+    get_auth_headers_for
+):
+    """
+    Тест безопасности: менеджер не может переключиться на профиль пользователя,
+    который не находится у него в управлении.
+    """
+    # Arrange
+    # Убедимся, что team_member_user НЕ является управляемым профилем для manager_user
+    manager_headers = get_auth_headers_for(manager_user)
+    
+    # Act
+    response = await async_client.post(
+        "/api/v1/auth/switch-profile",
+        headers=manager_headers,
+        json={"profile_id": team_member_user.id}
+    )
+    
+    # Assert
+    assert response.status_code == 403
+    assert "Доступ к этому профилю запрещен" in response.json()["detail"]
