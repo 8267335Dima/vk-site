@@ -166,14 +166,11 @@ async def test_add_friends_with_liking_closed_profile(
     await service._add_recommended_friends_logic(request_params)
 
     # Assert
-    # Проверяем, что заявка была отправлена
     mock_vk_api.add_friend.assert_called_once()
-    # Ключевая проверка: метод для простановки лайков не был вызван
     mock_vk_api.add_like.assert_not_called()
     
     # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
-    # Логика находится в _add_recommended_friends_logic, а не _like_user_content.
-    # Проверяем, что было отправлено корректное сообщение о пропуске.
+    # Ожидаемое сообщение должно точно соответствовать тому, что генерирует сервис
     mock_emitter.send_log.assert_any_call(
         "Профиль Закрытый закрыт, пропуск лайкинга.", "info", target_url="https://vk.com/id123"
     )
@@ -212,12 +209,13 @@ async def test_add_friends_with_message_limit_reached_mid_task(
     # Assert
     assert mock_vk_api.add_friend.call_count == 2
     
-    # Проверяем вызовы: первый с сообщением, второй - без
+    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+    # Проверяем позиционные аргументы, а не kwargs
     calls = mock_vk_api.add_friend.call_args_list
     assert calls[0].args[0] == 101
-    assert calls[0].kwargs['text'] == "Привет, Первый!"
+    assert calls[0].args[1] == "Привет, Первый!" # Второй аргумент (text)
     assert calls[1].args[0] == 102
-    assert calls[1].kwargs['text'] is None
+    assert calls[1].args[1] is None # Второй аргумент (text) должен быть None
 
     # Проверяем, что в лог было отправлено предупреждение
     mock_emitter.send_log.assert_any_call(

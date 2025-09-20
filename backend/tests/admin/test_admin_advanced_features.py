@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 from fastapi import HTTPException
 from jose import jwt
 import json
-
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.admin.views.management.user import UserAdmin
 from app.api.endpoints.support import reply_to_ticket
 from app.db.models import User, SupportTicket, TicketStatus
@@ -17,10 +17,10 @@ ASYNC_TEST = pytest.mark.asyncio
 
 class TestAdminSuperpowers:
     @ASYNC_TEST
-    async def test_admin_has_access_to_disabled_feature(self, test_user, admin_user, mocker):
+    async def test_admin_has_access_to_disabled_feature(self, db_session: AsyncSession, test_user, admin_user, mocker):
         mocker.patch.object(SystemService, 'is_feature_enabled', return_value=False)
-        assert not await is_feature_available_for_plan(test_user.plan.name_id, "any_feature", user=test_user)
-        assert await is_feature_available_for_plan(admin_user.plan.name_id, "any_feature", user=admin_user)
+        assert not await is_feature_available_for_plan(test_user.plan.name_id, "any_feature", db=db_session, user=test_user)
+        assert await is_feature_available_for_plan(admin_user.plan.name_id, "any_feature", db=db_session, user=admin_user)
 
     @ASYNC_TEST
     async def test_impersonate_action_creates_correct_token(self, db_session: AsyncSession, admin_user: User, test_user: User):

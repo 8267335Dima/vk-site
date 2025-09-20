@@ -927,81 +927,11 @@ class GlobalSettingsAdmin(ModelView, model=GlobalSetting):
     column_list = [GlobalSetting.key, GlobalSetting.value, GlobalSetting.is_enabled, GlobalSetting.description]
     form_columns = [GlobalSetting.key, GlobalSetting.value, GlobalSetting.is_enabled, GlobalSetting.description]
 
-# --- backend/app\ai\base.py ---
-
-# backend/app/ai/base.py
-from abc import ABC, abstractmethod
-from typing import List, Dict
-
-class AIBaseService(ABC):
-    """Абстрактный базовый класс для всех сервисов ИИ."""
-
-    @abstractmethod
-    async def get_response(
-        self,
-        system_prompt: str,
-        message_history: List[Dict[str, str]],
-        user_input: str
-    ) -> str:
-        """
-        Генерирует ответ на основе промпта, истории и нового сообщения.
-
-        Args:
-            system_prompt: Инструкция для модели (например, "Ты - менеджер...").
-            message_history: Список сообщений в формате [{"role": "user/assistant", "content": "..."}].
-            user_input: Последнее сообщение от пользователя.
-
-        Returns:
-            Сгенерированный текстовый ответ.
-        """
-        pass
-
-# --- backend/app\ai\gemini.py ---
-
-# backend/app/ai/gemini.py
-import google.generativeai as genai
-from typing import List, Dict
-from app.ai.base import AIBaseService
-from app.core.config import settings # Нужно будет добавить GEMINI_API_KEY в Settings
-
-# ВНИМАНИЕ: Добавьте в ваш .env файл:
-# GEMINI_API_KEY=ваш_ключ
-
-class GeminiService(AIBaseService):
-    def __init__(self):
-        genai.configure(api_key=settings.GEMINI_API_KEY)
-        self.model = genai.GenerativeModel('gemini-1.5-flash')
-
-    async def get_response(
-        self,
-        system_prompt: str,
-        message_history: List[Dict[str, str]],
-        user_input: str
-    ) -> str:
-        try:
-            # Формируем историю для Gemini
-            history = []
-            for msg in message_history:
-                role = 'user' if msg['role'] == 'user' else 'model'
-                history.append({'role': role, 'parts': [msg['content']]})
-
-            chat = self.model.start_chat(history=history)
-            
-            # Добавляем системный промпт к последнему сообщению пользователя
-            full_prompt = f"{system_prompt}\n\n---\n\n{user_input}"
-            
-            response = await chat.send_message_async(full_prompt)
-            return response.text
-        except Exception as e:
-            # Логирование ошибки
-            print(f"Gemini API error: {e}")
-            return "Извините, произошла ошибка при генерации ответа."
-
 # --- backend/app\ai\unified_service.py ---
 
 # backend/app/ai/unified_service.py
-from openai import AsyncOpenAI
-from typing import List, Dict, Literal
+from openai import AsyncOpenAI, APIError
+from typing import List, Dict, Literal, Optional
 import structlog
 
 from app.core.exceptions import UserActionException
@@ -1010,62 +940,72 @@ log = structlog.get_logger(__name__)
 
 AIProvider = Literal["openai", "google"]
 
-PROVIDER_CONFIG = {
-    "openai": {
-        "base_url": None, # Используется по умолчанию
-    },
-    "google": {
-        "base_url": "https://generativelanguage.googleapis.com/v1beta",
-    }
+# Конфигурация базовых URL для провайдеров
+PROVIDER_BASE_URLS = {
+    "openai": "https://api.openai.com/v1",
+    "google": "https://generativelanguage.googleapis.com/v1beta",
 }
 
 class UnifiedAIService:
     """
     Унифицированный сервис для работы с различными LLM через OpenAI-совместимый клиент.
     """
-    def __init__(self, provider: AIProvider, api_key: str, model: str):
-        if not api_key:
-            raise UserActionException("API ключ для нейросети не предоставлен.")
-        if provider not in PROVIDER_CONFIG:
+    def __init__(self, provider: AIProvider, api_key: str, model: str, fallback_message: str):
+        if provider not in PROVIDER_BASE_URLS:
             raise UserActionException(f"Провайдер ИИ '{provider}' не поддерживается.")
 
-        config = PROVIDER_CONFIG[provider]
-        
-        # Для Google нужно добавить /models/{model}:generateContent
-        api_path = f"/models/{model}:generateContent" if provider == "google" else ""
-        
         self.client = AsyncOpenAI(
             api_key=api_key,
-            base_url=f"{config['base_url']}{api_path}" if config['base_url'] else None
+            base_url=PROVIDER_BASE_URLS[provider]
         )
         self.model = model
+        self.provider = provider
+        self.fallback_message = fallback_message
 
     async def get_response(
         self,
         system_prompt: str,
         message_history: List[Dict[str, str]],
-        user_input: str
+        user_input: str,
+        image_url: Optional[str] = None
     ) -> str:
         """
-        Генерирует ответ от LLM.
+        Генерирует ответ от LLM, опционально с анализом изображения по URL.
         """
+        user_content: any = user_input
+        if image_url:
+            user_content = [
+                {"type": "text", "text": user_input},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": image_url},
+                },
+            ]
+
         messages = [
             {"role": "system", "content": system_prompt},
             *message_history,
-            {"role": "user", "content": user_input}
+            {"role": "user", "content": user_content}
         ]
         
+        model_path = f"models/{self.model}" if self.provider == "google" else self.model
+
         try:
             completion = await self.client.chat.completions.create(
-                model=self.model,
+                model=model_path,
                 messages=messages,
-                temperature=0.7,
             )
             response = completion.choices[0].message.content
-            return response.strip() if response else "Нейросеть не смогла дать ответ."
+            # ИЗМЕНЕНИЕ: Используем заглушку, если ответ пустой
+            return response.strip() if response else self.fallback_message
+        except APIError as e:
+            log.error("ai.service.api_error", provider=self.provider, model=self.model, status_code=e.status_code, error=e.message)
+            # ИЗМЕНЕНИЕ: Возвращаем заглушку при ошибке API
+            return self.fallback_message
         except Exception as e:
-            log.error("ai.service.error", provider=self.client.base_url, model=self.model, error=str(e))
-            raise UserActionException(f"Ошибка при обращении к API нейросети: {e}")
+            log.error("ai.service.unknown_error", provider=self.provider, model=self.model, error=str(e))
+            # ИЗМЕНЕНИЕ: Возвращаем заглушку при любой другой ошибке
+            return self.fallback_message
 
 # --- backend/app\api\dependencies.py ---
 
@@ -1085,6 +1025,11 @@ from app.db.models import User, ManagedProfile, TeamMember, TeamProfileAccess
 from app.db.session import get_db, AsyncSessionFactory
 from app.repositories.user import UserRepository
 from fastapi_limiter.depends import RateLimiter
+
+from app.ai.unified_service import UnifiedAIService
+from app.core.security import decrypt_data
+from app.core.exceptions import UserActionException
+
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/vk")
 
@@ -1173,6 +1118,33 @@ async def get_current_user_from_ws(
     if not user:
         raise credentials_exception
     return user
+
+async def get_ai_service(user: User = Depends(get_current_active_profile)) -> UnifiedAIService:
+    """
+    Зависимость для создания экземпляра AI-сервиса с настройками
+    текущего пользователя из базы данных.
+    """
+    api_key = decrypt_data(user.encrypted_ai_api_key)
+    
+    if not all([user.ai_provider, api_key, user.ai_model_name]):
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail="Настройки AI не сконфигурированы. Пожалуйста, укажите провайдера, модель и API ключ в настройках."
+        )
+    
+    # ИЗМЕНЕНИЕ: Получаем заглушку или используем стандартную
+    fallback = user.ai_fallback_message or "Извините, в данный момент не могу ответить."
+    
+    try:
+        return UnifiedAIService(
+            provider=user.ai_provider,
+            api_key=api_key,
+            model=user.ai_model_name,
+            # И передаем ее в сервис
+            fallback_message=fallback
+        )
+    except UserActionException as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 # --- backend/app\api\__init__.py ---
 
@@ -1273,6 +1245,7 @@ async def update_ai_settings(
     user.encrypted_ai_api_key = encrypt_data(settings_data.api_key)
     user.ai_model_name = settings_data.model_name
     user.ai_system_prompt = settings_data.system_prompt
+    user.ai_fallback_message = settings_data.ai_fallback_message
     
     await db.commit()
     
@@ -1280,7 +1253,9 @@ async def update_ai_settings(
         provider=user.ai_provider,
         model_name=user.ai_model_name,
         system_prompt=user.ai_system_prompt,
-        is_configured=bool(user.encrypted_ai_api_key)
+        is_configured=bool(user.encrypted_ai_api_key),
+        # И ЭТУ СТРОКУ
+        ai_fallback_message=user.ai_fallback_message
     )
 
 @router.get("/settings", response_model=AISettingsRead)
@@ -1290,7 +1265,9 @@ async def get_ai_settings(user: User = Depends(get_current_active_profile)):
         provider=user.ai_provider,
         model_name=user.ai_model_name,
         system_prompt=user.ai_system_prompt,
-        is_configured=bool(user.encrypted_ai_api_key)
+        is_configured=bool(user.encrypted_ai_api_key),
+        # И ЭТУ СТРОКУ
+        ai_fallback_message=user.ai_fallback_message
     )
 
 # --- backend/app\api\endpoints\analytics.py ---
@@ -1913,12 +1890,16 @@ async def payment_webhook(request: Request, db: AsyncSession = Depends(get_db)):
 # --- backend/app\api\endpoints\data.py ---
 
 # backend/app/api/endpoints/data.py
+from typing import List
 from fastapi import APIRouter, Depends
 from starlette.responses import StreamingResponse
 from app.api.dependencies import get_current_active_profile
 from app.db.session import get_db
 from app.services.data_service import DataService
-from app.api.schemas.data import ParsingRequest
+from app.api.schemas.data import (
+    ParsingRequest, GroupMembersParsingRequest, UserWallParsingRequest,
+    TopUsersParsingRequest, TopUserResponse
+)
 
 router = APIRouter()
 
@@ -1951,19 +1932,61 @@ async def export_conversation(
         headers=headers
     )
 
+
+@router.post("/parse/group-members")
+async def parse_group_members(
+    request: GroupMembersParsingRequest, # <-- Теперь это работает
+    user=Depends(get_current_active_profile),
+    db=Depends(get_db)
+):
+    """Запускает парсинг подписчиков сообщества."""
+    service = DataService(db=db, user=user, emitter=None)
+    results = await service.parse_group_members(request.group_id, request.count)
+    return results
+
+@router.post("/parse/user-wall")
+async def parse_user_wall(
+    request: UserWallParsingRequest, # <-- И это тоже работает
+    user=Depends(get_current_active_profile),
+    db=Depends(get_db)
+):
+    """Запускает парсинг стены пользователя."""
+    service = DataService(db=db, user=user, emitter=None)
+    results = await service.parse_user_wall(request.user_id, request.count)
+    return results
+
+@router.post("/parse/group-top-active", response_model=List[TopUserResponse])
+async def parse_top_active_users(
+    request: TopUsersParsingRequest,
+    user=Depends(get_current_active_profile),
+    db=Depends(get_db)
+):
+    """Запускает парсинг самых активных пользователей сообщества."""
+    service = DataService(db=db, user=user, emitter=None)
+    results = await service.parse_top_active_users(request.group_id, request.posts_depth, request.top_n)
+    return results
+
 # --- backend/app\api\endpoints\groups.py ---
 
 # backend/app/api/endpoints/groups.py
-from fastapi import APIRouter, Depends, HTTPException, status
+import asyncio
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-
+from app.services.vk_api import VKAPI
+from app.core.security import decrypt_data
+from pydantic import BaseModel, Field, HttpUrl
+from typing import List, Optional
 from app.db.session import get_db
 from app.db.models import User, Group
 from app.api.dependencies import get_current_active_profile
 from app.api.schemas.groups import AddGroupRequest, AvailableGroupsResponse, GroupRead
 from app.services.group_identity_service import GroupIdentityService
 from app.core.security import encrypt_data
+from app.services.vk_api.base import VKAPIError
+from app.api.schemas.posts import UploadedImagesResponse, UploadedImageResponse # Переиспользуем схемы
+from app.api.endpoints.posts import _download_image_from_url # Переиспользуем хелпер
+from app.repositories.stats import StatsRepository
 
 router = APIRouter()
 
@@ -2003,6 +2026,154 @@ async def get_managed_groups(
     """Возвращает список управляемых сообществ."""
     await db.refresh(current_user, ['managed_groups'])
     return {"groups": current_user.managed_groups}
+
+class GroupPostCreate(BaseModel):
+    message: str = Field("", max_length=4000)
+    attachments: Optional[List[str]] = Field(default_factory=list, max_length=10)
+
+
+@router.post("/{group_id}/wall", status_code=status.HTTP_201_CREATED)
+async def post_to_group_wall(
+    group_id: int,
+    post_data: GroupPostCreate,
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
+    """Публикует новый пост на стене управляемого сообщества с проверкой лимитов."""
+
+    # <<< ДОБАВЛЕНО: Блок проверки лимитов >>>
+    stats_repo = StatsRepository(db)
+    today_stats = await stats_repo.get_or_create_today_stats(current_user.id)
+
+    if today_stats.posts_created_count >= current_user.daily_posts_limit:
+        remaining = current_user.daily_posts_limit - today_stats.posts_created_count
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Достигнут дневной лимит на создание постов. Осталось: {remaining if remaining > 0 else 0}"
+        )
+    # <<< КОНЕЦ БЛОКА ПРОВЕРКИ >>>
+
+    stmt = select(Group).where(Group.id == group_id, Group.admin_user_id == current_user.id)
+    group = (await db.execute(stmt)).scalar_one_or_none()
+
+    if not group:
+        raise HTTPException(status_code=404, detail="Управляемое сообщество не найдено или у вас нет прав.")
+
+    group_token = decrypt_data(group.encrypted_access_token)
+    if not group_token:
+        raise HTTPException(status_code=403, detail="Не удалось получить токен доступа для этого сообщества.")
+        
+    vk_api = VKAPI(access_token=group_token)
+    try:
+        attachments_str = ",".join(post_data.attachments)
+        result = await vk_api.wall.post(
+            owner_id=-group.vk_group_id,
+            message=post_data.message,
+            attachments=attachments_str,
+            from_group=True
+        )
+        
+        # <<< ДОБАВЛЕНО: Увеличиваем счетчик после успешной публикации >>>
+        if result and result.get("post_id"):
+            today_stats.posts_created_count += 1
+            await db.commit() # Сохраняем изменение счетчика
+            return {"status": "success", "post_id": result.get("post_id")}
+        else:
+            # Если по какой-то причине VK не вернул post_id, считаем это ошибкой
+            raise VKAPIError(f"VK API не вернул ID поста. Ответ: {result}", 0)
+
+    except VKAPIError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Ошибка VK API: {e.message}")
+    finally:
+        await vk_api.close()
+
+async def get_group_vk_api(
+    group_id: int,
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+) -> VKAPI:
+    """
+    Зависимость для получения экземпляра VKAPI, инициализированного
+    токеном доступа конкретного управляемого сообщества.
+    """
+    stmt = select(Group).where(Group.id == group_id, Group.admin_user_id == current_user.id)
+    group = (await db.execute(stmt)).scalar_one_or_none()
+
+    if not group:
+        raise HTTPException(status_code=404, detail="Управляемое сообщество не найдено или у вас нет прав.")
+
+    group_token = decrypt_data(group.encrypted_access_token)
+    if not group_token:
+        raise HTTPException(status_code=403, detail="Не удалось получить токен доступа для этого сообщества.")
+        
+    return VKAPI(access_token=group_token)
+
+
+# <<< НОВЫЕ ЭНДПОИНТЫ ДЛЯ ЗАГРУЗКИ ИЗОБРАЖЕНИЙ >>>
+
+@router.post("/{group_id}/upload-image-file", response_model=UploadedImageResponse)
+async def upload_group_image_file(
+    group_id: int,
+    vk_api: VKAPI = Depends(get_group_vk_api),
+    image: UploadFile = File(...)
+):
+    """Загружает одно изображение с диска для поста в группе."""
+    try:
+        image_bytes = await image.read()
+        attachment_id = await vk_api.photos.upload_for_wall(image_bytes)
+        return UploadedImageResponse(attachment_id=attachment_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Не удалось загрузить изображение: {e}")
+    finally:
+        await vk_api.close()
+
+@router.post("/{group_id}/upload-images-batch", response_model=UploadedImagesResponse)
+async def upload_group_images_batch(
+    group_id: int,
+    vk_api: VKAPI = Depends(get_group_vk_api),
+    images: List[UploadFile] = File(...)
+):
+    """Загружает несколько изображений с диска для поста в группе."""
+    if len(images) > 10:
+        raise HTTPException(status_code=400, detail="Можно загрузить не более 10 изображений за раз.")
+
+    async def upload_one(image: UploadFile):
+        try:
+            image_bytes = await image.read()
+            return await vk_api.photos.upload_for_wall(image_bytes)
+        except Exception:
+            return None
+
+    try:
+        tasks = [upload_one(img) for img in images]
+        results = await asyncio.gather(*tasks)
+        successful_attachments = [res for res in results if res is not None]
+        
+        if not successful_attachments:
+            raise HTTPException(status_code=500, detail="Не удалось загрузить ни одно из изображений.")
+            
+        return UploadedImagesResponse(attachment_ids=successful_attachments)
+    finally:
+        await vk_api.close()
+
+
+@router.post("/{group_id}/upload-image-from-url", response_model=UploadedImageResponse)
+async def upload_group_image_from_url(
+    group_id: int,
+    image_url: HttpUrl,
+    vk_api: VKAPI = Depends(get_group_vk_api)
+):
+    """Загружает одно изображение по URL для поста в группе."""
+    try:
+        image_bytes = await _download_image_from_url(str(image_url))
+        attachment_id = await vk_api.photos.upload_for_wall(image_bytes)
+        return UploadedImageResponse(attachment_id=attachment_id)
+    except HTTPException as e:
+        raise e # Пробрасываем HTTP исключения (например, 400 Bad Request от _download_image_from_url)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Не удалось обработать и загрузить изображение: {e}")
+    finally:
+        await vk_api.close()
 
 # --- backend/app\api\endpoints\notifications.py ---
 
@@ -2150,6 +2321,9 @@ async def upload_image_from_url(
         image_bytes = await _download_image_from_url(str(request_data.image_url))
         attachment_id = await vk_api.photos.upload_for_wall(image_bytes)
         return UploadedImageResponse(attachment_id=attachment_id)
+    except aiohttp.ClientError as e:
+        log.error("image_download.client_error", url=request_data.image_url, error=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Не удалось скачать изображение по URL: {e}")
     except HTTPException as e:
         raise e
     except Exception as e:
@@ -3468,7 +3642,7 @@ from app.services.vk_api import VKAPI, VKAPIError
 from app.core.security import decrypt_data
 from app.repositories.stats import StatsRepository
 from app.core.plans import get_features_for_plan, is_feature_available_for_plan
-from app.api.schemas.users import TaskInfoResponse, FilterPresetCreate, FilterPresetRead, ManagedProfileRead, AnalyticsSettingsRead, AnalyticsSettingsUpdate
+from app.api.schemas.users import AllLimitsResponse, LimitStatus, FilterPresetCreate, FilterPresetRead, ManagedProfileRead, AnalyticsSettingsRead, AnalyticsSettingsUpdate
 from app.core.enums import PlanName, FeatureKey
 
 router = APIRouter()
@@ -3685,6 +3859,26 @@ async def get_analytics_settings(
     """Возвращает текущие настройки аналитики пользователя."""
     return current_user
 
+@router.get("/me/all-limits", response_model=AllLimitsResponse)
+async def get_all_daily_limits(
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Возвращает текущее использование и общие лимиты для всех отслеживаемых действий.
+    """
+    stats_repo = StatsRepository(db)
+    today_stats = await stats_repo.get_or_create_today_stats(current_user.id)
+
+    return AllLimitsResponse(
+        likes=LimitStatus(used=today_stats.likes_count, limit=current_user.daily_likes_limit),
+        add_friends=LimitStatus(used=today_stats.friends_added_count, limit=current_user.daily_add_friends_limit),
+        messages=LimitStatus(used=today_stats.messages_sent_count, limit=current_user.daily_message_limit),
+        posts=LimitStatus(used=today_stats.posts_created_count, limit=current_user.daily_posts_limit),
+        join_groups=LimitStatus(used=today_stats.groups_joined_count, limit=current_user.daily_join_groups_limit),
+        leave_groups=LimitStatus(used=today_stats.groups_left_count, limit=current_user.daily_leave_groups_limit),
+    )
+
 # --- backend/app\api\endpoints\websockets.py ---
 
 # backend/app/api/endpoints/websockets.py
@@ -3751,6 +3945,9 @@ from .support import router as support_router
 from .tasks import router as tasks_router
 from .task_history import router as task_history_router
 from .admin import router as admin_router
+from .ai import router as ai_router
+from .groups import router as groups_router
+from .data import router as data_router
 
 # --- backend/app\api\schemas\actions.py ---
 
@@ -3794,10 +3991,14 @@ class AddFriendsRequest(BaseModel):
     like_config: LikeAfterAddConfig = Field(default_factory=LikeAfterAddConfig)
     send_message_on_add: bool = False
     message_text: Optional[str] = Field(None, max_length=500)
-    # ДОБАВЛЕНО: Настройки очеловечивания для приветственного сообщения
     humanized_sending: HumanizedSendingConfig = Field(default_factory=HumanizedSendingConfig)
 
-
+    @model_validator(mode='after')
+    def check_message_text_if_sending_enabled(self) -> 'AddFriendsRequest':
+        if self.send_message_on_add and (not self.message_text or not self.message_text.strip()):
+            raise ValueError('Текст сообщения не может быть пустым, если включена опция отправки.')
+        return self
+    
 class AcceptFriendsRequest(BaseModel):
     filters: ActionFilters = Field(default_factory=ActionFilters)
 
@@ -3876,24 +4077,23 @@ class EternalOnlineRequest(BaseModel):
 
 # backend/app/api/schemas/ai.py
 from pydantic import BaseModel, Field
-from typing import Literal
+from typing import Literal, Optional
 
 AIProvider = Literal["openai", "google"]
 
 class AISettingsUpdate(BaseModel):
     provider: AIProvider = Field(..., description="Провайдер ИИ")
     api_key: str = Field(..., min_length=10, description="API ключ от сервиса")
-    model_name: str = Field("gemini-2.5-flash", description="Название модели")
-    system_prompt: str = Field("Ты — полезный ассистент.", max_length=2000)
+    model_name: str = Field("gemini-1.5-flash", description="Название модели")
+    system_prompt: str = Field("", max_length=2000, description="Системная инструкция для модели")
+    ai_fallback_message: Optional[str] = Field(None, max_length=1000, description="Сообщение-заглушка при ошибке AI")
 
 class AISettingsRead(BaseModel):
-    provider: AIProvider | None = None
-    model_name: str | None = None
-    system_prompt: str | None = None
-    is_configured: bool = Field(False, description="Установлен ли API ключ")
-
-    class Config:
-        from_attributes = True
+    provider: Optional[AIProvider] = None
+    model_name: Optional[str] = None
+    system_prompt: Optional[str] = None
+    is_configured: bool
+    ai_fallback_message: Optional[str] = None
 
 # --- backend/app\api\schemas\analytics.py ---
 
@@ -4024,6 +4224,30 @@ class ParsingFilters(BaseModel):
 class ParsingRequest(BaseModel):
     group_id: int = Field(..., gt=0)
     filters: ParsingFilters = Field(default_factory=ParsingFilters)
+
+class GroupMembersParsingRequest(BaseModel):
+    group_id: int = Field(..., gt=0)
+    count: int = Field(1000, ge=1, le=1000)
+
+class UserWallParsingRequest(BaseModel):
+    user_id: int = Field(..., gt=0)
+    count: int = Field(100, ge=1, le=100)
+
+class TopUsersParsingRequest(BaseModel):
+    group_id: int = Field(..., gt=0)
+    posts_depth: int = Field(20, ge=1, le=100)
+    top_n: int = Field(10, ge=1, le=100)
+
+class UserInfo(BaseModel):
+    id: int
+    first_name: str
+    last_name: str
+    photo_100: str
+    online: int
+
+class TopUserResponse(BaseModel):
+    user_info: UserInfo
+    activity_score: int
 
 # --- backend/app\api\schemas\groups.py ---
 
@@ -4399,6 +4623,18 @@ class AnalyticsSettingsRead(AnalyticsSettingsUpdate):
     model_config = ConfigDict(
         from_attributes=True
     )
+
+class LimitStatus(BaseModel):
+    used: int
+    limit: int
+
+class AllLimitsResponse(BaseModel):
+    likes: LimitStatus
+    add_friends: LimitStatus
+    messages: LimitStatus
+    posts: LimitStatus
+    join_groups: LimitStatus
+    leave_groups: LimitStatus
 
 # --- backend/app\api\schemas\__init__.py ---
 
@@ -4886,7 +5122,7 @@ class AutomationConfig(BaseModel):
     has_count_slider: bool
     modal_count_label: Optional[str] = None
     default_count: Optional[int] = None
-    group: Optional[Literal["standard", "online", "content"]] = "standard"
+    group: Optional[Literal["standard", "online", "content", "ai", "parsing"]] = "standard"
     default_settings: Optional[Dict[str, Any]] = None
 
 class PlanPeriod(BaseModel):
@@ -5423,6 +5659,7 @@ class User(Base):
     encrypted_ai_api_key: Mapped[str | None] = mapped_column(String, nullable=True)
     ai_model_name: Mapped[str | None] = mapped_column(String, nullable=True, comment="e.g., 'gpt-4o', 'gemini-2.5-flash'")
     ai_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_fallback_message: Mapped[str | None] = mapped_column(Text, nullable=True, comment="Сообщение-заглушка при ошибке AI")
 
 
 class Team(Base):
@@ -5997,6 +6234,7 @@ import json
 from typing import List, Dict, Any, AsyncGenerator
 from app.services.base import BaseVKService
 from app.api.schemas.data import ParsingFilters # Новая Pydantic-модель
+from collections import Counter
 
 class DataService(BaseVKService):
 
@@ -6054,6 +6292,94 @@ class DataService(BaseVKService):
             offset += count
             
         yield '\n]\n' # Конец JSON-массива
+
+    async def parse_group_members(self, group_id: int, count: int = 1000) -> List[Dict[str, Any]]:
+        """Собирает подписчиков сообщества."""
+        await self._initialize_vk_api()
+        
+        # Ограничиваем максимальное количество для одного запроса
+        fetch_count = min(count, 1000)
+        
+        members_response = await self.vk_api.groups.getMembers(group_id=group_id, count=fetch_count, fields="sex,bdate,city,online")
+        if not members_response or not members_response.get('items'):
+            return []
+            
+        return members_response['items']
+
+    async def parse_user_wall(self, user_id: int, count: int = 100) -> List[Dict[str, Any]]:
+        """Собирает посты со стены указанного пользователя."""
+        await self._initialize_vk_api()
+        
+        fetch_count = min(count, 100)
+        
+        wall_response = await self.vk_api.wall.get(owner_id=user_id, count=fetch_count)
+        if not wall_response or not wall_response.get('items'):
+            return []
+            
+        return wall_response['items']
+    
+    async def parse_top_active_users(
+        self, group_id: int, posts_depth: int, top_n: int
+    ) -> List[Dict[str, Any]]:
+        """
+        Собирает самых активных пользователей (лайки + комментарии) с последних постов
+        сообщества и возвращает их рейтинг.
+        """
+        await self._initialize_vk_api()
+        
+        wall_response = await self.vk_api.wall.get(owner_id=-group_id, count=posts_depth)
+        if not wall_response or not wall_response.get('items'):
+            return []
+
+        activity_scores = Counter()
+        comment_weight = 2  # Комментарий считаем в 2 раза ценнее лайка
+        like_weight = 1
+
+        for post in wall_response['items']:
+            post_id = post['id']
+            # Собираем лайкнувших
+            likes_resp = await self.vk_api.likes.getList(type='post', owner_id=-group_id, item_id=post_id)
+            if likes_resp and likes_resp.get('items'):
+                for user_id in likes_resp['items']:
+                    activity_scores[user_id] += like_weight
+            
+            # Собираем комментаторов
+            comments_resp = await self.vk_api.wall.getComments(owner_id=-group_id, post_id=post_id)
+            if comments_resp and comments_resp.get('items'):
+                for comment in comments_resp['items']:
+                    # Исключаем комментарии от самого сообщества
+                    if comment['from_id'] > 0:
+                        activity_scores[comment['from_id']] += comment_weight
+        
+        if not activity_scores:
+            return []
+
+        # Находим N самых активных
+        top_users_data = activity_scores.most_common(top_n)
+        top_user_ids = [user_id for user_id, score in top_users_data]
+
+        if not top_user_ids:
+            return []
+
+        # Получаем профили самых активных пользователей
+        profiles = await self.vk_api.users.get(
+            user_ids=",".join(map(str, top_user_ids)),
+            fields="photo_100, online"
+        )
+        
+        # Собираем финальный результат
+        profiles_map = {p['id']: p for p in profiles}
+        
+        result = []
+        for user_id, score in top_users_data:
+            profile = profiles_map.get(user_id)
+            if profile:
+                result.append({
+                    "user_info": profile,
+                    "activity_score": score
+                })
+        
+        return result
 
 # --- backend/app\services\event_emitter.py ---
 
@@ -7421,41 +7747,6 @@ class SystemService:
             return setting["value"]
         return 5
 
-# --- backend/app\services\test_data.py ---
-
-# tests/api/test_data.py
-import pytest
-from httpx import AsyncClient
-from unittest.mock import AsyncMock
-
-pytestmark = pytest.mark.anyio
-
-@pytest.fixture
-def mock_data_service(mocker):
-    """Мокает DataService для изоляции тестов API."""
-    # Патчим сам класс в том модуле, где он используется (в эндпоинте)
-    mock_service_class = mocker.patch("app.api.endpoints.data.DataService")
-    # Настраиваем экземпляр, который будет возвращаться при создании
-    mock_instance = mock_service_class.return_value
-    mock_instance.parse_active_group_audience = AsyncMock(return_value=[{"id": 1, "first_name": "Активный"}])
-    return mock_instance
-
-async def test_parse_group_activity_endpoint(
-    async_client: AsyncClient, auth_headers: dict, mock_data_service: AsyncMock
-):
-    """Тест эндпоинта для парсинга."""
-    response = await async_client.post(
-        "/api/v1/data/parse/group-activity",
-        headers=auth_headers,
-        json={"group_id": 123, "filters": {"posts_depth": 5}}
-    )
-    
-    assert response.status_code == 200
-    data = response.json()
-    assert len(data) == 1
-    assert data[0]["first_name"] == "Активный"
-    mock_data_service.parse_active_group_audience.assert_awaited_once()
-
 # --- backend/app\services\vk_user_filter.py ---
 
 # backend/app/services/vk_user_filter.py
@@ -7705,6 +7996,13 @@ class GroupsAPI(BaseVKSection):
         """Возвращает информацию о сообществе по его ID."""
         params = {"group_id": group_id, "fields": fields}
         return await self._make_request("groups.getById", params=params)
+    
+    async def getMembers(self, group_id: int, count: int = 1000, fields: str = "") -> Optional[Dict[str, Any]]:
+        """Возвращает список участников сообщества."""
+        params = {"group_id": group_id, "count": count, "fields": fields}
+        return await self._make_request("groups.getMembers", params=params)
+    
+
 
 # --- backend/app\services\vk_api\likes.py ---
 
@@ -7870,8 +8168,16 @@ class WallAPI(BaseVKSection):
     async def get(self, owner_id: int, count: int = 5) -> Optional[Dict[str, Any]]:
         return await self._make_request("wall.get", params={"owner_id": owner_id, "count": count})
 
-    async def post(self, owner_id: int, message: str, attachments: str) -> Optional[Dict[str, Any]]:
-        params = {"owner_id": owner_id, "from_group": 0, "message": message, "attachments": attachments}
+    async def post(self, owner_id: int, message: str, attachments: str, from_group: bool = False) -> Optional[Dict[str, Any]]:
+        """Публикует пост на стене. Может публиковать от имени группы."""
+        params = {
+            "owner_id": owner_id,
+            "message": message,
+            "attachments": attachments
+        }
+        if from_group:
+            params["from_group"] = 1
+            
         return await self._make_request("wall.post", params=params)
 
     async def delete(self, post_id: int, owner_id: Optional[int] = None) -> Optional[int]:
@@ -8306,7 +8612,8 @@ import structlog
 from sqlalchemy import select, update
 from sqlalchemy.orm import joinedload
 from datetime import datetime, UTC
-
+from app.repositories.stats import StatsRepository # <-- ДОБАВЬТЕ ЭТОТ ИМПОРТ
+from app.api.schemas.users import AllLimitsResponse, LimitStatus
 from app.db.models import User, TaskHistory, Automation
 from app.db.session import AsyncSessionFactory
 from app.services.event_emitter import RedisEventEmitter
@@ -8336,11 +8643,10 @@ def arq_task_runner(func):
         async with get_session_context() as session:
             task_history = None
             emitter = None
-            task_name = "Неизвестная задача"
-            created_at = None
-            user_id = None
+            user = None
             
             try:
+                # Загружаем сразу все необходимые данные
                 stmt = select(TaskHistory).where(TaskHistory.id == task_history_id).options(
                     joinedload(TaskHistory.user).selectinload(User.proxies)
                 )
@@ -8350,24 +8656,23 @@ def arq_task_runner(func):
                     log.error("task.runner.not_found_final", task_history_id=task_history_id)
                     return
 
-                task_name = task_history.task_name
-                created_at = task_history.created_at
-                user_id = task_history.user.id
-
+                user = task_history.user
                 emitter = emitter_for_test or RedisEventEmitter(ctx['redis_pool'])
-                emitter.set_context(user_id, task_history_id)
+                emitter.set_context(user.id, task_history_id)
                 
+                # Обновляем статус задачи на "ВЫПОЛНЯЕТСЯ"
                 task_history.status = "STARTED"
                 task_history.started_at = datetime.now(UTC)
                 await session.commit()
-                
-                await emitter.send_task_status_update(status="STARTED", task_name=task_name, created_at=created_at)
+                await emitter.send_task_status_update(status="STARTED", task_name=task_history.task_name, created_at=task_history.created_at)
 
-                if task_history.user.is_shadow_banned:
+                if user.is_shadow_banned:
                     raise UserActionException("Действие отменено (теневой бан).")
 
-                summary_result = await func(session, task_history.user, task_history.parameters or {}, emitter)
+                # Выполняем основную логику задачи
+                summary_result = await func(session, user, task_history.parameters or {}, emitter)
 
+                # Обновляем статус на "УСПЕШНО"
                 task_history.status = "SUCCESS"
                 task_history.result = summary_result if isinstance(summary_result, str) else "Задача успешно выполнена."
 
@@ -8377,13 +8682,13 @@ def arq_task_runner(func):
                     task_history.status = "FAILURE"
                     if isinstance(e, VKAuthError):
                         task_history.result = "Ошибка авторизации VK. Токен невалиден."
-                        log.error("task_runner.auth_error_critical", user_id=user_id)
-                        if emitter: await emitter.send_system_notification(session, f"Критическая ошибка: токен VK недействителен для задачи '{task_name}'. Автоматизации остановлены.", "error")
-                        await session.execute(update(Automation).where(Automation.user_id == user_id).values(is_active=False))
+                        log.error("task_runner.auth_error_critical", user_id=user.id)
+                        if emitter: await emitter.send_system_notification(session, f"Критическая ошибка: токен VK недействителен для задачи '{task_history.task_name}'. Автоматизации остановлены.", "error")
+                        await session.execute(update(Automation).where(Automation.user_id == user.id).values(is_active=False))
                     else:
                         error_message = str(getattr(e, 'message', e))
                         task_history.result = f"Ошибка: {error_message}"
-                        if emitter: await emitter.send_system_notification(session, f"Задача '{task_name}' завершилась с ошибкой: {error_message}", "error")
+                        if emitter: await emitter.send_system_notification(session, f"Задача '{task_history.task_name}' завершилась с ошибкой: {error_message}", "error")
 
             except Exception as e:
                 if task_history:
@@ -8391,23 +8696,33 @@ def arq_task_runner(func):
                     task_history.status = "FAILURE"
                     task_history.result = f"Внутренняя ошибка сервера: {type(e).__name__}"
                     log.exception("task_runner.unhandled_exception", id=task_history_id)
-                    if emitter: await emitter.send_system_notification(session, f"Задача '{task_name}' завершилась из-за внутренней ошибки сервера.", "error")
+                    if emitter: await emitter.send_system_notification(session, f"Задача '{task_history.task_name}' завершилась из-за внутренней ошибки сервера.", "error")
             
             finally:
-                if task_history:
+                if task_history and user and emitter:
                     task_history.finished_at = datetime.now(UTC)
-                    final_status = task_history.status
-                    final_result = task_history.result
-                    
                     await session.commit()
                     
-                    if emitter:
-                        await emitter.send_task_status_update(
-                            status=final_status,
-                            result=final_result,
-                            task_name=task_name,
-                            created_at=created_at
-                        )
+                    # Отправляем финальный статус задачи
+                    await emitter.send_task_status_update(
+                        status=task_history.status,
+                        result=task_history.result,
+                        task_name=task_history.task_name,
+                        created_at=task_history.created_at
+                    )
+                    
+                    # <<< ИЗМЕНЕНИЕ: Отправляем полный срез лимитов после КАЖДОЙ задачи >>>
+                    stats_repo = StatsRepository(session)
+                    today_stats = await stats_repo.get_or_create_today_stats(user.id)
+                    all_limits = AllLimitsResponse(
+                        likes=LimitStatus(used=today_stats.likes_count, limit=user.daily_likes_limit),
+                        add_friends=LimitStatus(used=today_stats.friends_added_count, limit=user.daily_add_friends_limit),
+                        messages=LimitStatus(used=today_stats.messages_sent_count, limit=user.daily_message_limit),
+                        posts=LimitStatus(used=today_stats.posts_created_count, limit=user.daily_posts_limit),
+                        join_groups=LimitStatus(used=today_stats.groups_joined_count, limit=user.daily_join_groups_limit),
+                        leave_groups=LimitStatus(used=today_stats.groups_left_count, limit=user.daily_leave_groups_limit),
+                    )
+                    await emitter.send_stats_update(all_limits.model_dump())
     return wrapper
 
 

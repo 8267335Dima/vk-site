@@ -12,9 +12,20 @@ pytestmark = pytest.mark.asyncio
 @pytest.fixture
 def mock_vk_api(mocker):
     """Фикстура для мокирования VK API."""
+    # Создаем главный мок для всего клиента
     api = mocker.MagicMock(spec=VKAPI)
-    api.messages.setActivity = AsyncMock()
-    api.messages.send = AsyncMock(return_value=12345) # Успешная отправка
+
+    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+    # Создаем отдельный мок для секции 'messages'
+    messages_mock = AsyncMock()
+    # Присваиваем ему необходимые асинхронные методы
+    messages_mock.setActivity = AsyncMock()
+    messages_mock.send = AsyncMock(return_value=12345) # Успешная отправка
+
+    # "Прикрепляем" мок секции к главному моку
+    api.messages = messages_mock
+    # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+    
     return api
 
 @pytest.fixture

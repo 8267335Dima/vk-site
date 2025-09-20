@@ -1,62 +1,63 @@
- # backend/app/core/configs/plans.yml
- 
- BASE:
-   display_name: "Базовый"
-   description: "Начальный тариф для ознакомления с базовыми возможностями."
-   limits:
-     daily_likes_limit: 50
-     daily_add_friends_limit: 20
-     daily_message_limit: 20
-     daily_posts_limit: 5
-     daily_join_groups_limit: 20
-     daily_leave_groups_limit: 20
-+    daily_ai_responses_limit: 0
-     max_concurrent_tasks: 1
-   available_features:
-     - "like_feed"
-     - "add_recommended"
-     - "accept_friends"
-     - "view_stories"
- PLUS:
-   display_name: "Plus"
-   description: "Расширенные возможности и увеличенные лимиты для активного продвижения."
-   base_price: 399
-   is_popular: true
-   features:
-     - "Все возможности Базового тарифа"
-     - "Увеличенные лимиты"
-     - "Планировщик постов"
-     - "Аналитика роста профиля"
-     - "Парсер активной аудитории"
-   periods:
-     - months: 3
-       discount_percent: 10
-     - months: 6
-       discount_percent: 15
-     - months: 12
-       discount_percent: 20
-   limits:
-     daily_likes_limit: 200
-     daily_add_friends_limit: 40
-     daily_message_limit: 50
-     daily_posts_limit: 20
-     daily_join_groups_limit: 50
-     daily_leave_groups_limit: 100
-+    daily_ai_responses_limit: 0
-     max_concurrent_tasks: 2
-   available_features:
-     - "like_feed"
-     - "add_recommended"
-     - "accept_friends"
-     - "view_stories"
-     - "remove_friends"
-     - "mass_messaging"
-     - "leave_groups"
-     - "join_groups"
-     - "birthday_congratulation"
-     - "post_scheduler"
-     - "profile_growth_analytics"
-     - "parse_group_audience" # <- Добавлено
+# backend/app/core/configs/plans.yml
+
+BASE:
+  display_name: "Базовый"
+  description: "Начальный тариф для ознакомления с базовыми возможностями."
+  limits:
+    daily_likes_limit: 50
+    daily_add_friends_limit: 20
+    daily_message_limit: 20
+    daily_posts_limit: 5
+    daily_join_groups_limit: 20
+    daily_leave_groups_limit: 20
+    daily_ai_responses_limit: 0
+    max_concurrent_tasks: 1
+  available_features:
+    - "like_feed"
+    - "add_recommended"
+    - "accept_friends"
+    - "view_stories"
+PLUS:
+  display_name: "Plus"
+  description: "Расширенные возможности и увеличенные лимиты для активного продвижения."
+  base_price: 399
+  is_popular: true
+  features:
+    - "Все возможности Базового тарифа"
+    - "Увеличенные лимиты"
+    - "Планировщик постов"
+    - "Аналитика роста профиля"
+    - "Парсер активной аудитории"
+  periods:
+    - months: 3
+      discount_percent: 10
+    - months: 6
+      discount_percent: 15
+    - months: 12
+      discount_percent: 20
+  limits:
+    daily_likes_limit: 200
+    daily_add_friends_limit: 40
+    daily_message_limit: 50
+    daily_posts_limit: 20
+    daily_join_groups_limit: 50
+    daily_leave_groups_limit: 100
+    daily_ai_responses_limit: 0
+    max_concurrent_tasks: 2
+  available_features:
+    - "like_feed"
+    - "add_recommended"
+    - "accept_friends"
+    - "view_stories"
+    - "remove_friends"
+    - "mass_messaging"
+    - "leave_groups"
+    - "join_groups"
+    - "birthday_congratulation"
+    - "post_scheduler"
+    - "profile_growth_analytics"
+    - "parse_group_audience"
+    - "automations_center"
 PRO:
   display_name: "PRO"
   description: "Максимум возможностей для профессионалов и требовательных пользователей."
@@ -72,7 +73,7 @@ PRO:
     max_concurrent_tasks: 10
     max_profiles: null
     max_team_members: null
-  available_features: "*" # Звездочка означает доступ ко всем возможным функциям
+  available_features: "*"
   periods:
     - months: 3
       discount_percent: 10.0
@@ -90,44 +91,44 @@ PRO:
     - "Все парсеры данных"
     - "Управление сообществами"
     - "Интеграция с AI"
- AGENCY:
-   display_name: "Agency"
-   description: "Для агентств и команд. Управление несколькими аккаунтами и работа от имени сообществ."
-   base_price: 1499
-   features:
-     - "Все возможности PRO-тарифа"
-     - "Командный доступ"
-     - "Управление до 5 профилей"
-     - "Действия от имени сообществ" # <- Добавлено
-   periods:
-     - months: 3
-       discount_percent: 10
-     - months: 6
-       discount_percent: 15
-     - months: 12
-       discount_percent: 20
-   limits:
-     daily_likes_limit: 1000
-     daily_add_friends_limit: 100
-     daily_message_limit: 200
-     daily_posts_limit: 100
-+    daily_ai_responses_limit: 150
-     daily_join_groups_limit: 150
-     daily_leave_groups_limit: 300
-     max_concurrent_tasks: 10
-     max_profiles: 5
-     max_team_members: 5
-   available_features: "*"
- EXPIRED:
-   display_name: "Expired"
-   description: "Срок действия вашего тарифа истек."
-   limits:
-     daily_likes_limit: 0
-     daily_add_friends_limit: 0
-     daily_message_limit: 0
-     daily_posts_limit: 0
-     daily_join_groups_limit: 0
-     daily_leave_groups_limit: 0
-+    daily_ai_responses_limit: 0
-     max_concurrent_tasks: 1
-   available_features: []
+AGENCY:
+  display_name: "Agency"
+  description: "Для агентств и команд. Управление несколькими аккаунтами и работа от имени сообществ."
+  base_price: 1499
+  features:
+    - "Все возможности PRO-тарифа"
+    - "Командный доступ"
+    - "Управление до 5 профилей"
+    - "Действия от имени сообществ"
+  periods:
+    - months: 3
+      discount_percent: 10
+    - months: 6
+      discount_percent: 15
+    - months: 12
+      discount_percent: 20
+  limits:
+    daily_likes_limit: 1000
+    daily_add_friends_limit: 100
+    daily_message_limit: 200
+    daily_posts_limit: 100
+    daily_ai_responses_limit: 150
+    daily_join_groups_limit: 150
+    daily_leave_groups_limit: 300
+    max_concurrent_tasks: 10
+    max_profiles: 5
+    max_team_members: 5
+  available_features: "*"
+EXPIRED:
+  display_name: "Expired"
+  description: "Срок действия вашего тарифа истек."
+  limits:
+    daily_likes_limit: 0
+    daily_add_friends_limit: 0
+    daily_message_limit: 0
+    daily_posts_limit: 0
+    daily_join_groups_limit: 0
+    daily_leave_groups_limit: 0
+    daily_ai_responses_limit: 0
+    max_concurrent_tasks: 1
+  available_features: []

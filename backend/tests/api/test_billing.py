@@ -31,7 +31,9 @@ async def test_create_payment_logic(
     """Тест логики создания платежа."""
     # Arrange
     payment_data = CreatePaymentRequest(plan_id="PRO", months=3)
-    expected_amount = 2157.3 # 799 * 3 * (1 - 0.1)
+    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+    # Обновляем ожидаемую сумму в соответствии с plans.yml (999 * 3 * 0.9)
+    expected_amount = 2697.3
 
     # Act
     await create_payment(request=payment_data, current_user=test_user, db=db_session)

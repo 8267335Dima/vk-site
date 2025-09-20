@@ -70,6 +70,7 @@ class User(Base):
     encrypted_ai_api_key: Mapped[str | None] = mapped_column(String, nullable=True)
     ai_model_name: Mapped[str | None] = mapped_column(String, nullable=True, comment="e.g., 'gpt-4o', 'gemini-2.5-flash'")
     ai_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_fallback_message: Mapped[str | None] = mapped_column(Text, nullable=True, comment="Сообщение-заглушка при ошибке AI")
 
 
 class Team(Base):

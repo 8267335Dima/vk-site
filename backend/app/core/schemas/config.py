@@ -10,7 +10,7 @@ class AutomationConfig(BaseModel):
     has_count_slider: bool
     modal_count_label: Optional[str] = None
     default_count: Optional[int] = None
-    group: Optional[Literal["standard", "online", "content"]] = "standard"
+    group: Optional[Literal["standard", "online", "content", "ai", "parsing"]] = "standard"
     default_settings: Optional[Dict[str, Any]] = None
 
 class PlanPeriod(BaseModel):

@@ -87,6 +87,9 @@ async def upload_image_from_url(
         image_bytes = await _download_image_from_url(str(request_data.image_url))
         attachment_id = await vk_api.photos.upload_for_wall(image_bytes)
         return UploadedImageResponse(attachment_id=attachment_id)
+    except aiohttp.ClientError as e:
+        log.error("image_download.client_error", url=request_data.image_url, error=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Не удалось скачать изображение по URL: {e}")
     except HTTPException as e:
         raise e
     except Exception as e:

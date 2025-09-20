@@ -19,7 +19,7 @@ class UnifiedAIService:
     """
     Унифицированный сервис для работы с различными LLM через OpenAI-совместимый клиент.
     """
-    def __init__(self, provider: AIProvider, api_key: str, model: str):
+    def __init__(self, provider: AIProvider, api_key: str, model: str, fallback_message: str):
         if provider not in PROVIDER_BASE_URLS:
             raise UserActionException(f"Провайдер ИИ '{provider}' не поддерживается.")
 
@@ -29,6 +29,7 @@ class UnifiedAIService:
         )
         self.model = model
         self.provider = provider
+        self.fallback_message = fallback_message
 
     async def get_response(
         self,
@@ -56,7 +57,6 @@ class UnifiedAIService:
             {"role": "user", "content": user_content}
         ]
         
-        # Для Google Gemini API путь к модели нужно передавать в самом запросе
         model_path = f"models/{self.model}" if self.provider == "google" else self.model
 
         try:
@@ -65,10 +65,13 @@ class UnifiedAIService:
                 messages=messages,
             )
             response = completion.choices[0].message.content
-            return response.strip() if response else "Нейросеть не смогла дать ответ."
+            # ИЗМЕНЕНИЕ: Используем заглушку, если ответ пустой
+            return response.strip() if response else self.fallback_message
         except APIError as e:
             log.error("ai.service.api_error", provider=self.provider, model=self.model, status_code=e.status_code, error=e.message)
-            raise UserActionException(f"Ошибка API нейросети ({e.status_code}): {e.message}")
+            # ИЗМЕНЕНИЕ: Возвращаем заглушку при ошибке API
+            return self.fallback_message
         except Exception as e:
             log.error("ai.service.unknown_error", provider=self.provider, model=self.model, error=str(e))
-            raise UserActionException(f"Произошла непредвиденная ошибка при обращении к нейросети.")
+            # ИЗМЕНЕНИЕ: Возвращаем заглушку при любой другой ошибке
+            return self.fallback_message

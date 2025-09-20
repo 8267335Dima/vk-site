@@ -1,5 +1,6 @@
 # tests/e2e/test_websockets_e2e.py
 
+import asyncio
 import pytest
 import json
 from fastapi.testclient import TestClient
@@ -39,8 +40,11 @@ async def test_message_from_redis_is_delivered_via_websocket(
             }
             await redis_publisher.publish(f"ws:user:{test_user.id}", json.dumps(log_payload))
 
-            # Assert: Получаем сообщение из сокета и проверяем его содержимое
-            # receive_json() будет ждать сообщение (с таймаутом по умолчанию)
+            # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+            # Даем циклу событий время на обработку сообщения
+            await asyncio.sleep(0.1) 
+
+            # Assert: Получаем сообщение из сокета
             received_data = websocket.receive_json()
             
             assert received_data["type"] == "log"

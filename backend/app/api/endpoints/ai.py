@@ -20,6 +20,7 @@ async def update_ai_settings(
     user.encrypted_ai_api_key = encrypt_data(settings_data.api_key)
     user.ai_model_name = settings_data.model_name
     user.ai_system_prompt = settings_data.system_prompt
+    user.ai_fallback_message = settings_data.ai_fallback_message
     
     await db.commit()
     
@@ -27,7 +28,9 @@ async def update_ai_settings(
         provider=user.ai_provider,
         model_name=user.ai_model_name,
         system_prompt=user.ai_system_prompt,
-        is_configured=bool(user.encrypted_ai_api_key)
+        is_configured=bool(user.encrypted_ai_api_key),
+        # И ЭТУ СТРОКУ
+        ai_fallback_message=user.ai_fallback_message
     )
 
 @router.get("/settings", response_model=AISettingsRead)
@@ -37,5 +40,7 @@ async def get_ai_settings(user: User = Depends(get_current_active_profile)):
         provider=user.ai_provider,
         model_name=user.ai_model_name,
         system_prompt=user.ai_system_prompt,
-        is_configured=bool(user.encrypted_ai_api_key)
+        is_configured=bool(user.encrypted_ai_api_key),
+        # И ЭТУ СТРОКУ
+        ai_fallback_message=user.ai_fallback_message
     )

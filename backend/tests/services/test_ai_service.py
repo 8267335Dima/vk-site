@@ -7,17 +7,17 @@ from app.db.models import User
 
 pytestmark = pytest.mark.asyncio
 
-@patch('app.services.ai_message_service.GeminiService')
+@patch('app.services.ai_message_service.UnifiedAIService')
 async def test_ai_message_service_processes_conversation(
-    MockGeminiService, db_session, test_user: User, mock_emitter
+    MockUnifiedAIService, db_session, test_user: User, mock_emitter # <--- Аргумент переименован для ясности
 ):
     """
     Тест проверяет, что AI-сервис правильно обрабатывает один диалог:
     получает историю, вызывает ИИ и отправляет ответ.
     """
     # Arrange
-    # Мокаем Gemini
-    mock_ai_instance = MockGeminiService.return_value
+    # Мокаем UnifiedAIService
+    mock_ai_instance = MockUnifiedAIService.return_value
     mock_ai_instance.get_response = AsyncMock(return_value="Сгенерированный ответ")
 
     # Мокаем VK API
@@ -44,7 +44,7 @@ async def test_ai_message_service_processes_conversation(
     service.vk_api = mock_vk_api
     
     # Act
-    await service.process_unanswered_conversations()
+    await service.process_unanswered_conversations(params={'count': 10})
 
     # Assert
     # 1. Проверяем, что ИИ был вызван с правильным контекстом

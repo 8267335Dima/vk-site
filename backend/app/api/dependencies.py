@@ -121,11 +121,16 @@ async def get_ai_service(user: User = Depends(get_current_active_profile)) -> Un
             detail="Настройки AI не сконфигурированы. Пожалуйста, укажите провайдера, модель и API ключ в настройках."
         )
     
+    # ИЗМЕНЕНИЕ: Получаем заглушку или используем стандартную
+    fallback = user.ai_fallback_message or "Извините, в данный момент не могу ответить."
+    
     try:
         return UnifiedAIService(
             provider=user.ai_provider,
             api_key=api_key,
-            model=user.ai_model_name
+            model=user.ai_model_name,
+            # И передаем ее в сервис
+            fallback_message=fallback
         )
     except UserActionException as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
