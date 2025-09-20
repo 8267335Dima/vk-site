@@ -1,6 +1,6 @@
 # backend/app/ai/unified_service.py
 from openai import AsyncOpenAI, APIError
-from typing import List, Dict, Literal, Optional
+from typing import List, Dict, Literal, Optional, Union
 import structlog
 
 from app.core.exceptions import UserActionException
@@ -12,7 +12,7 @@ AIProvider = Literal["openai", "google"]
 # Конфигурация базовых URL для провайдеров
 PROVIDER_BASE_URLS = {
     "openai": "https://api.openai.com/v1",
-    "google": "https://generativelanguage.googleapis.com/v1beta",
+    "google": "https://generativelanguage.googleapis.com/v1beta/openai/",
 }
 
 class UnifiedAIService:
@@ -36,42 +36,65 @@ class UnifiedAIService:
         system_prompt: str,
         message_history: List[Dict[str, str]],
         user_input: str,
-        image_url: Optional[str] = None
+        images: Optional[List[Union[str, Dict[str, str]]]] = None,
     ) -> str:
         """
-        Генерирует ответ от LLM, опционально с анализом изображения по URL.
+        Генерирует ответ от LLM, с поддержкой нескольких изображений.
+        images: список URL или объектов {"url": "..."} либо {"data": "...", "format": "..."} (base64).
         """
-        user_content: any = user_input
-        if image_url:
-            user_content = [
-                {"type": "text", "text": user_input},
-                {
-                    "type": "image_url",
-                    "image_url": {"url": image_url},
-                },
-            ]
+        user_content: Union[str, list] = user_input
+
+        if images:
+            user_content = [{"type": "text", "text": user_input}]
+            for img in images:
+                if isinstance(img, str):  # если просто URL
+                    user_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": img},
+                    })
+                elif isinstance(img, dict):  # base64 или расширенный формат
+                    if "url" in img:
+                        user_content.append({
+                            "type": "image_url",
+                            "image_url": {"url": img["url"]},
+                        })
+                    elif "data" in img and "format" in img:
+                        user_content.append({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/{img['format']};base64,{img['data']}"
+                            },
+                        })
 
         messages = [
             {"role": "system", "content": system_prompt},
             *message_history,
-            {"role": "user", "content": user_content}
+            {"role": "user", "content": user_content},
         ]
-        
-        model_path = f"models/{self.model}" if self.provider == "google" else self.model
 
         try:
             completion = await self.client.chat.completions.create(
-                model=model_path,
+                model=self.model,
                 messages=messages,
             )
             response = completion.choices[0].message.content
-            # ИЗМЕНЕНИЕ: Используем заглушку, если ответ пустой
             return response.strip() if response else self.fallback_message
+
         except APIError as e:
-            log.error("ai.service.api_error", provider=self.provider, model=self.model, status_code=e.status_code, error=e.message)
-            # ИЗМЕНЕНИЕ: Возвращаем заглушку при ошибке API
+            log.error(
+                "ai.service.api_error",
+                provider=self.provider,
+                model=self.model,
+                status_code=e.status_code,
+                error=e.message,
+            )
             return self.fallback_message
+
         except Exception as e:
-            log.error("ai.service.unknown_error", provider=self.provider, model=self.model, error=str(e))
-            # ИЗМЕНЕНИЕ: Возвращаем заглушку при любой другой ошибке
+            log.error(
+                "ai.service.unknown_error",
+                provider=self.provider,
+                model=self.model,
+                error=str(e),
+            )
             return self.fallback_message

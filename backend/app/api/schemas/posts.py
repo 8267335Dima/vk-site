@@ -39,3 +39,6 @@ class UploadImagesFromUrlsRequest(BaseModel):
 
 class PostBatchCreate(BaseModel):
     posts: List[PostCreate]
+
+class PostUpdateSchedule(BaseModel):
+    publish_at: datetime

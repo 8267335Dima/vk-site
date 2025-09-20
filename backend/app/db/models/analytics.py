@@ -103,3 +103,50 @@ class FriendRequestLog(Base):
     resolved_at = Column(DateTime(timezone=True), nullable=True)
     user = relationship("User", back_populates="friend_requests")
     __table_args__ = (UniqueConstraint('user_id', 'target_vk_id', name='_user_target_uc'),)
+
+class UserActivity(Base):
+    __tablename__ = "user_activities"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    source_vk_id = Column(BigInteger, nullable=False)
+    activity_type = Column(String, nullable=False) # 'like', 'comment'
+    count = Column(Integer, default=1, nullable=False)
+    
+    __table_args__ = (
+        UniqueConstraint('user_id', 'source_vk_id', 'activity_type', name='_user_source_activity_uc'),
+        Index('ix_user_activity_user_type', 'user_id', 'activity_type'),
+    )
+
+
+
+class ActionEffectivenessReport(Base):
+    __tablename__ = "action_effectiveness_reports"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    task_history_id = Column(Integer, ForeignKey("task_history.id", ondelete="CASCADE"), unique=True, nullable=False)
+    task_name = Column(String, nullable=False)
+    
+    # Результаты
+    accepted_friends_count = Column(Integer, default=0)
+    new_likes_count = Column(Integer, default=0)
+    new_comments_count = Column(Integer, default=0)
+    followers_growth = Column(Integer, default=0)
+
+    # Метаданные
+    generated_at = Column(DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.UTC))
+    task_started_at = Column(DateTime(timezone=True), nullable=False)
+    task_finished_at = Column(DateTime(timezone=True), nullable=False)
+
+class ActionEffectivenessReport(Base):
+    __tablename__ = "action_effectiveness_reports"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    task_history_id = Column(Integer, ForeignKey("task_history.id", ondelete="CASCADE"), unique=True, nullable=False)
+    task_name = Column(String, nullable=False)
+    accepted_friends_count = Column(Integer, default=0)
+    new_likes_count = Column(Integer, default=0)
+    new_comments_count = Column(Integer, default=0)
+    followers_growth = Column(Integer, default=0)
+    generated_at = Column(DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.UTC))
+    task_started_at = Column(DateTime(timezone=True), nullable=False)
+    task_finished_at = Column(DateTime(timezone=True), nullable=False)

@@ -1,18 +1,20 @@
 # backend/app/api/endpoints/analytics.py
 
 import datetime
+from typing import List
+from arq import ArqRedis
 from fastapi import APIRouter, Depends, Query
 from fastapi_cache.decorator import cache
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import User, ProfileMetric, FriendRequestLog, PostActivityHeatmap
-from app.api.dependencies import get_current_active_profile
-from app.db.session import get_db
+from app.api.dependencies import get_arq_pool, get_current_active_profile
+from app.db.session import get_db, get_read_db
 from app.api.schemas.analytics import (
     AudienceAnalyticsResponse, ProfileGrowthResponse, ProfileGrowthItem,
     ProfileSummaryResponse, FriendRequestConversionResponse, PostActivityHeatmapResponse,
-    ProfileSummaryData
+    ProfileSummaryData, PostActivityRecommendation, PostActivityRecommendationsResponse
 )
 from app.services.analytics_service import AnalyticsService
 from app.services.event_emitter import SystemLogEmitter 
@@ -106,8 +108,12 @@ async def get_profile_summary(
 async def get_profile_growth_analytics(
     days: int = Query(30, ge=7, le=90),
     current_user: User = Depends(get_current_active_profile),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_read_db) # Используем сессию для чтения
 ):
+    """
+    Возвращает динамику изменения метрик профиля за указанный период.
+    Этот запрос выполняется на реплике базы данных для чтения, чтобы не нагружать основную базу.
+    """
     end_date = datetime.date.today()
     start_date = end_date - datetime.timedelta(days=days - 1)
 
@@ -122,7 +128,8 @@ async def get_profile_growth_analytics(
     result = await db.execute(stmt)
     data = result.scalars().all()
     
-    response_data = [ProfileGrowthItem(**row.__dict__) for row in data]
+    # Преобразуем ORM-объекты в Pydantic-модели
+    response_data = [ProfileGrowthItem.model_validate(row) for row in data]
 
     return ProfileGrowthResponse(data=response_data)
 
@@ -165,3 +172,51 @@ async def get_post_activity_heatmap(
         return PostActivityHeatmapResponse(data=[[0]*24]*7)
         
     return PostActivityHeatmapResponse(data=heatmap_data.heatmap_data.get("data", [[0]*24]*7))
+
+class HeatmapAnalyzerService:
+    def __init__(self, heatmap_data: List[List[int]]):
+        self.heatmap = heatmap_data
+        self.day_map = {0: "Понедельник", 1: "Вторник", 2: "Среда", 3: "Четверг", 4: "Пятница", 5: "Суббота", 6: "Воскресенье"}
+
+    def get_best_posting_times(self, top_n: int = 3) -> List[PostActivityRecommendation]:
+        if not self.heatmap or not any(any(row) for row in self.heatmap):
+            return []
+
+        # Преобразуем матрицу в плоский список кортежей (активность, день, час)
+        flat_activity = []
+        for day_index, row in enumerate(self.heatmap):
+            for hour_index, activity in enumerate(row):
+                flat_activity.append((activity, day_index, hour_index))
+
+        # Сортируем по убыванию активности
+        flat_activity.sort(key=lambda x: x[0], reverse=True)
+
+        recommendations = []
+        for activity, day, hour in flat_activity[:top_n]:
+            recommendations.append(PostActivityRecommendation(
+                day_of_week=self.day_map[day],
+                hour_start=hour,
+                activity_score=activity
+            ))
+        return recommendations
+
+# --- НОВЫЙ ЭНДПОИНТ ---
+@router.get("/post-activity-recommendations", response_model=PostActivityRecommendationsResponse)
+async def get_post_activity_recommendations(
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Анализирует тепловую карту активности друзей и предлагает лучшее время для постинга.
+    """
+    stmt = select(PostActivityHeatmap).where(PostActivityHeatmap.user_id == current_user.id)
+    heatmap_data = (await db.execute(stmt)).scalar_one_or_none()
+    
+    if not heatmap_data or not heatmap_data.heatmap_data.get("data"):
+        return PostActivityRecommendationsResponse(recommendations=[])
+        
+    analyzer = HeatmapAnalyzerService(heatmap_data.heatmap_data["data"])
+    recommendations = analyzer.get_best_posting_times(top_n=5)
+    
+    return PostActivityRecommendationsResponse(recommendations=recommendations, last_updated_at=heatmap_data.last_updated_at)
+

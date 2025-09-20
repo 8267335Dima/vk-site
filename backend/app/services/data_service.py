@@ -1,5 +1,6 @@
 # backend/app/services/data_service.py
 import json
+import re
 from typing import List, Dict, Any, AsyncGenerator
 from app.services.base import BaseVKService
 from app.api.schemas.data import ParsingFilters # Новая Pydantic-модель
@@ -149,3 +150,40 @@ class DataService(BaseVKService):
                 })
         
         return result
+    
+    async def parse_contacts_from_discussions(self, group_id: int, topic_ids: List[int]) -> List[Dict[str, Any]]:
+        """
+        Парсит комментарии в указанных обсуждениях группы и извлекает из них ID пользователей.
+        """
+        await self._initialize_vk_api()
+        
+        user_ids = set()
+        
+        for topic_id in topic_ids:
+            offset = 0
+            while True:
+                comments_resp = await self.vk_api.board.getComments(
+                    group_id=group_id, topic_id=topic_id, count=100, offset=offset, extended=1
+                )
+                if not comments_resp or not comments_resp.get('items'):
+                    break
+                
+                # Собираем ID авторов комментариев
+                user_ids.update(c['from_id'] for c in comments_resp['items'] if c['from_id'] > 0)
+                
+                # Ищем ID в тексте комментариев (например, ссылки)
+                for comment in comments_resp['items']:
+                    found = re.findall(r"vk.com/(id\d+|\w+)", comment.get('text', ''))
+                    # Здесь потребуется логика преобразования screen_name в ID,
+                    # но для простоты пока оставим только ID
+                    user_ids.update(int(uid[2:]) for uid in found if uid.startswith('id'))
+
+                if len(comments_resp['items']) < 100:
+                    break
+                offset += 100
+        
+        if not user_ids:
+            return []
+            
+        profiles = await self.vk_api.users.get(user_ids=",".join(map(str, list(user_ids)[:1000])))
+        return profiles or []

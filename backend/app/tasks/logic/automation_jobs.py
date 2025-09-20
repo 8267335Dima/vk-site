@@ -1,4 +1,5 @@
 # --- backend/app/tasks/logic/automation_jobs.py ---
+# --- НОВАЯ ВЕРСИЯ ---
 import datetime
 import structlog
 import pytz
@@ -10,8 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from arq.connections import ArqRedis
 from app.core.enums import AutomationType
 from app.db.models import Automation, TaskHistory, User
-from app.core.config_loader import AUTOMATIONS_CONFIG
-from app.core.constants import CronSettings
+from app.core.config_loader import AUTOMATIONS_CONFIG, APP_SETTINGS # <-- ИЗМЕНЕНИЕ
+log = structlog.get_logger(__name__)
 
 log = structlog.get_logger(__name__)
 
@@ -78,7 +79,7 @@ async def _run_daily_automations_async(session: AsyncSession, arq_pool: ArqRedis
                     if not (start <= now_moscow.time() <= end):
                         continue
                     
-                    if automation_settings.get('humanize', True) and random.random() < CronSettings.HUMANIZE_ONLINE_SKIP_CHANCE:
+                    if automation_settings.get('humanize', True) and random.random() < APP_SETTINGS.cron.humanize_online_skip_chance: # <-- ИЗМЕНЕНИЕ
                         log.info("eternal_online.humanizer_skip", user_id=automation.user_id)
                         continue
                 except (ValueError, TypeError) as e:

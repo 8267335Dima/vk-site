@@ -1,21 +1,4 @@
-# docker-compose.yml
-
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: social_pilot_postgres_local_dev
-    env_file: ./.env
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data_dev:/var/lib/postgresql/data
-    restart: always
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   redis:
     image: redis:7-alpine
     container_name: social_pilot_redis_local_dev
@@ -39,22 +22,13 @@ services:
       - ./backend:/app
     env_file:
       - ./.env
-
-    # --- НАЧАЛО ИСПРАВЛЕНИЯ ---
-    # Этот блок переопределяет переменные из .env специально для этого контейнера.
-    # Теперь worker будет искать БД и Redis по их сервисным именам внутри Docker-сети.
     environment:
-      - POSTGRES_SERVER=postgres
+      - POSTGRES_SERVER=host.docker.internal
       - REDIS_HOST=redis
-    # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
-
     restart: always
     depends_on:
       redis:
         condition: service_healthy
-      postgres:
-        condition: service_healthy
 
 volumes:
-  postgres_data_dev: {}
   redis_data_dev: {}

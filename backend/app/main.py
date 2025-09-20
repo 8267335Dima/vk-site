@@ -11,6 +11,8 @@ from starlette.responses import JSONResponse
 from datetime import datetime, UTC
 from app.arq_config import redis_settings
 from app.core.config import settings
+from fastapi.middleware.gzip import GZipMiddleware # --- 1. ИМПОРТ ДЛЯ СЖАТИЯ ---
+from fastapi.responses import ORJSONResponse
 from app.core.logging import configure_logging
 from app.db.session import engine as main_engine, get_db as get_db_session, AsyncSessionFactory
 from app.db.models import User
@@ -22,7 +24,7 @@ from app.api.endpoints import (
     stats_router, automations_router, billing_router, analytics_router,
     scenarios_router, notifications_router, posts_router, teams_router,
     websockets_router, support_router, task_history_router, admin_router, ai_router, 
-    groups_router, data_router
+    groups_router, data_router, planner_router # <-- ДОБАВЛЕНО
 )
 from fastapi_limiter import FastAPILimiter
 
@@ -101,7 +103,10 @@ def create_app(db_engine: AsyncEngine | None = None) -> FastAPI:
         description="API для сервиса автоматизации SMM-задач ВКонтакте.",
         version="1.0.0",
         lifespan=lifespan,
+        default_response_class=ORJSONResponse, # Используем orjson по умолчанию
     )
+
+    app.add_middleware(GZipMiddleware, minimum_size=1000)
 
     app.add_middleware(
         SessionMiddleware,
@@ -165,6 +170,7 @@ def create_app(db_engine: AsyncEngine | None = None) -> FastAPI:
     app.include_router(ai_router, prefix=f"{api_prefix}/ai", tags=["AI"])
     app.include_router(groups_router, prefix=f"{api_prefix}/groups", tags=["Groups"])
     app.include_router(data_router, prefix=f"{api_prefix}/data", tags=["Data & Parsing"])
+    app.include_router(planner_router, prefix=f"{api_prefix}/planner", tags=["Planner"])
 
     return app
 

@@ -1,5 +1,3 @@
-# --- START OF FILE backend/app/db/models/user.py ---
-
 from datetime import datetime, UTC
 from sqlalchemy import (
     Column, Integer, String, DateTime, ForeignKey, BigInteger,
@@ -9,18 +7,26 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 from app.core.enums import DelayProfile, TeamMemberRole
 
-
 class Group(Base):
     __tablename__ = "groups"
     id = Column(Integer, primary_key=True)
     vk_group_id = Column(BigInteger, unique=True, nullable=False, index=True)
     name = Column(String, nullable=False)
     photo_100 = Column(String)
-    
     admin_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     admin = relationship("User", back_populates="managed_groups")
-
     encrypted_access_token = Column(String, nullable=False)
+
+
+class UserAchievement(Base):
+    __tablename__ = "user_achievements"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    achievement_id = Column(Integer, ForeignKey("achievements.id", ondelete="CASCADE"), nullable=False)
+    unlocked_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    user = relationship("User", back_populates="achievements")
+    achievement = relationship("Achievement")
+    __table_args__ = (UniqueConstraint('user_id', 'achievement_id', name='_user_achievement_uc'),)
 
 class User(Base):
     __tablename__ = "users"
@@ -33,7 +39,6 @@ class User(Base):
     is_deleted = Column(Boolean, nullable=False, server_default='false', index=True)
     deleted_at = Column(DateTime(timezone=True), nullable=True)
     is_shadow_banned = Column(Boolean, nullable=False, server_default='false', index=True)
-    
     plan_id = Column(Integer, ForeignKey("plans.id"), nullable=True)
     plan_expires_at = Column(DateTime(timezone=True), nullable=True)
     is_admin = Column(Boolean, nullable=False, server_default='false')
@@ -47,7 +52,6 @@ class User(Base):
     analytics_settings_posts_count = Column(Integer, nullable=False, server_default=text('100'))
     analytics_settings_photos_count = Column(Integer, nullable=False, server_default=text('200'))
     plan = relationship("Plan", back_populates="users", lazy="selectin")
-
     action_logs = relationship("ActionLog", back_populates="user", cascade="all, delete-orphan")
     automations = relationship("Automation", back_populates="user", cascade="all, delete-orphan")
     daily_stats = relationship("DailyStats", back_populates="user", cascade="all, delete-orphan")
@@ -65,13 +69,11 @@ class User(Base):
     task_history = relationship("TaskHistory", back_populates="user", cascade="all, delete-orphan")
     team_membership = relationship("TeamMember", back_populates="user", uselist=False, cascade="all, delete-orphan")
     managed_groups = relationship("Group", back_populates="admin", cascade="all, delete-orphan")
-
-    ai_provider: Mapped[str | None] = mapped_column(String, nullable=True, comment="e.g., 'openai', 'google'")
+    ai_provider: Mapped[str | None] = mapped_column(String, nullable=True)
     encrypted_ai_api_key: Mapped[str | None] = mapped_column(String, nullable=True)
-    ai_model_name: Mapped[str | None] = mapped_column(String, nullable=True, comment="e.g., 'gpt-4o', 'gemini-2.5-flash'")
+    ai_model_name: Mapped[str | None] = mapped_column(String, nullable=True)
     ai_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
-    ai_fallback_message: Mapped[str | None] = mapped_column(Text, nullable=True, comment="Сообщение-заглушка при ошибке AI")
-
+    ai_fallback_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 class Team(Base):
     __tablename__ = "teams"

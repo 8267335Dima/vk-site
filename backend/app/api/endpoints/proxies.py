@@ -7,11 +7,12 @@ import datetime
 
 from app.db.session import get_db
 from app.db.models import User, Proxy
-from app.api.dependencies import get_current_active_profile
+from app.api.dependencies import check_feature_access, get_current_active_profile
 from app.api.schemas.proxies import ProxyCreate, ProxyRead
 from app.core.security import encrypt_data, decrypt_data
 from app.services.proxy_service import ProxyService
 from app.core.plans import is_feature_available_for_plan
+from app.core.enums import FeatureKey
 
 router = APIRouter()
 
@@ -26,22 +27,19 @@ async def check_proxy_feature_access(
         )
     return current_user
 
-@router.post("", response_model=ProxyRead, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=ProxyRead, status_code=status.HTTP_201_CREATED,
+             dependencies=[Depends(check_feature_access(FeatureKey.PROXY_MANAGEMENT))])
 async def add_proxy(
     proxy_data: ProxyCreate,
-    current_user: User = Depends(check_proxy_feature_access),
+    current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    """Добавляет новый прокси для пользователя и сразу проверяет его."""
     is_working, status_message = await ProxyService.check_proxy(proxy_data.proxy_url)
-    
     encrypted_url = encrypt_data(proxy_data.proxy_url)
-
     stmt_exists = select(Proxy).where(Proxy.user_id == current_user.id, Proxy.encrypted_proxy_url == encrypted_url)
     existing = await db.execute(stmt_exists)
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Такой прокси уже существует.")
-
     new_proxy = Proxy(
         user_id=current_user.id,
         encrypted_proxy_url=encrypted_url,
@@ -52,7 +50,6 @@ async def add_proxy(
     db.add(new_proxy)
     await db.commit()
     await db.refresh(new_proxy)
-    
     return ProxyRead(
         id=new_proxy.id,
         proxy_url=decrypt_data(new_proxy.encrypted_proxy_url),
@@ -60,7 +57,6 @@ async def add_proxy(
         last_checked_at=new_proxy.last_checked_at,
         check_status_message=new_proxy.check_status_message
     )
-
 @router.get("", response_model=List[ProxyRead])
 async def get_user_proxies(
     current_user: User = Depends(check_proxy_feature_access),

@@ -33,8 +33,9 @@ async def websocket_endpoint(
     log.info("websocket.connected", user_id=user.id)
     try:
         while True:
-            # Просто поддерживаем соединение открытым
-            await websocket.receive_text()
+            # Просто поддерживаем соединение. Можно использовать receive_bytes,
+            # если планируется прием данных от клиента.
+            await websocket.receive_text() # Или receive_bytes()
     except WebSocketDisconnect:
         manager.disconnect(websocket, user.id)
         log.info("websocket.disconnected", user_id=user.id)

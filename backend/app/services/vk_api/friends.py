@@ -1,7 +1,7 @@
 
 #backend/app/services/vk_api/friends.py
 
-from typing import Optional, Dict, Any
+from typing import List, Optional, Dict, Any
 from .base import BaseVKSection
 
 class FriendsAPI(BaseVKSection):
@@ -30,3 +30,8 @@ class FriendsAPI(BaseVKSection):
 
     async def delete(self, user_id: int) -> Optional[Dict[str, Any]]:
         return await self._make_request("friends.delete", params={"user_id": user_id})
+    
+    async def areFriends(self, user_ids: str) -> Optional[List[Dict[str, Any]]]:
+        """Проверяет статус дружбы с указанными пользователями."""
+        params = {"user_ids": user_ids}
+        return await self._make_request("friends.areFriends", params=params)

@@ -1,14 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status, Query
+from fastapi.responses import ORJSONResponse
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
+from app.db.models import UserAchievement
 from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import IntegrityError
 from app.db.session import get_db
 from app.db.models import ManagedProfile, User, DelayProfile, FilterPreset
-from app.api.dependencies import get_current_active_profile, get_current_manager_user
+from app.api.dependencies import check_etag, get_current_active_profile, get_current_manager_user
 from app.services.vk_api import VKAPI, VKAPIError
 from app.core.security import decrypt_data
 from app.repositories.stats import StatsRepository
@@ -168,15 +170,14 @@ async def get_filter_presets(
 
 @router.get("/me/managed-profiles", response_model=List[ManagedProfileRead])
 async def get_managed_profiles(
+    request: Request,
+    response: Response,
     manager: User = Depends(get_current_manager_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Возвращает список профилей, которыми управляет текущий пользователь (менеджер), включая его собственный."""
     await db.refresh(manager, attribute_names=['managed_profiles'])
-    
     all_profiles_in_db = [manager] + [mp.profile for mp in manager.managed_profiles]
     all_vk_ids = {p.vk_id for p in all_profiles_in_db}
-    
     vk_info_map = {}
     if all_vk_ids:
         vk_api = VKAPI(decrypt_data(manager.encrypted_vk_token))
@@ -186,10 +187,9 @@ async def get_managed_profiles(
             if user_infos:
                 vk_info_map = {info['id']: info for info in user_infos}
         except VKAPIError:
-            pass # Игнорируем ошибки VK, чтобы вернуть хотя бы данные из нашей БД
+            pass
         finally:
             await vk_api.close()
-
     response_data = []
     for profile in all_profiles_in_db:
         vk_info = vk_info_map.get(profile.vk_id, {})
@@ -200,6 +200,8 @@ async def get_managed_profiles(
             last_name=vk_info.get("last_name", ""),
             photo_50=vk_info.get("photo_50", "")
         ))
+    json_response = ORJSONResponse([item.model_dump(by_alias=True) for item in response_data])
+    await check_etag(request, response, json_response.body)
     return response_data
 
 @router.put(
@@ -249,3 +251,11 @@ async def get_all_daily_limits(
         join_groups=LimitStatus(used=today_stats.groups_joined_count, limit=current_user.daily_join_groups_limit),
         leave_groups=LimitStatus(used=today_stats.groups_left_count, limit=current_user.daily_leave_groups_limit),
     )
+
+class AchievementRead(BaseModel):
+    name: str
+    description: str
+    icon: Optional[str]
+    score: int
+    unlocked_at: datetime
+

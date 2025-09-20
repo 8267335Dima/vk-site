@@ -17,6 +17,7 @@ from app.api.schemas.tasks import ActionResponse, PreviewResponse, TaskConfigRes
 from app.core.plans import get_plan_config, is_feature_available_for_plan
 from app.core.config_loader import AUTOMATIONS_CONFIG
 from app.core.enums import TaskKey
+from app.services.interfaces import IPreviewableTask
 from app.services.vk_api import VKAPIError
 from app.tasks.service_maps import TASK_CONFIG_MAP
 from app.tasks.task_maps import AnyTaskRequest, TASK_FUNC_MAP, PREVIEW_SERVICE_MAP
@@ -161,7 +162,7 @@ async def run_any_task(
         job_kwargs['_defer_until'] = defer_until
         
     # 3. Ставим задачу в очередь
-    job = await arq_pool.enqueue_job(task_func_name, **job_kwargs)
+    job = await arq_pool.enqueue_job(task_func_name, _queue_name='high_priority', **job_kwargs)
     
     # 4. Обновляем ID задачи и коммитим ВСЕ изменения в одной транзакции
     task_history.arq_job_id = job.job_id
@@ -183,28 +184,29 @@ async def preview_task_audience(
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db)
 ):
-    if task_key not in PREVIEW_SERVICE_MAP:
+    if task_key not in TASK_CONFIG_MAP:
+        raise HTTPException(status_code=404, detail="Конфигурация для задачи не найдена.")
+
+    ServiceClass, RequestModel = TASK_CONFIG_MAP[task_key]
+    
+    # Проверяем, что сервис реализует интерфейс для предпросмотра
+    if not issubclass(ServiceClass, IPreviewableTask):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Предпросмотр для задачи '{task_key.value}' не поддерживается."
         )
 
-    class DummyEmitter:
-        def __init__(self): self.user_id = current_user.id
-        async def send_log(*args, **kwargs): pass
-        async def send_stats_update(*args, **kwargs): pass
-
     service_instance = None
     try:
-        ServiceClass, method_name, RequestModel = PREVIEW_SERVICE_MAP[task_key]
         validated_params = RequestModel(**request_data.model_dump())
-        service_instance = ServiceClass(db=db, user=current_user, emitter=DummyEmitter())
-        targets = await getattr(service_instance, method_name)(validated_params)
+        service_instance = ServiceClass(db=db, user=current_user, emitter=None)
+        
+        targets = await service_instance.get_targets(validated_params)
         return PreviewResponse(found_count=len(targets))
     except VKAPIError as e:
-        raise HTTPException(status_code=status.HTTP_424_FAILED_DEPENDENCY, detail=f"Ошибка VK API: {e.message}")
+        raise HTTPException(status_code=424, detail=f"Ошибка VK API: {e.message}")
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
-        if service_instance and hasattr(service_instance, 'vk_api') and service_instance.vk_api:
+        if service_instance and service_instance.vk_api:
             await service_instance.vk_api.close()

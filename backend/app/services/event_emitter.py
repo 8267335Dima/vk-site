@@ -3,6 +3,7 @@
 import datetime
 import json
 from datetime import UTC 
+import msgpack
 import structlog
 from typing import Literal, Dict, Any
 from redis.asyncio import Redis
@@ -26,10 +27,11 @@ class RedisEventEmitter:
 
     async def _publish(self, channel: str, message: Dict[str, Any]):
         if not self.user_id:
-            # Вместо ValueError используем structlog для логирования, чтобы не прерывать выполнение
             structlog.get_logger(__name__).warn("event_emitter.user_id_not_set")
             return
-        await self.redis.publish(channel, json.dumps(message))
+        # --- СЕРИАЛИЗУЕМ В MSGPACK ---
+        packed_message = msgpack.dumps(message)
+        await self.redis.publish(channel, packed_message)
 
     async def send_log(self, message: str, status: LogLevel, target_url: str | None = None):
         payload = {

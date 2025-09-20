@@ -1,0 +1,7 @@
+cron:
+  automation_job_lock_seconds: 240
+  humanize_online_skip_chance: 0.15
+
+task_history:
+  retention_days_pro: 90
+  retention_days_base: 30

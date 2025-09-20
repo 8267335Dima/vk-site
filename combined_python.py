@@ -931,7 +931,7 @@ class GlobalSettingsAdmin(ModelView, model=GlobalSetting):
 
 # backend/app/ai/unified_service.py
 from openai import AsyncOpenAI, APIError
-from typing import List, Dict, Literal, Optional
+from typing import List, Dict, Literal, Optional, Union
 import structlog
 
 from app.core.exceptions import UserActionException
@@ -943,7 +943,7 @@ AIProvider = Literal["openai", "google"]
 # Конфигурация базовых URL для провайдеров
 PROVIDER_BASE_URLS = {
     "openai": "https://api.openai.com/v1",
-    "google": "https://generativelanguage.googleapis.com/v1beta",
+    "google": "https://generativelanguage.googleapis.com/v1beta/openai/",
 }
 
 class UnifiedAIService:
@@ -967,45 +967,69 @@ class UnifiedAIService:
         system_prompt: str,
         message_history: List[Dict[str, str]],
         user_input: str,
-        image_url: Optional[str] = None
+        images: Optional[List[Union[str, Dict[str, str]]]] = None,
     ) -> str:
         """
-        Генерирует ответ от LLM, опционально с анализом изображения по URL.
+        Генерирует ответ от LLM, с поддержкой нескольких изображений.
+        images: список URL или объектов {"url": "..."} либо {"data": "...", "format": "..."} (base64).
         """
-        user_content: any = user_input
-        if image_url:
-            user_content = [
-                {"type": "text", "text": user_input},
-                {
-                    "type": "image_url",
-                    "image_url": {"url": image_url},
-                },
-            ]
+        user_content: Union[str, list] = user_input
+
+        if images:
+            user_content = [{"type": "text", "text": user_input}]
+            for img in images:
+                if isinstance(img, str):  # если просто URL
+                    user_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": img},
+                    })
+                elif isinstance(img, dict):  # base64 или расширенный формат
+                    if "url" in img:
+                        user_content.append({
+                            "type": "image_url",
+                            "image_url": {"url": img["url"]},
+                        })
+                    elif "data" in img and "format" in img:
+                        user_content.append({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/{img['format']};base64,{img['data']}"
+                            },
+                        })
 
         messages = [
             {"role": "system", "content": system_prompt},
             *message_history,
-            {"role": "user", "content": user_content}
+            {"role": "user", "content": user_content},
         ]
-        
-        model_path = f"models/{self.model}" if self.provider == "google" else self.model
 
         try:
             completion = await self.client.chat.completions.create(
-                model=model_path,
+                model=self.model,
                 messages=messages,
             )
             response = completion.choices[0].message.content
-            # ИЗМЕНЕНИЕ: Используем заглушку, если ответ пустой
             return response.strip() if response else self.fallback_message
+
         except APIError as e:
-            log.error("ai.service.api_error", provider=self.provider, model=self.model, status_code=e.status_code, error=e.message)
-            # ИЗМЕНЕНИЕ: Возвращаем заглушку при ошибке API
+            log.error(
+                "ai.service.api_error",
+                provider=self.provider,
+                model=self.model,
+                status_code=e.status_code,
+                error=e.message,
+            )
             return self.fallback_message
+
         except Exception as e:
-            log.error("ai.service.unknown_error", provider=self.provider, model=self.model, error=str(e))
-            # ИЗМЕНЕНИЕ: Возвращаем заглушку при любой другой ошибке
+            log.error(
+                "ai.service.unknown_error",
+                provider=self.provider,
+                model=self.model,
+                error=str(e),
+            )
             return self.fallback_message
+
 
 # --- backend/app\api\dependencies.py ---
 
@@ -5816,26 +5840,96 @@ class UserRepository(BaseRepository):
 # --- backend/app\services\ai_message_service.py ---
 
 # backend/app/services/ai_message_service.py
+
 from app.services.base import BaseVKService
-from app.db.models import User
 from app.ai.unified_service import UnifiedAIService
 from app.services.message_humanizer import MessageHumanizer
 from app.core.security import decrypt_data
 from app.core.exceptions import UserActionException
+from typing import List, Dict, Any, Union
 
 class AIMessageService(BaseVKService):
 
     async def _initialize_ai_service(self) -> UnifiedAIService:
         """Инициализирует ИИ-сервис на основе настроек пользователя."""
         api_key = decrypt_data(self.user.encrypted_ai_api_key)
-        if not (self.user.ai_provider and api_key and self.user.ai_model_name):
+        fallback = self.user.ai_fallback_message or "Извините, в данный момент не могу ответить."
+        
+        if not all([self.user.ai_provider, api_key, self.user.ai_model_name]):
             raise UserActionException("Настройки ИИ не сконфигурированы.")
         
         return UnifiedAIService(
             provider=self.user.ai_provider,
             api_key=api_key,
-            model=self.user.ai_model_name
+            model=self.user.ai_model_name,
+            fallback_message=fallback
         )
+    
+    def _parse_attachments(self, attachments: List[Dict[str, Any]]) -> List[Union[str, Dict[str, str]]]:
+        """
+        Извлекает URL изображений и стикеров из вложений VK.
+        Другие типы вложений описывает текстом.
+        """
+        image_urls = []
+        text_descriptions = []
+
+        for att in attachments:
+            att_type = att.get("type")
+            if att_type == "photo" and "photo" in att:
+                # Находим URL самого большого изображения
+                sizes = att["photo"].get("sizes", [])
+                if sizes:
+                    best_photo = max(sizes, key=lambda s: s.get("height", 0))
+                    image_urls.append({"url": best_photo["url"]})
+            elif att_type == "sticker" and "sticker" in att:
+                # Находим URL стикера
+                images = att["sticker"].get("images", [])
+                if images:
+                    best_sticker = max(images, key=lambda s: s.get("height", 0))
+                    image_urls.append({"url": best_sticker["url"]})
+            elif att_type == "wall":
+                text_descriptions.append("[пересланное сообщение со стены]")
+            elif att_type == "doc":
+                text_descriptions.append("[прикрепленный документ]")
+
+        # Возвращаем сначала текстовые описания, потом URL изображений
+        return text_descriptions + image_urls
+
+    def _build_context_from_history(self, messages: List[Dict[str, Any]], own_vk_id: int) -> List[Dict[str, Any]]:
+        """
+        Создает историю сообщений для модели, преобразуя вложения.
+        """
+        history = []
+        for msg in reversed(messages):
+            role = "assistant" if msg['from_id'] == own_vk_id else "user"
+            content: Union[str, list] = msg.get('text', '')
+            
+            # Если есть вложения, парсим их
+            if msg.get("attachments"):
+                parsed_attachments = self._parse_attachments(msg["attachments"])
+                
+                # Если есть и текст, и вложения, создаем сложный 'content'
+                if content:
+                    content = [{"type": "text", "text": content}]
+                    for item in parsed_attachments:
+                        if isinstance(item, dict) and "url" in item:
+                            content.append({"type": "image_url", "image_url": item})
+                        elif isinstance(item, str):
+                             # Добавляем текстовое описание в начало
+                            content[0]["text"] = f"{item} {content[0]['text']}"
+                # Если только вложения без текста
+                else:
+                    content = []
+                    for item in parsed_attachments:
+                         if isinstance(item, dict) and "url" in item:
+                            content.append({"type": "image_url", "image_url": item})
+                         elif isinstance(item, str):
+                            content.append({"type": "text", "text": item})
+            
+            if content: # Добавляем сообщение, только если есть контент
+                history.append({"role": role, "content": content})
+
+        return history
 
     async def process_unanswered_conversations(self, params: dict):
         """Обрабатывает непрочитанные диалоги с помощью ИИ."""
@@ -5853,28 +5947,45 @@ class AIMessageService(BaseVKService):
             peer_id = conv.get('conversation', {}).get('peer', {}).get('id')
             if not peer_id: continue
 
-            history_response = await self.vk_api.messages.getHistory(user_id=peer_id, count=20)
+            history_response = await self.vk_api.messages.getHistory(user_id=peer_id, count=20, extended=1)
             if not history_response or not history_response.get('items'): continue
             
             messages = history_response['items']
-            last_user_message = next((m['text'] for m in reversed(messages) if m['from_id'] == peer_id), None)
-            if not last_user_message: continue
+            last_message = messages[0] if messages else None
+            if not last_message or last_message['from_id'] == self.user.vk_id:
+                continue
 
-            message_history = []
-            for msg in reversed(messages[1:]):
-                role = "user" if msg['from_id'] == peer_id else "assistant"
-                message_history.append({"role": role, "content": msg['text']})
+            # Собираем контекст из всей истории, включая последнее сообщение
+            message_context = self._build_context_from_history(messages, self.user.vk_id)
+            if not message_context:
+                continue
+                
+            # Последнее сообщение пользователя для get_response
+            last_user_input = message_context[-1]['content']
+            # Вся предыдущая история
+            previous_history = message_context[:-1]
 
-            ai_response = await ai_service.get_response(
+            # Извлекаем изображения из последнего сообщения для передачи в get_response
+            images_from_last_message = []
+            if isinstance(last_user_input, list):
+                text_part = ""
+                for part in last_user_input:
+                    if part['type'] == 'text':
+                        text_part += part['text']
+                    elif part['type'] == 'image_url':
+                        images_from_last_message.append(part['image_url'])
+                last_user_input = text_part.strip()
+
+            ai_response_text = await ai_service.get_response(
                 system_prompt=system_prompt,
-                message_history=message_history,
-                user_input=last_user_message
+                message_history=previous_history,
+                user_input=last_user_input,
+                images=images_from_last_message
             )
 
             humanizer = MessageHumanizer(self.vk_api, self.emitter)
             await humanizer.send_messages_sequentially(
-                targets=[{"id": peer_id}], message_template=ai_response,
-                speed="normal", simulate_typing=True
+                targets=[{"id": peer_id}], message_template=ai_response_text
             )
             await self.vk_api.messages.markAsRead(peer_id=peer_id)
 
@@ -7289,7 +7400,6 @@ class OutgoingRequestService(BaseVKService):
                 
                 message = None
                 if params.send_message_on_add and params.message_text:
-                    # Проверяем лимит сообщений ПЕРЕД тем, как сформировать сообщение
                     if stats.messages_sent_count < self.user.daily_message_limit:
                         message = params.message_text.replace("{name}", profile.get("first_name", ""))
                     else:
@@ -7297,14 +7407,16 @@ class OutgoingRequestService(BaseVKService):
 
                 result = await self.vk_api.add_friend(user_id, message) 
                 
-                name = f"{profile.get('first_name', '')} {profile.get('last_name', '')}"
+                # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+                name = f"{profile.get('first_name', '')} {profile.get('last_name', '')}".strip()
+                # -------------------------
+
                 url = f"https://vk.com/id{user_id}"
                 
                 if result in [1, 2, 4]:
                     processed_count += 1
                     await self._increment_stat(stats, 'friends_added_count')
                     
-                    # Если сообщение было успешно отправлено вместе с заявкой, учитываем его в лимите
                     if message:
                         await self._increment_stat(stats, 'messages_sent_count')
 
@@ -8646,7 +8758,6 @@ def arq_task_runner(func):
             user = None
             
             try:
-                # Загружаем сразу все необходимые данные
                 stmt = select(TaskHistory).where(TaskHistory.id == task_history_id).options(
                     joinedload(TaskHistory.user).selectinload(User.proxies)
                 )
@@ -8660,7 +8771,6 @@ def arq_task_runner(func):
                 emitter = emitter_for_test or RedisEventEmitter(ctx['redis_pool'])
                 emitter.set_context(user.id, task_history_id)
                 
-                # Обновляем статус задачи на "ВЫПОЛНЯЕТСЯ"
                 task_history.status = "STARTED"
                 task_history.started_at = datetime.now(UTC)
                 await session.commit()
@@ -8668,11 +8778,14 @@ def arq_task_runner(func):
 
                 if user.is_shadow_banned:
                     raise UserActionException("Действие отменено (теневой бан).")
+                
+                # ▼▼▼ ГЛАВНОЕ ИЗМЕНЕНИЕ ЗДЕСЬ ▼▼▼
+                # Теперь параметры всегда берутся из объекта TaskHistory,
+                # а не из аргументов функции. Это имитирует реальную работу.
+                task_params = task_history.parameters or {}
+                summary_result = await func(session, user, task_params, emitter)
+                # ▲▲▲ КОНЕЦ ИЗМЕНЕНИЯ ▲▲▲
 
-                # Выполняем основную логику задачи
-                summary_result = await func(session, user, task_history.parameters or {}, emitter)
-
-                # Обновляем статус на "УСПЕШНО"
                 task_history.status = "SUCCESS"
                 task_history.result = summary_result if isinstance(summary_result, str) else "Задача успешно выполнена."
 
@@ -8682,7 +8795,6 @@ def arq_task_runner(func):
                     task_history.status = "FAILURE"
                     if isinstance(e, VKAuthError):
                         task_history.result = "Ошибка авторизации VK. Токен невалиден."
-                        log.error("task_runner.auth_error_critical", user_id=user.id)
                         if emitter: await emitter.send_system_notification(session, f"Критическая ошибка: токен VK недействителен для задачи '{task_history.task_name}'. Автоматизации остановлены.", "error")
                         await session.execute(update(Automation).where(Automation.user_id == user.id).values(is_active=False))
                     else:
@@ -8703,7 +8815,6 @@ def arq_task_runner(func):
                     task_history.finished_at = datetime.now(UTC)
                     await session.commit()
                     
-                    # Отправляем финальный статус задачи
                     await emitter.send_task_status_update(
                         status=task_history.status,
                         result=task_history.result,
@@ -8711,7 +8822,6 @@ def arq_task_runner(func):
                         created_at=task_history.created_at
                     )
                     
-                    # <<< ИЗМЕНЕНИЕ: Отправляем полный срез лимитов после КАЖДОЙ задачи >>>
                     stats_repo = StatsRepository(session)
                     today_stats = await stats_repo.get_or_create_today_stats(user.id)
                     all_limits = AllLimitsResponse(

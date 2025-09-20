@@ -1,5 +1,6 @@
 # backend/app/api/endpoints/teams.py
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import ORJSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, joinedload
 from sqlalchemy import select, delete
@@ -7,7 +8,7 @@ from typing import List
 from app.services.vk_api import VKAPIError
 from app.db.session import get_db
 from app.db.models import User, Team, TeamMember, ManagedProfile, TeamProfileAccess
-from app.api.dependencies import get_current_manager_user
+from app.api.dependencies import check_etag, get_current_manager_user
 from app.api.schemas.teams import TeamRead, InviteMemberRequest, UpdateAccessRequest, TeamMemberRead, ProfileInfo, TeamMemberAccess
 from app.core.plans import is_feature_available_for_plan, get_plan_config
 from app.services.vk_api import VKAPI
@@ -42,40 +43,26 @@ async def get_team_owner(manager: User = Depends(check_agency_plan), db: AsyncSe
 
 @router.get("/my-team", response_model=TeamRead)
 async def get_my_team(
+    request: Request,
+    response: Response,
     manager_and_team: tuple = Depends(get_team_owner),
     db: AsyncSession = Depends(get_db)
 ):
     manager, team = manager_and_team
-    
-    # --- ШАГ 1: Загружаем все необходимые данные из НАШЕЙ БД одним запросом ---
     stmt = (
-        select(Team)
-        .options(
+        select(Team).options(
             selectinload(Team.members).selectinload(TeamMember.user),
             selectinload(Team.members).selectinload(TeamMember.profile_accesses)
-        )
-        .where(Team.id == team.id)
+        ).where(Team.id == team.id)
     )
     team_details = (await db.execute(stmt)).scalar_one()
-
     managed_profiles_db = (await db.execute(
-        select(ManagedProfile)
-        .options(selectinload(ManagedProfile.profile))
+        select(ManagedProfile).options(selectinload(ManagedProfile.profile))
         .where(ManagedProfile.manager_user_id == manager.id)
     )).scalars().all()
-    
-    # --- ШАГ 2: Собираем ВСЕ уникальные VK ID, которые нужно обогатить данными из VK ---
-    all_vk_ids_to_fetch = set()
-    # Добавляем VK ID всех участников команды
-    for member in team_details.members:
-        all_vk_ids_to_fetch.add(member.user.vk_id)
-    # Добавляем VK ID всех управляемых профилей
-    for mp in managed_profiles_db:
-        all_vk_ids_to_fetch.add(mp.profile.vk_id)
-    # Добавляем VK ID самого менеджера
+    all_vk_ids_to_fetch = {member.user.vk_id for member in team_details.members}
+    all_vk_ids_to_fetch.update({mp.profile.vk_id for mp in managed_profiles_db})
     all_vk_ids_to_fetch.add(manager.vk_id)
-
-    # --- НАЧАЛО ИСПРАВЛЕНИЯ ---
     vk_info_map = {}
     if all_vk_ids_to_fetch:
         vk_api = VKAPI(decrypt_data(manager.encrypted_vk_token))
@@ -84,23 +71,16 @@ async def get_my_team(
             user_infos = await vk_api.users.get(user_ids=vk_ids_str, fields="photo_50")
             if user_infos:
                 vk_info_map = {info['id']: info for info in user_infos}
-        except VKAPIError as e: # Добавляем блок except
+        except VKAPIError as e:
             log.warn("get_my_team.vk_api_error", error=str(e))
-            # При ошибке vk_info_map останется пустым, и код ниже отработает с заглушками
         finally:
             await vk_api.close()
-
-    # --- ШАГ 4: Собираем ответ, используя предзагруженные данные ---
     members_response = []
     for member in team_details.members:
         member_vk_info = vk_info_map.get(member.user.vk_id, {})
-        
         accesses = []
         member_access_map = {pa.profile_user_id for pa in member.profile_accesses}
-        
-        # Собираем все профили, к которым может быть доступ
         all_available_profiles = [mp.profile for mp in managed_profiles_db]
-        
         for profile in all_available_profiles:
             profile_vk_info = vk_info_map.get(profile.vk_id, {})
             accesses.append(TeamMemberAccess(
@@ -112,7 +92,6 @@ async def get_my_team(
                 ),
                 has_access=profile.id in member_access_map
             ))
-            
         members_response.append(TeamMemberRead(
             id=member.id, user_id=member.user_id, role=member.role.value,
             user_info=ProfileInfo(
@@ -123,8 +102,10 @@ async def get_my_team(
             ),
             accesses=accesses
         ))
-    
-    return TeamRead(id=team.id, name=team.name, owner_id=team.owner_id, members=members_response)
+    team_response_model = TeamRead(id=team.id, name=team.name, owner_id=team.owner_id, members=members_response)
+    json_response = ORJSONResponse(team_response_model.model_dump(by_alias=True))
+    await check_etag(request, response, json_response.body)
+    return team_response_model
 
 
 @router.post("/my-team/members", status_code=status.HTTP_201_CREATED)

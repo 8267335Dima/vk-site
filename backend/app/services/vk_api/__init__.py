@@ -10,7 +10,7 @@ from app.core.config import settings
 # Экспортируем исключения для удобного доступа
 from .base import VKAPIError, VKAuthError, VKAccessDeniedError, VKFloodControlError, VKCaptchaError, ERROR_CODE_MAP
 
-# Импортируем все разделы API
+from .board import BoardAPI
 from .account import AccountAPI
 from .friends import FriendsAPI
 from .groups import GroupsAPI
@@ -21,7 +21,7 @@ from .photos import PhotosAPI
 from .stories import StoriesAPI
 from .users import UsersAPI
 from .wall import WallAPI
-
+from .notifications import NotificationsAPI
 
 class VKAPI:
     """
@@ -50,6 +50,8 @@ class VKAPI:
         self.stories = StoriesAPI(self._make_request)
         self.users = UsersAPI(self._make_request)
         self.wall = WallAPI(self._make_request)
+        self.board = BoardAPI(self._make_request)
+        self.notifications = NotificationsAPI(self._make_request)
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Ленивая инициализация сессии aiohttp."""

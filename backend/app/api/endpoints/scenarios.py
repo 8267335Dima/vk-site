@@ -1,7 +1,8 @@
 import json
 from typing import List, Dict
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import ORJSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -9,7 +10,7 @@ from croniter import croniter
 
 from app.db.session import get_db
 from app.db.models import User, Scenario, ScenarioStep, ScenarioStepType
-from app.api.dependencies import get_current_active_profile
+from app.api.dependencies import check_etag, get_current_active_profile
 from app.api.schemas.scenarios import (
     Scenario as ScenarioSchema,
     ScenarioCreate,
@@ -187,6 +188,8 @@ async def get_available_conditions():
 
 @router.get("", response_model=List[ScenarioSchema])
 async def get_user_scenarios(
+    request: Request,
+    response: Response,
     current_user: User = Depends(get_current_active_profile),
     db: AsyncSession = Depends(get_db),
 ):
@@ -197,19 +200,15 @@ async def get_user_scenarios(
     )
     result = await db.execute(stmt)
     scenarios_db = result.scalars().unique().all()
-
-    return [
+    response_list = [
         ScenarioSchema(
-            id=s.id,
-            name=s.name,
-            schedule=s.schedule,
-            is_active=s.is_active,
-            nodes=_db_to_graph(s)[0],
-            edges=_db_to_graph(s)[1],
-        )
-        for s in scenarios_db
+            id=s.id, name=s.name, schedule=s.schedule, is_active=s.is_active,
+            nodes=_db_to_graph(s)[0], edges=_db_to_graph(s)[1],
+        ) for s in scenarios_db
     ]
-
+    json_response = ORJSONResponse([item.model_dump(by_alias=True) for item in response_list])
+    await check_etag(request, response, json_response.body)
+    return response_list
 
 @router.get("/{scenario_id}", response_model=ScenarioSchema)
 async def get_scenario(

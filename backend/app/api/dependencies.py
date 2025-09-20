@@ -1,7 +1,8 @@
 # backend/app/api/dependencies.py
+import hashlib
 from typing import Annotated, Dict, Any
 from arq import ArqRedis
-from fastapi import Depends, HTTPException, Request, status, Query
+from fastapi import Depends, HTTPException, Request, Response, status, Query
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from pydantic import ValidationError
@@ -18,6 +19,8 @@ from fastapi_limiter.depends import RateLimiter
 from app.ai.unified_service import UnifiedAIService
 from app.core.security import decrypt_data
 from app.core.exceptions import UserActionException
+from app.core.enums import FeatureKey
+from app.core.plans import is_feature_available_for_plan
 
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/vk")
@@ -134,3 +137,36 @@ async def get_ai_service(user: User = Depends(get_current_active_profile)) -> Un
         )
     except UserActionException as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+async def check_etag(request: Request, response: Response, content: str | bytes):
+    """
+    Проверяет ETag и либо возвращает 304 Not Modified, либо устанавливает новый ETag.
+    """
+    if not isinstance(content, bytes):
+        content_bytes = content.encode('utf-8')
+    else:
+        content_bytes = content
+        
+    etag = f'"{hashlib.md5(content_bytes).hexdigest()}"'
+    
+    if request.headers.get("if-none-match") == etag:
+        # Данные не изменились, отправляем пустой ответ
+        raise HTTPException(status_code=status.HTTP_304_NOT_MODIFIED)
+        
+    # Данные новые, устанавливаем заголовок для кэширования на клиенте
+    response.headers["ETag"] = etag
+
+def check_feature_access(feature_key: FeatureKey):
+    """
+    Зависимость-декоратор для проверки доступа к функции по тарифу.
+    """
+    async def dependency(
+        user: User = Depends(get_current_active_profile),
+        db: AsyncSession = Depends(get_db)
+    ):
+        if not await is_feature_available_for_plan(user.plan.name_id, feature_key.value, db=db, user=user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Функция '{feature_key.value}' недоступна на вашем тарифе."
+            )
+    return dependency

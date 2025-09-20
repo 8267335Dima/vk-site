@@ -11,9 +11,12 @@ from app.db.session import get_db
 from app.db.models import User, ScheduledPost
 from app.api.dependencies import get_current_active_profile, get_arq_pool
 # --- ИЗМЕНЕНИЕ: Добавляем новую схему ---
+from sqlalchemy import select # --- ДОБАВЛЕНО ---
+from app.db.models import User, ScheduledPost, Group # --- ДОБАВЛЕНО Group ---
 from app.api.schemas.posts import (
     PostCreate, PostRead, UploadedImagesResponse, PostBatchCreate, 
-    UploadedImageResponse, UploadImageFromUrlRequest, UploadImagesFromUrlsRequest
+    UploadedImageResponse, UploadImageFromUrlRequest, UploadImagesFromUrlsRequest,
+    PostUpdateSchedule # --- НОВАЯ СХЕМА ---
 )
 from app.services.vk_api import VKAPI
 from app.core.security import decrypt_data
@@ -192,3 +195,69 @@ async def schedule_batch_posts(
         await db.refresh(post)
 
     return created_posts_db
+
+@router.get("/schedule/calendar", response_model=List[PostRead])
+async def get_posts_for_calendar(
+    start_date: datetime.date,
+    end_date: datetime.date,
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Возвращает все запланированные и опубликованные посты пользователя
+    в указанном диапазоне дат для отображения в календаре.
+    """
+    if (end_date - start_date).days > 90:
+        raise HTTPException(status_code=400, detail="Диапазон дат не может превышать 90 дней.")
+        
+    stmt = select(ScheduledPost).where(
+        ScheduledPost.user_id == current_user.id,
+        ScheduledPost.publish_at.between(
+            datetime.datetime.combine(start_date, datetime.time.min),
+            datetime.datetime.combine(end_date, datetime.time.max)
+        )
+    ).order_by(ScheduledPost.publish_at)
+    
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+# --- НОВЫЙ ЭНДПОИНТ ДЛЯ ОБНОВЛЕНИЯ ДАТЫ (DRAG-AND-DROP) ---
+@router.patch("/schedule/{post_id}/reschedule", response_model=PostRead)
+async def reschedule_post(
+    post_id: int,
+    schedule_data: PostUpdateSchedule,
+    current_user: User = Depends(get_current_active_profile),
+    db: AsyncSession = Depends(get_db),
+    arq_pool: ArqRedis = Depends(get_arq_pool)
+):
+    """
+    Изменяет время публикации запланированного поста.
+    """
+    post = await db.get(ScheduledPost, post_id)
+    if not post or post.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Пост не найден.")
+    if post.status != "scheduled":
+        raise HTTPException(status_code=400, detail="Можно перенести только запланированный пост.")
+
+    # Отменяем старую ARQ задачу
+    if post.arq_job_id:
+        try:
+            await arq_pool.abort_job(post.arq_job_id)
+        except: # Игнорируем ошибки, если задача уже выполнилась или не найдена
+            pass
+            
+    # Обновляем пост
+    post.publish_at = schedule_data.publish_at
+    
+    # Создаем новую ARQ задачу
+    job = await arq_pool.enqueue_job(
+        'publish_scheduled_post_task',
+        post_id=post.id,
+        _defer_until=post.publish_at
+    )
+    post.arq_job_id = job.job_id
+    
+    await db.commit()
+    await db.refresh(post)
+    
+    return post

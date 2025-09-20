@@ -1,3 +1,4 @@
+# tests/admin/test_admin_unit.py
 import json
 import pytest
 from unittest.mock import MagicMock, AsyncMock
@@ -77,6 +78,5 @@ class TestUserAdminActions:
         mock_session.get.assert_not_called()
         mock_session.commit.assert_not_awaited() 
         
-        # Исправленная строка:
         response_data = json.loads(response.body)
         assert response_data["message"] == "Подписка продлена для 0 пользователей."

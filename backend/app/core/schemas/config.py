@@ -1,6 +1,17 @@
-# backend/app/core/schemas/config.py
 from pydantic import BaseModel, Field
 from typing import List, Literal, Optional, Dict, Any
+
+class CronSettings(BaseModel):
+    automation_job_lock_seconds: int
+    humanize_online_skip_chance: float
+
+class TaskHistorySettings(BaseModel):
+    retention_days_pro: int
+    retention_days_base: int
+
+class AppSettings(BaseModel):
+    cron: CronSettings
+    task_history: TaskHistorySettings
 
 class AutomationConfig(BaseModel):
     id: str

@@ -24,25 +24,30 @@ class WebSocketManager:
             if not self.active_connections[user_id]:
                 del self.active_connections[user_id]
 
-    async def broadcast_to_user(self, user_id: int, message: str):
+    async def broadcast_to_user(self, user_id: int, message_bytes: bytes): # --- ПРИНИМАЕТ БАЙТЫ ---
         if user_id in self.active_connections:
             websockets = self.active_connections[user_id]
-            for websocket in websockets:
-                await websocket.send_text(message)
+            # Используем gather для параллельной отправки всем сессиям одного юзера
+            await asyncio.gather(
+                *[ws.send_bytes(message_bytes) for ws in websockets],
+                return_exceptions=False
+            )
 
 manager = WebSocketManager()
 
 async def redis_listener(redis_client: Redis):
-    async with redis_client.pubsub() as pubsub:
-        await pubsub.psubscribe("ws:user:*")
+    # Указываем, что будем работать с байтами
+    async with redis_client.pubsub(decode_responses=False) as pubsub:
+        await pubsub.psubscribe(b"ws:user:*")
         while True:
             try:
+                # --- ПОЛУЧАЕМ БАЙТЫ И ПЕРЕДАЕМ НАПРЯМУЮ ---
                 message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
                 if message:
-                    channel = message['channel']
+                    channel = message['channel'].decode('utf-8')
                     user_id = int(channel.split(':')[-1])
-                    data = message['data']
-                    await manager.broadcast_to_user(user_id, data)
+                    data_bytes = message['data']
+                    await manager.broadcast_to_user(user_id, data_bytes)
             except asyncio.CancelledError:
                 break
             except Exception as e:

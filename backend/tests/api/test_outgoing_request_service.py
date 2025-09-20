@@ -152,14 +152,12 @@ async def test_add_friends_with_liking_closed_profile(
     # Arrange
     service = OutgoingRequestService(db=db_session, user=test_user, emitter=mock_emitter)
     mock_vk_api = AsyncMock()
-    # Профиль пользователя закрыт (is_closed=True)
     mock_vk_api.get_recommended_friends.return_value = {"items": [{"id": 123, "is_closed": True, "first_name": "Закрытый"}]}
     mock_vk_api.add_friend.return_value = 1
     service.vk_api = mock_vk_api
     service.humanizer = AsyncMock()
     mocker.patch('app.services.outgoing_request_service.AsyncRedis.from_url').return_value = AsyncMock()
 
-    # Включаем опцию лайкинга
     request_params = AddFriendsRequest(count=1, like_config=LikeAfterAddConfig(enabled=True))
 
     # Act
@@ -169,8 +167,6 @@ async def test_add_friends_with_liking_closed_profile(
     mock_vk_api.add_friend.assert_called_once()
     mock_vk_api.add_like.assert_not_called()
     
-    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
-    # Ожидаемое сообщение должно точно соответствовать тому, что генерирует сервис
     mock_emitter.send_log.assert_any_call(
         "Профиль Закрытый закрыт, пропуск лайкинга.", "info", target_url="https://vk.com/id123"
     )

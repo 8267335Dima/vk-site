@@ -38,3 +38,4 @@ class Payment(Base):
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
     error_message = Column(Text, nullable=True)
     user = relationship("User")
+    idempotency_key = Column(String, unique=True, nullable=True, index=True)

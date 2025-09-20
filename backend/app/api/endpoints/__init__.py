@@ -22,3 +22,4 @@ from .admin import router as admin_router
 from .ai import router as ai_router
 from .groups import router as groups_router
 from .data import router as data_router
+from .planner import router as planner_route

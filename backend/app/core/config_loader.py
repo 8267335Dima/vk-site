@@ -2,10 +2,20 @@
 import yaml
 from pathlib import Path
 from functools import lru_cache
-from app.core.schemas.config import PlanConfig, AutomationConfig
+from app.core.schemas.config import AppSettings, PlanConfig, AutomationConfig
 
 # Определяем путь к директории с конфигами относительно текущего файла
 CONFIG_PATH = Path(__file__).parent / "configs"
+
+@lru_cache(maxsize=1)
+def load_app_settings_config() -> AppSettings:
+    config_file = CONFIG_PATH / "app_settings.yml"
+    if not config_file.is_file():
+        raise FileNotFoundError(f"Configuration file not found: {config_file}")
+    with open(config_file, 'r', encoding='utf-8') as f:
+        raw_config = yaml.safe_load(f)
+    return AppSettings(**raw_config)
+
 
 @lru_cache(maxsize=1)
 def load_plans_config() -> dict[str, PlanConfig]:
@@ -38,7 +48,7 @@ def load_automations_config() -> list[AutomationConfig]:
 try:
     PLAN_CONFIG = load_plans_config()
     AUTOMATIONS_CONFIG = load_automations_config()
+    APP_SETTINGS = load_app_settings_config()
 except (FileNotFoundError, Exception) as e:
     print(f"CRITICAL ERROR loading configs: {e}")
-    # В реальном приложении здесь можно остановить запуск
     exit(1)

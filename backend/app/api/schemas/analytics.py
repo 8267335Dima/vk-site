@@ -1,7 +1,8 @@
 # --- START OF FILE backend/app/api/schemas/analytics.py ---
 
+import datetime
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import date
 
 class AudienceStatItem(BaseModel):
@@ -55,3 +56,13 @@ class FriendRequestConversionResponse(BaseModel):
 
 class PostActivityHeatmapResponse(BaseModel):
     data: List[List[int]] = Field(..., description="Матрица 7x24, где data[day][hour] = уровень активности от 0 до 100")
+
+
+class PostActivityRecommendation(BaseModel):
+    day_of_week: str
+    hour_start: int
+    activity_score: int # от 0 до 100
+
+class PostActivityRecommendationsResponse(BaseModel):
+    recommendations: List[PostActivityRecommendation]
+    last_updated_at: Optional[datetime.datetime] = None
